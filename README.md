@@ -12,35 +12,38 @@ Don't have data yet? A whole collection of prompt datasets — **already convert
 
 ### → [huggingface.co/datasets/jtreminio/prompt-dataset](https://huggingface.co/datasets/jtreminio/prompt-dataset)
 
-It's dozens of `*.lance` folders covering Stable Diffusion, Midjourney, Flux, Danbooru tags, photography, and more. Grab the ones you want, drop them in your Quarry datasets folder (see [Setup](#setup)), and they show up as wildcards right away — no conversion needed.
+It's dozens of `*.lance` folders covering Stable Diffusion, Midjourney, Flux, Danbooru tags, photography, and more. Drop them in your Quarry datasets folder (see [Setup](#setup)) and they show up as wildcards right away — no conversion needed.
 
-### Grab just the datasets you want (recommended)
+### Grab the whole collection (recommended)
 
-Install the Hugging Face command-line tool, then download individual folders with `--include`. Point `--local-dir` at your Quarry datasets folder so they land exactly where Quarry looks:
+Install the Hugging Face command-line tool, then download everything straight into your Quarry datasets folder — point `--local-dir` at it and every `*.lance` folder lands exactly where Quarry looks:
 
 ```bash
 pip install -U huggingface_hub
 
 hf download jtreminio/prompt-dataset --repo-type dataset \
-  --include "Gustavosta.Stable-Diffusion-Prompts.lance/*" \
-  --include "succinctly.midjourney-prompts.lance/*" \
   --local-dir /path/to/your/quarry-datasets
 ```
 
-Add an `--include "<name>.lance/*"` line for each dataset you want. Browse the [full list](https://huggingface.co/datasets/jtreminio/prompt-dataset/tree/main) on the dataset page to find their names.
-
 > Older Hugging Face installs use `huggingface-cli download` instead of `hf download` — the options are the same.
 
-### ...or grab everything at once
-
-Clone the whole collection with Git (needs [Git LFS](https://git-lfs.com) installed):
+Prefer Git? You can clone the collection instead (needs [Git LFS](https://git-lfs.com)), then move the `*.lance` folders into your Quarry datasets folder:
 
 ```bash
 git lfs install
 git clone https://huggingface.co/datasets/jtreminio/prompt-dataset
 ```
 
-Then move the `*.lance` folders into your Quarry datasets folder. Heads up — this downloads **all** of them, which is large.
+### ...or just the datasets you want
+
+To grab only some, add an `--include "<name>.lance/*"` line per dataset. Browse the [full list](https://huggingface.co/datasets/jtreminio/prompt-dataset/tree/main) on the dataset page to find their names:
+
+```bash
+hf download jtreminio/prompt-dataset --repo-type dataset \
+  --include "Gustavosta.Stable-Diffusion-Prompts.lance/*" \
+  --include "succinctly.midjourney-prompts.lance/*" \
+  --local-dir /path/to/your/quarry-datasets
+```
 
 ## How to use it
 
