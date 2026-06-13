@@ -1,0 +1,35 @@
+root = true
+
+[*.cs]
+# Catch dead/drift-prone code at build time. Promote each to a build warning so
+# future commits can't reintroduce them silently.
+
+# Unused private member (method, field, property, etc.).
+dotnet_diagnostic.IDE0051.severity = warning
+
+# Private field assigned but never read.
+dotnet_diagnostic.IDE0052.severity = warning
+
+# Private field could be readonly.
+dotnet_diagnostic.IDE0044.severity = warning
+
+# Unused parameter on a method that isn't an interface implementation / virtual override.
+dotnet_diagnostic.IDE0060.severity = warning
+
+# Unnecessary using directive.
+dotnet_diagnostic.IDE0005.severity = warning
+
+# Unnecessary suppression (`#pragma warning disable` for a warning that's no longer raised).
+dotnet_diagnostic.IDE0079.severity = warning
+
+# Field is assigned but never used (compiler-level).
+dotnet_diagnostic.CS0414.severity = warning
+
+# Field is never used at all (compiler-level).
+dotnet_diagnostic.CS0169.severity = warning
+
+# Field is never assigned, will always have its default value.
+dotnet_diagnostic.CS0649.severity = warning
+
+# Suggestion-level: "could be made static". Useful info but don't fail the build over it.
+dotnet_diagnostic.CA1822.severity = suggestion

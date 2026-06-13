@@ -1,0 +1,3 @@
+#! /bin/bash
+
+dotnet test "SwarmUI-QuarryExtension.Tests.sln" && npm run test

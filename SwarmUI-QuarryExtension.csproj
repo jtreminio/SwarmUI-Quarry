@@ -1,0 +1,89 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <AssemblyName>SwarmUI-QuarryExtension</AssemblyName>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>annotations</Nullable>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <!-- Required for IDE0005 (unused using directives) to fire at build time. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!-- ...but we don't actually want to publish XML docs or warn about missing ones. -->
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <Import Project="../../SwarmUI.extension.props" />
+
+  <!-- Reference SwarmUI as a project ONLY for IDE design-time builds (IntelliSense / go-to-definition).
+       For the real `dotnet build` SwarmUI runs to compile this extension, this stays inactive and we link
+       against the prebuilt ../../bin/live_release/SwarmUI.dll (the HintPath from SwarmUI.extension.props).
+       This is the pattern the sister WhatTheDuck extension uses, and it is REQUIRED now that our deps come
+       from NuGet: an active SwarmUI.csproj project reference pulls SwarmUI's own restore into the build, and
+       since GlobalPropertiesToRemove is NOT honored during restore, that restore writes SwarmUI's
+       project.assets.json into the shared intermediate dir SwarmUI passes via -p:BaseIntermediateOutputPath,
+       clobbering ours and dropping the DuckDB packages (nondeterministic "type DuckDB not found" build
+       failures). Keeping the project reference design-time-only avoids the clobber entirely. -->
+  <ItemGroup Condition="'$(DesignTimeBuild)' == 'true' and Exists('../../SwarmUI.csproj')">
+    <Reference Remove="SwarmUI" />
+    <ProjectReference Include="../../SwarmUI.csproj">
+      <Private>false</Private>
+      <Properties>_EnableMacOSCodeSign=false;StaticWebAssetsEnabled=false</Properties>
+      <GlobalPropertiesToRemove>BaseIntermediateOutputPath;TargetName</GlobalPropertiesToRemove>
+    </ProjectReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="SwarmUI-QuarryExtension.Tests" />
+  </ItemGroup>
+
+  <!-- DuckDB query engine, pulled from NuGet. SwarmUI builds every extension with `dotnet build`
+       (ExtensionsManager.BuildExtension), which restores NuGet exactly like SwarmUI's own build and like
+       sibling extensions that ship NuGet deps (e.g. WildcardImporter -> Mages/YamlDotNet). The *.Full
+       packages bundle the managed ADO.NET provider AND the native libduckdb for every platform, so none of
+       it needs to be committed to git. -->
+  <ItemGroup>
+    <PackageReference Include="DuckDB.NET.Data.Full" Version="1.5.3" GeneratePathProperty="true" />
+    <PackageReference Include="DuckDB.NET.Bindings.Full" Version="1.5.3" GeneratePathProperty="true" />
+  </ItemGroup>
+
+  <!-- SwarmUI.extension.props sets CopyLocalLockFileAssemblies=false (so extensions don't duplicate the
+       host's dependency tree), which means NuGet runtime assets are NOT auto-copied to the build output.
+       SwarmUI's per-extension AssemblyLoadContext probes managed deps FLAT in the extension output dir
+       (host-wins), and DuckDB.NET probes its native lib FLAT next to DuckDB.NET.Bindings.dll (the
+       runtimes/<rid>/native layout is only searched relative to the host app base, which an extension can't
+       populate). So copy exactly the two managed DLLs plus the host-platform native lib flat into the output
+       root. We do this surgically rather than flipping CopyLocalLockFileAssemblies on, which would drag
+       SwarmUI's entire NuGet closure (incl. the multi-GB LLamaSharp CUDA backend) into every build. -->
+  <PropertyGroup>
+    <_DuckDbArch>$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant())</_DuckDbArch>
+  </PropertyGroup>
+  <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('Linux'))">
+    <_DuckDbRid>linux-$(_DuckDbArch)</_DuckDbRid>
+    <_DuckDbNativeLib>libduckdb.so</_DuckDbNativeLib>
+  </PropertyGroup>
+  <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('Windows'))">
+    <_DuckDbRid>win-$(_DuckDbArch)</_DuckDbRid>
+    <_DuckDbNativeLib>duckdb.dll</_DuckDbNativeLib>
+  </PropertyGroup>
+  <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('OSX'))">
+    <_DuckDbRid>osx</_DuckDbRid>
+    <_DuckDbNativeLib>libduckdb.dylib</_DuckDbNativeLib>
+  </PropertyGroup>
+  <Target Name="CopyDuckDbToOutput" AfterTargets="Build">
+    <ItemGroup>
+      <_DuckDbOutputFiles Include="$(PkgDuckDB_NET_Data_Full)/lib/$(TargetFramework)/DuckDB.NET.Data.dll" />
+      <_DuckDbOutputFiles Include="$(PkgDuckDB_NET_Bindings_Full)/lib/$(TargetFramework)/DuckDB.NET.Bindings.dll" />
+      <_DuckDbOutputFiles Include="$(PkgDuckDB_NET_Bindings_Full)/runtimes/$(_DuckDbRid)/native/$(_DuckDbNativeLib)" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_DuckDbOutputFiles)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
+
+  <ItemGroup>
+    <Compile Remove="bin/**/*.cs" />
+    <Compile Remove="obj/**/*.cs" />
+    <Compile Remove="Tests/**/*.cs" />
+    <Compile Remove="**/._*" />
+  </ItemGroup>
+
+</Project>

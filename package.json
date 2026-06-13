@@ -1,0 +1,27 @@
+{
+    "name": "swarmui-quarry-extension",
+    "version": "1.0.0",
+    "description": "Quarry extension for SwarmUI - query LanceDB datasets as wildcards",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "build": "npm run lint && npm run check && node ./scripts/build.mjs",
+        "check": "npm run format:check && npm run lint && npm run typecheck",
+        "clean": "rm -f Assets/quarry.js Assets/quarry.js.map",
+        "format": "biome format --write .",
+        "format:check": "biome format .",
+        "lint": "biome check --write .",
+        "test": "jest --config ./jest.config.cjs --passWithNoTests",
+        "test:coverage": "jest --config ./jest.config.cjs --coverage --passWithNoTests",
+        "typecheck": "tsc --noEmit"
+    },
+    "devDependencies": {
+        "@biomejs/biome": "^2.4.11",
+        "@jest/globals": "^30.3.0",
+        "esbuild": "^0.28.0",
+        "jest": "^30.3.0",
+        "jest-environment-jsdom": "^30.3.0",
+        "ts-jest": "^29.4.9",
+        "typescript": "^6.0.2"
+    }
+}

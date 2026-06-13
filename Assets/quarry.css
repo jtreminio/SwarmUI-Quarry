@@ -1,0 +1,145 @@
+.quarry-settings {
+    margin-bottom: 1rem;
+}
+
+#quarry-form > .input-group:first-child {
+    max-width: none;
+}
+
+.quarry-status-line {
+    margin: 0.4rem 0;
+    font-size: 0.95em;
+}
+
+.quarry-status-active {
+    color: var(--green);
+}
+
+.quarry-status-inactive {
+    color: var(--text-soft);
+}
+
+.quarry-actions {
+    margin: 0.5rem 0;
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+}
+
+.quarry-datasets {
+    margin-top: 0.5rem;
+    flex-basis: 100%;
+}
+
+.quarry-datasets-empty {
+    color: var(--text-soft);
+    font-style: italic;
+    padding: 0.4rem 0;
+}
+
+.quarry-datasets-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.quarry-datasets-table th {
+    text-align: left;
+    font-weight: 600;
+    font-size: 0.9em;
+    color: var(--text-soft);
+    padding: 0.25rem 0.5rem;
+    border-bottom: 1px solid var(--light-border);
+}
+
+.quarry-datasets-table td {
+    padding: 0.3rem 0.5rem;
+    vertical-align: middle;
+}
+
+.quarry-dataset-row:nth-child(even) {
+    background: var(--background-gray);
+}
+
+.quarry-dataset-name {
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+.quarry-dataset-column {
+    min-width: 8rem;
+}
+
+.quarry-dataset-rows {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    color: var(--text-soft);
+}
+
+.quarry-dataset-error {
+    background: color-mix(in srgb, var(--red) 12%, transparent);
+}
+
+.quarry-dataset-error-msg {
+    color: var(--red);
+    font-size: 0.9em;
+}
+
+.quarry-message {
+    margin: 0.4rem 0;
+    min-height: 1.2em;
+    font-size: 0.95em;
+}
+
+.quarry-message-success {
+    color: var(--green);
+}
+
+.quarry-message-error {
+    color: var(--red);
+}
+
+.quarry-preview-dialog {
+    max-width: 95vw;
+}
+
+.quarry-preview-body {
+    max-height: 70vh;
+    overflow: auto;
+}
+
+.quarry-preview-table {
+    border-collapse: collapse;
+    font-size: 0.9em;
+    width: max-content;
+    min-width: 100%;
+}
+
+.quarry-preview-table th,
+.quarry-preview-table td {
+    text-align: left;
+    vertical-align: top;
+    max-width: 28rem;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+}
+
+.quarry-preview-table thead th {
+    position: sticky;
+    top: 0;
+    background: var(--background-panel, var(--background));
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.quarry-preview-loading,
+.quarry-preview-empty {
+    color: var(--text-soft);
+    font-style: italic;
+    padding: 0.5rem;
+}
+
+.quarry-preview-error {
+    color: var(--red);
+    padding: 0.5rem;
+}
