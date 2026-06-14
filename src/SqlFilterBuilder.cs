@@ -8,7 +8,18 @@ namespace Quarry;
 /// database.</summary>
 public static class SqlFilterBuilder
 {
+    /// <summary>The reserved clause column name that expands to a dataset's configured tag columns, searched
+    /// together as one merged column. See <see cref="TagColumnResolver"/>.</summary>
+    public const string TagsKeyword = "tags";
+
     public static SqlFilter Build(WildcardQuery query, ColumnSchema schema)
+        => Build(query, schema, Array.Empty<ColumnInfo>());
+
+    /// <summary>Builds the WHERE expression. A clause whose column is the <see cref="TagsKeyword"/> and that
+    /// has at least one resolved <paramref name="tagColumns"/> entry matches across all of those columns as a
+    /// single merged column; every other clause (including <c>tags</c> when nothing is configured) is matched
+    /// against the literal schema column, exactly as before.</summary>
+    public static SqlFilter Build(WildcardQuery query, ColumnSchema schema, IReadOnlyList<ColumnInfo> tagColumns)
     {
         if (!query.HasFilter)
         {
@@ -18,6 +29,11 @@ public static class SqlFilterBuilder
         List<QueryParameter> parameters = [];
         foreach (QueryClause clause in query.Clauses)
         {
+            if (tagColumns.Count > 0 && string.Equals(clause.Column, TagsKeyword, StringComparison.OrdinalIgnoreCase))
+            {
+                terms.Add(BuildMergedTagTerm(tagColumns, clause, parameters));
+                continue;
+            }
             if (!schema.TryGet(clause.Column, out ColumnInfo column))
             {
                 throw new WildcardQueryException(
@@ -36,6 +52,37 @@ public static class SqlFilterBuilder
                 : BuildContainsTerm(quoted, clause, placeholders));
         }
         return new SqlFilter(string.Join(" AND ", terms), parameters);
+    }
+
+    /// <summary>The <c>tags</c> keyword: the configured tag columns are treated as one merged column. Each
+    /// value is bound once (reused across columns) and matches if it is present in ANY tag column — a scalar
+    /// column via case-insensitive substring, a list column via element membership. <c>=</c> needs any value
+    /// to match, <c>==</c> needs every value to match (cumulatively across columns), <c>!=</c> needs none.</summary>
+    private static string BuildMergedTagTerm(IReadOnlyList<ColumnInfo> tagColumns, QueryClause clause, List<QueryParameter> parameters)
+    {
+        string[] valueMatches = new string[clause.Values.Count];
+        for (int i = 0; i < clause.Values.Count; i++)
+        {
+            string name = $"p{parameters.Count}";
+            parameters.Add(new QueryParameter(name, clause.Values[i]));
+            string placeholder = $"${name}";
+            string[] perColumn = new string[tagColumns.Count];
+            for (int c = 0; c < tagColumns.Count; c++)
+            {
+                string quoted = QuoteIdentifier(tagColumns[c].Name);
+                perColumn[c] = tagColumns[c].Kind == ColumnKind.List
+                    ? $"list_has_any({quoted}, list_value({placeholder}))"
+                    : $"contains(lower({quoted}), lower({placeholder}))";
+            }
+            valueMatches[i] = perColumn.Length == 1 ? perColumn[0] : $"({string.Join(" OR ", perColumn)})";
+        }
+        return clause.Op switch
+        {
+            MatchOp.Any => $"({string.Join(" OR ", valueMatches)})",
+            MatchOp.All => $"({string.Join(" AND ", valueMatches)})",
+            MatchOp.None => $"NOT ({string.Join(" OR ", valueMatches)})",
+            _ => throw new WildcardQueryException($"Unsupported operator for column '{clause.Column}'."),
+        };
     }
 
     /// <summary>Scalar/text column: case-insensitive substring via <c>contains(lower(col), lower($p))</c>.

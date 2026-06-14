@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@jest/globals";
 import {
     collectPromptColumns,
+    collectTagColumns,
     escapeHtml,
     formatRowCount,
     PREVIEW_ROW_LIMIT,
@@ -38,6 +39,7 @@ describe("renderDatasetRow", () => {
             ],
             resolvedPromptColumn: "prompt",
             configuredPromptColumn: null,
+            configuredTagColumns: [],
             rowCount: 1234,
             error: null,
         });
@@ -47,12 +49,36 @@ describe("renderDatasetRow", () => {
         expect(html).toContain('data-dataset="prompts/1girl"');
     });
 
+    it("renders tag checkboxes with configured columns checked", () => {
+        const html = renderDatasetRow({
+            name: "prompts/1girl",
+            columns: [
+                { name: "prompt", kind: "scalar" },
+                { name: "tags", kind: "list" },
+                { name: "extra", kind: "scalar" },
+            ],
+            resolvedPromptColumn: "prompt",
+            configuredPromptColumn: null,
+            configuredTagColumns: ["tags", "extra"],
+            rowCount: 1234,
+            error: null,
+        });
+        expect(html).toContain(
+            'input type="checkbox" class="quarry-dataset-tag" data-dataset="prompts/1girl" value="tags" checked',
+        );
+        expect(html).toContain('value="extra" checked');
+        // The prompt column is not a configured tag column here, so its checkbox is unchecked.
+        expect(html).toContain('value="prompt">');
+        expect(html).not.toContain('value="prompt" checked');
+    });
+
     it("renders an error row when the schema failed", () => {
         const html = renderDatasetRow({
             name: "bad",
             columns: [],
             resolvedPromptColumn: null,
             configuredPromptColumn: null,
+            configuredTagColumns: [],
             rowCount: null,
             error: "boom",
         });
@@ -66,6 +92,7 @@ describe("renderDatasetRow", () => {
             columns: [{ name: "prompt", kind: "scalar" }],
             resolvedPromptColumn: "prompt",
             configuredPromptColumn: null,
+            configuredTagColumns: [],
             rowCount: 1234,
             error: null,
         });
@@ -80,6 +107,7 @@ describe("renderDatasetRow", () => {
             columns: [{ name: "prompt", kind: "scalar" }],
             resolvedPromptColumn: "prompt",
             configuredPromptColumn: null,
+            configuredTagColumns: [],
             rowCount: 1234567,
             error: null,
         });
@@ -93,6 +121,7 @@ describe("renderDatasetRow", () => {
             columns: [{ name: "prompt", kind: "scalar" }],
             resolvedPromptColumn: "prompt",
             configuredPromptColumn: null,
+            configuredTagColumns: [],
             rowCount: null,
             error: null,
         });
@@ -106,6 +135,7 @@ describe("renderDatasetRow", () => {
             columns: [],
             resolvedPromptColumn: null,
             configuredPromptColumn: null,
+            configuredTagColumns: [],
             rowCount: null,
             error: "boom",
         });
@@ -125,6 +155,7 @@ describe("renderDatasets", () => {
                 columns: [{ name: "p", kind: "scalar" }],
                 resolvedPromptColumn: "p",
                 configuredPromptColumn: null,
+                configuredTagColumns: [],
                 rowCount: 10,
                 error: null,
             },
@@ -133,6 +164,7 @@ describe("renderDatasets", () => {
                 columns: [{ name: "q", kind: "scalar" }],
                 resolvedPromptColumn: "q",
                 configuredPromptColumn: null,
+                configuredTagColumns: [],
                 rowCount: 20,
                 error: null,
             },
@@ -227,5 +259,26 @@ describe("collectPromptColumns", () => {
         const container = document.createElement("div");
         container.innerHTML = `<select class="quarry-dataset-column"><option value="x" selected>x</option></select>`;
         expect(collectPromptColumns(container)).toEqual({});
+    });
+});
+
+describe("collectTagColumns", () => {
+    it("reads each dataset's checked tag boxes, keeping unchecked datasets as empty", () => {
+        const container = document.createElement("div");
+        container.innerHTML = `
+            <label><input type="checkbox" class="quarry-dataset-tag" data-dataset="a" value="bar" checked></label>
+            <label><input type="checkbox" class="quarry-dataset-tag" data-dataset="a" value="baz" checked></label>
+            <label><input type="checkbox" class="quarry-dataset-tag" data-dataset="a" value="qux"></label>
+            <label><input type="checkbox" class="quarry-dataset-tag" data-dataset="b" value="z"></label>`;
+        expect(collectTagColumns(container)).toEqual({
+            a: ["bar", "baz"],
+            b: [],
+        });
+    });
+
+    it("ignores tag boxes without a data-dataset attribute", () => {
+        const container = document.createElement("div");
+        container.innerHTML = `<label><input type="checkbox" class="quarry-dataset-tag" value="x" checked></label>`;
+        expect(collectTagColumns(container)).toEqual({});
     });
 });

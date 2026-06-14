@@ -14,6 +14,13 @@ public class SqlFilterBuilderTests
         return SqlFilterBuilder.Build(WildcardQueryParser.Parse(data), Schema(cols));
     }
 
+    private static SqlFilter BuildWithTags(string data, string[] tagColumns, params (string, ColumnKind)[] cols)
+    {
+        ColumnSchema schema = Schema(cols);
+        List<ColumnInfo> tags = [.. tagColumns.Select(t => { schema.TryGet(t, out ColumnInfo c); return c; })];
+        return SqlFilterBuilder.Build(WildcardQueryParser.Parse(data), schema, tags);
+    }
+
     [Fact]
     public void NoFilter_ReturnsEmpty()
     {
@@ -96,6 +103,61 @@ public class SqlFilterBuilderTests
             "list_has_any(\"tags\", list_value($p0, $p1)) AND (contains(lower(\"source\"), lower($p2)))",
             f.WhereClause);
         Assert.Equal(new[] { "a", "b", "civitai" }, f.Parameters.Select(p => p.Value));
+    }
+
+    // --- tags keyword: configured tag columns searched as one merged column -------------------------
+
+    [Fact]
+    public void TagsKeyword_SingleScalarColumn_BuildsContains()
+    {
+        SqlFilter f = BuildWithTags("p[tags=1girl]", ["bar"], ("foo", ColumnKind.Scalar), ("bar", ColumnKind.Scalar));
+        Assert.Equal("(contains(lower(\"bar\"), lower($p0)))", f.WhereClause);
+        Assert.Equal("1girl", Assert.Single(f.Parameters).Value);
+    }
+
+    [Fact]
+    public void TagsKeyword_TwoScalarColumns_Any_OrsAcrossColumns()
+    {
+        SqlFilter f = BuildWithTags("p[tags=1girl]", ["bar", "baz"], ("bar", ColumnKind.Scalar), ("baz", ColumnKind.Scalar));
+        Assert.Equal(
+            "((contains(lower(\"bar\"), lower($p0)) OR contains(lower(\"baz\"), lower($p0))))",
+            f.WhereClause);
+    }
+
+    [Fact]
+    public void TagsKeyword_TwoColumns_All_IsCumulativePerValue()
+    {
+        SqlFilter f = BuildWithTags("p[tags==1girl,solo]", ["bar", "baz"], ("bar", ColumnKind.Scalar), ("baz", ColumnKind.Scalar));
+        Assert.Equal(
+            "((contains(lower(\"bar\"), lower($p0)) OR contains(lower(\"baz\"), lower($p0))) AND (contains(lower(\"bar\"), lower($p1)) OR contains(lower(\"baz\"), lower($p1))))",
+            f.WhereClause);
+        Assert.Equal(new[] { "1girl", "solo" }, f.Parameters.Select(p => p.Value));
+    }
+
+    [Fact]
+    public void TagsKeyword_None_NegatesTheMergedMatch()
+    {
+        SqlFilter f = BuildWithTags("p[tags!=nsfw]", ["bar", "baz"], ("bar", ColumnKind.Scalar), ("baz", ColumnKind.Scalar));
+        Assert.Equal(
+            "NOT ((contains(lower(\"bar\"), lower($p0)) OR contains(lower(\"baz\"), lower($p0))))",
+            f.WhereClause);
+    }
+
+    [Fact]
+    public void TagsKeyword_MixedScalarAndListColumns()
+    {
+        SqlFilter f = BuildWithTags("p[tags=1girl]", ["bar", "baz"], ("bar", ColumnKind.Scalar), ("baz", ColumnKind.List));
+        Assert.Equal(
+            "((contains(lower(\"bar\"), lower($p0)) OR list_has_any(\"baz\", list_value($p0))))",
+            f.WhereClause);
+    }
+
+    [Fact]
+    public void TagsKeyword_NoConfiguredColumns_FallsBackToLiteralColumn()
+    {
+        // With no tag columns configured, `tags` behaves as a literal column name (today's behavior).
+        SqlFilter f = BuildWithTags("p[tags=a,b]", [], ("tags", ColumnKind.List));
+        Assert.Equal("list_has_any(\"tags\", list_value($p0, $p1))", f.WhereClause);
     }
 
     [Fact]

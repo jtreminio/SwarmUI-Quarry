@@ -52,6 +52,41 @@ public class DatasetScannerTests
     }
 
     [Fact]
+    public void Enumerate_SkipsHiddenDirectories_IncludingCachedLanceUploads()
+    {
+        using TempDir tmp = new();
+        string root = tmp.Path;
+        File.WriteAllText(Path.Combine(root, "real.parquet"), "");
+
+        // A HuggingFace-style cache holding an incomplete .lance dir; must be ignored entirely.
+        string cachedLance = Path.Combine(root, ".cache", "huggingface", "upload", "partial.lance");
+        Directory.CreateDirectory(cachedLance);
+        File.WriteAllText(Path.Combine(root, ".cache", "stray.csv"), "");
+
+        List<string> found = DatasetScanner.Enumerate(root)
+            .Select(p => Path.GetRelativePath(root, p).Replace('\\', '/'))
+            .OrderBy(x => x, StringComparer.Ordinal)
+            .ToList();
+
+        Assert.Equal(new[] { "real.parquet" }, found);
+    }
+
+    [Fact]
+    public void Enumerate_SkipsHiddenFiles()
+    {
+        using TempDir tmp = new();
+        string root = tmp.Path;
+        File.WriteAllText(Path.Combine(root, "real.csv"), "");
+        File.WriteAllText(Path.Combine(root, ".hidden.csv"), "");
+
+        List<string> found = DatasetScanner.Enumerate(root)
+            .Select(p => Path.GetFileName(p))
+            .ToList();
+
+        Assert.Equal(new[] { "real.csv" }, found);
+    }
+
+    [Fact]
     public void Enumerate_MissingRoot_ReturnsEmpty()
     {
         Assert.Empty(DatasetScanner.Enumerate("/no/such/dir/quarry-xyz123"));

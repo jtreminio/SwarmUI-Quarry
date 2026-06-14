@@ -17,18 +17,26 @@
     const badge = col.kind === "list" ? " [list]" : "";
     return `<option value="${escapeHtml(col.name)}"${selected}>${escapeHtml(col.name)}${badge}</option>`;
   }).join("");
+  var renderTagCheckboxes = (dataset) => dataset.columns.map((col) => {
+    const checked = (dataset.configuredTagColumns ?? []).includes(
+      col.name
+    ) ? " checked" : "";
+    const badge = col.kind === "list" ? " [list]" : "";
+    return `<label class="quarry-tag-option"><input type="checkbox" class="quarry-dataset-tag" data-dataset="${escapeHtml(dataset.name)}" value="${escapeHtml(col.name)}"${checked}> ${escapeHtml(col.name)}${badge}</label>`;
+  }).join("");
   var formatRowCount = (count) => count == null ? "—" : count.toLocaleString();
   var renderDatasetRow = (dataset) => {
     const name = escapeHtml(dataset.name);
     if (dataset.error) {
       return `<tr class="quarry-dataset-row quarry-dataset-error">
             <td><code class="quarry-dataset-name">${name}</code></td>
-            <td colspan="3"><span class="quarry-dataset-error-msg">⚠️ ${escapeHtml(dataset.error)}</span></td>
+            <td colspan="4"><span class="quarry-dataset-error-msg">⚠️ ${escapeHtml(dataset.error)}</span></td>
         </tr>`;
     }
     return `<tr class="quarry-dataset-row">
         <td><code class="quarry-dataset-name">${name}</code></td>
         <td><select class="quarry-dataset-column" data-dataset="${name}">${renderDatasetOptions(dataset)}</select></td>
+        <td class="quarry-dataset-tags" title="Columns the 'tags' keyword searches across">${renderTagCheckboxes(dataset)}</td>
         <td class="quarry-dataset-rows" title="${formatRowCount(dataset.rowCount)} rows">${formatRowCount(dataset.rowCount)}</td>
         <td><button type="button" class="basic-button quarry-preview-button" data-dataset="${name}" title="Preview the first ${PREVIEW_ROW_LIMIT} rows">👁 Preview</button></td>
     </tr>`;
@@ -39,7 +47,7 @@
     }
     return `<table class="quarry-datasets-table">
         <thead>
-            <tr><th>Dataset</th><th>Prompt column</th><th>Rows</th><th>Preview</th></tr>
+            <tr><th>Dataset</th><th>Prompt column</th><th>Tag columns</th><th>Rows</th><th>Preview</th></tr>
         </thead>
         <tbody>${datasets.map(renderDatasetRow).join("")}</tbody>
     </table>`;
@@ -109,6 +117,25 @@
     });
     return result;
   };
+  var collectTagColumns = (container) => {
+    const result = {};
+    const boxes = container.querySelectorAll(
+      "input.quarry-dataset-tag"
+    );
+    boxes.forEach((box) => {
+      const name = box.getAttribute("data-dataset");
+      if (!name) {
+        return;
+      }
+      if (!(name in result)) {
+        result[name] = [];
+      }
+      if (box.checked) {
+        result[name].push(box.value);
+      }
+    });
+    return result;
+  };
   var messageTimer = null;
   var applyResponse = (data) => {
     const enabledEl = document.getElementById(
@@ -163,12 +190,14 @@
     const folder = document.getElementById("quarry-folder").value.trim();
     const container = document.getElementById("quarry-datasets");
     const promptColumns = container ? collectPromptColumns(container) : {};
+    const tagColumns = container ? collectTagColumns(container) : {};
     genericRequest(
       "QuarrySaveSettings",
       {
         enabled,
         datasetsFolder: folder,
-        promptColumnsJson: JSON.stringify(promptColumns)
+        promptColumnsJson: JSON.stringify(promptColumns),
+        tagColumnsJson: JSON.stringify(tagColumns)
       },
       (data) => {
         if (data.success) {

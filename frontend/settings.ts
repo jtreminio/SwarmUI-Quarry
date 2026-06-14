@@ -10,6 +10,7 @@ interface DatasetDto {
     columns: ColumnDto[];
     resolvedPromptColumn: string | null;
     configuredPromptColumn: string | null;
+    configuredTagColumns: string[];
     rowCount: number | null;
     error: string | null;
 }
@@ -60,6 +61,19 @@ export const renderDatasetOptions = (dataset: DatasetDto): string =>
         })
         .join("");
 
+export const renderTagCheckboxes = (dataset: DatasetDto): string =>
+    dataset.columns
+        .map((col) => {
+            const checked = (dataset.configuredTagColumns ?? []).includes(
+                col.name,
+            )
+                ? " checked"
+                : "";
+            const badge = col.kind === "list" ? " [list]" : "";
+            return `<label class="quarry-tag-option"><input type="checkbox" class="quarry-dataset-tag" data-dataset="${escapeHtml(dataset.name)}" value="${escapeHtml(col.name)}"${checked}> ${escapeHtml(col.name)}${badge}</label>`;
+        })
+        .join("");
+
 export const formatRowCount = (count: number | null | undefined): string =>
     count == null ? "—" : count.toLocaleString();
 
@@ -68,12 +82,13 @@ export const renderDatasetRow = (dataset: DatasetDto): string => {
     if (dataset.error) {
         return `<tr class="quarry-dataset-row quarry-dataset-error">
             <td><code class="quarry-dataset-name">${name}</code></td>
-            <td colspan="3"><span class="quarry-dataset-error-msg">⚠️ ${escapeHtml(dataset.error)}</span></td>
+            <td colspan="4"><span class="quarry-dataset-error-msg">⚠️ ${escapeHtml(dataset.error)}</span></td>
         </tr>`;
     }
     return `<tr class="quarry-dataset-row">
         <td><code class="quarry-dataset-name">${name}</code></td>
         <td><select class="quarry-dataset-column" data-dataset="${name}">${renderDatasetOptions(dataset)}</select></td>
+        <td class="quarry-dataset-tags" title="Columns the 'tags' keyword searches across">${renderTagCheckboxes(dataset)}</td>
         <td class="quarry-dataset-rows" title="${formatRowCount(dataset.rowCount)} rows">${formatRowCount(dataset.rowCount)}</td>
         <td><button type="button" class="basic-button quarry-preview-button" data-dataset="${name}" title="Preview the first ${PREVIEW_ROW_LIMIT} rows">👁 Preview</button></td>
     </tr>`;
@@ -85,7 +100,7 @@ export const renderDatasets = (datasets: DatasetDto[]): string => {
     }
     return `<table class="quarry-datasets-table">
         <thead>
-            <tr><th>Dataset</th><th>Prompt column</th><th>Rows</th><th>Preview</th></tr>
+            <tr><th>Dataset</th><th>Prompt column</th><th>Tag columns</th><th>Rows</th><th>Preview</th></tr>
         </thead>
         <tbody>${datasets.map(renderDatasetRow).join("")}</tbody>
     </table>`;
@@ -168,6 +183,30 @@ export const collectPromptColumns = (
     return result;
 };
 
+export const collectTagColumns = (
+    container: HTMLElement,
+): Record<string, string[]> => {
+    const result: Record<string, string[]> = {};
+    const boxes = container.querySelectorAll<HTMLInputElement>(
+        "input.quarry-dataset-tag",
+    );
+    boxes.forEach((box) => {
+        const name = box.getAttribute("data-dataset");
+        if (!name) {
+            return;
+        }
+        // Every dataset with at least one column gets an entry (even if nothing is checked) so that
+        // clearing all of its tag columns is persisted as an empty list.
+        if (!(name in result)) {
+            result[name] = [];
+        }
+        if (box.checked) {
+            result[name].push(box.value);
+        }
+    });
+    return result;
+};
+
 let messageTimer: ReturnType<typeof setTimeout> | null = null;
 
 const applyResponse = (data: SettingsResponse): void => {
@@ -230,12 +269,14 @@ const saveSettings = (): void => {
     ).value.trim();
     const container = document.getElementById("quarry-datasets");
     const promptColumns = container ? collectPromptColumns(container) : {};
+    const tagColumns = container ? collectTagColumns(container) : {};
     genericRequest<SettingsResponse>(
         "QuarrySaveSettings",
         {
             enabled,
             datasetsFolder: folder,
             promptColumnsJson: JSON.stringify(promptColumns),
+            tagColumnsJson: JSON.stringify(tagColumns),
         },
         (data) => {
             if (data.success) {

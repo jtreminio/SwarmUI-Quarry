@@ -69,6 +69,24 @@
     min-width: 8rem;
 }
 
+.quarry-dataset-tags {
+    vertical-align: top;
+}
+
+.quarry-tag-option {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    white-space: nowrap;
+    cursor: pointer;
+    font-weight: normal;
+    margin: 0;
+}
+
+.quarry-tag-option input {
+    margin: 0;
+}
+
 .quarry-dataset-rows {
     text-align: right;
     font-variant-numeric: tabular-nums;

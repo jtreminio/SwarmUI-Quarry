@@ -59,6 +59,7 @@ public class QuarryExtension : Extension
             DatasetManager.Enabled = settings.Value<bool?>("enabled") ?? false;
             DatasetManager.DatasetsFolder = settings.Value<string>("datasetsFolder") ?? "";
             DatasetManager.SetPromptColumns(ReadPromptColumns(settings["promptColumns"] as JObject));
+            DatasetManager.SetTagColumns(ReadTagColumns(settings["tagColumns"] as JObject));
         }
         catch (Exception ex)
         {
@@ -75,11 +76,17 @@ public class QuarryExtension : Extension
             {
                 promptColumns[name] = column;
             }
+            JObject tagColumns = [];
+            foreach ((string name, IReadOnlyList<string> columns) in DatasetManager.GetTagColumnsSnapshot())
+            {
+                tagColumns[name] = new JArray(columns);
+            }
             JObject settings = new()
             {
                 ["enabled"] = DatasetManager.Enabled,
                 ["datasetsFolder"] = DatasetManager.DatasetsFolder,
                 ["promptColumns"] = promptColumns,
+                ["tagColumns"] = tagColumns,
             };
             File.WriteAllText(SettingsFilePath, settings.ToString());
         }
@@ -97,6 +104,22 @@ public class QuarryExtension : Extension
             foreach (JProperty property in source.Properties())
             {
                 result[property.Name] = property.Value?.ToString() ?? "";
+            }
+        }
+        return result;
+    }
+
+    private static Dictionary<string, IReadOnlyList<string>> ReadTagColumns(JObject source)
+    {
+        Dictionary<string, IReadOnlyList<string>> result = new(StringComparer.OrdinalIgnoreCase);
+        if (source is not null)
+        {
+            foreach (JProperty property in source.Properties())
+            {
+                List<string> columns = property.Value is JArray array
+                    ? [.. array.Select(token => token?.ToString()).Where(value => !string.IsNullOrWhiteSpace(value))]
+                    : [];
+                result[property.Name] = columns;
             }
         }
         return result;
@@ -124,6 +147,7 @@ public class QuarryExtension : Extension
                 ["columns"] = columns,
                 ["resolvedPromptColumn"] = info.ResolvedPromptColumn,
                 ["configuredPromptColumn"] = info.ConfiguredPromptColumn,
+                ["configuredTagColumns"] = new JArray(info.ConfiguredTagColumns),
                 ["rowCount"] = info.RowCount,
                 ["error"] = info.Error,
             });
@@ -144,7 +168,7 @@ public class QuarryExtension : Extension
         return Task.FromResult(BuildSettingsResponse());
     }
 
-    public Task<JObject> QuarrySaveSettings(Session session, bool enabled, string datasetsFolder, string promptColumnsJson)
+    public Task<JObject> QuarrySaveSettings(Session session, bool enabled, string datasetsFolder, string promptColumnsJson, string tagColumnsJson)
     {
         try
         {
@@ -152,6 +176,8 @@ public class QuarryExtension : Extension
             DatasetManager.DatasetsFolder = datasetsFolder ?? "";
             JObject parsed = string.IsNullOrWhiteSpace(promptColumnsJson) ? [] : JObject.Parse(promptColumnsJson);
             DatasetManager.SetPromptColumns(ReadPromptColumns(parsed));
+            JObject parsedTags = string.IsNullOrWhiteSpace(tagColumnsJson) ? [] : JObject.Parse(tagColumnsJson);
+            DatasetManager.SetTagColumns(ReadTagColumns(parsedTags));
             DatasetManager.SyncPlaceholders();
             SaveSettings();
             return Task.FromResult(BuildSettingsResponse());

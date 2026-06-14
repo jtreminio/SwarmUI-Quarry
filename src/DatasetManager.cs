@@ -27,6 +27,7 @@ public static class DatasetManager
     private static readonly ConcurrentDictionary<string, (string Hash, ColumnSchema Schema)> SchemaCache = new();
     private static readonly ConcurrentDictionary<string, (string Hash, long Count)> RowCountCache = new();
     private static readonly Dictionary<string, string> PromptColumns = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly Dictionary<string, List<string>> TagColumns = new(StringComparer.OrdinalIgnoreCase);
     private static readonly object PromptColumnsLock = new();
 
     private static DuckDbQueryBackend _backend;
@@ -101,6 +102,43 @@ public static class DatasetManager
         }
     }
 
+    /// <summary>The columns a user picked as "tag" columns for a dataset, or an empty list when none are set.
+    /// The <c>tags</c> keyword in a wildcard filter searches across all of them as one merged column.</summary>
+    public static IReadOnlyList<string> GetConfiguredTagColumns(string wildcardName)
+    {
+        lock (PromptColumnsLock)
+        {
+            return TagColumns.TryGetValue(wildcardName, out List<string> columns) ? [.. columns] : [];
+        }
+    }
+
+    public static void SetTagColumns(IReadOnlyDictionary<string, IReadOnlyList<string>> columns)
+    {
+        lock (PromptColumnsLock)
+        {
+            TagColumns.Clear();
+            foreach ((string name, IReadOnlyList<string> cols) in columns)
+            {
+                List<string> kept = cols is null ? [] : [.. cols.Where(c => !string.IsNullOrWhiteSpace(c))];
+                if (kept.Count > 0)
+                {
+                    TagColumns[name] = kept;
+                }
+            }
+        }
+    }
+
+    public static IReadOnlyDictionary<string, IReadOnlyList<string>> GetTagColumnsSnapshot()
+    {
+        lock (PromptColumnsLock)
+        {
+            return TagColumns.ToDictionary(kv => kv.Key, kv => (IReadOnlyList<string>)[.. kv.Value]);
+        }
+    }
+
+    /// <summary>A snapshot of all currently known datasets, for fanning a glob/comma reference out over them.</summary>
+    public static IReadOnlyCollection<DatasetEntry> AllDatasets => [.. Datasets.Values];
+
     /// <summary>Returns the dataset's schema, cached until the underlying file changes.</summary>
     public static ColumnSchema GetSchema(DatasetEntry entry)
     {
@@ -146,11 +184,11 @@ public static class DatasetManager
                 {
                     // Row count is a best-effort display value; a count failure must not hide a readable dataset.
                 }
-                result.Add(new DatasetInfo(entry.WildcardName, [.. schema.Columns], resolved, GetConfiguredPromptColumn(entry.WildcardName), rowCount, null));
+                result.Add(new DatasetInfo(entry.WildcardName, [.. schema.Columns], resolved, GetConfiguredPromptColumn(entry.WildcardName), [.. GetConfiguredTagColumns(entry.WildcardName)], rowCount, null));
             }
             catch (Exception ex)
             {
-                result.Add(new DatasetInfo(entry.WildcardName, [], null, GetConfiguredPromptColumn(entry.WildcardName), null, ex.Message));
+                result.Add(new DatasetInfo(entry.WildcardName, [], null, GetConfiguredPromptColumn(entry.WildcardName), [.. GetConfiguredTagColumns(entry.WildcardName)], null, ex.Message));
             }
         }
         return result;
@@ -307,5 +345,6 @@ public sealed record DatasetInfo(
     IReadOnlyList<ColumnInfo> Columns,
     string ResolvedPromptColumn,
     string ConfiguredPromptColumn,
+    IReadOnlyList<string> ConfiguredTagColumns,
     long? RowCount,
     string Error);
