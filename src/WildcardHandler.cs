@@ -163,7 +163,13 @@ public static class WildcardHandler
                 int i = LocateDataset(offsets, globalIndex);
                 MatchedDataset m = matched[i];
                 long localIndex = globalIndex - offsets[i];
-                return context.Parse(DatasetManager.Backend.GetPromptAt(m.Entry.Path, m.PromptColumn, m.Filter, localIndex)).Trim();
+                string result = context.Parse(DatasetManager.Backend.GetPromptAt(m.Entry.Path, m.PromptColumn, m.Filter, localIndex)).Trim();
+                if (result.Length == 0)
+                {
+                    Logs.Warning(
+                        $"Quarry wildcard '{m.Entry.WildcardName}': blank result from prompt column '{m.PromptColumn}' at row {localIndex} (file '{m.Entry.Path}').");
+                }
+                return result;
             });
     }
 
