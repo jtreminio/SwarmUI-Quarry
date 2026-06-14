@@ -175,10 +175,6 @@ public static class WildcardHandler
             return null;
         }
         List<string> usedWildcards = context.Input.ExtraMeta.GetOrCreate("used_wildcards", () => new List<string>()) as List<string>;
-        foreach (MatchedDataset m in matched)
-        {
-            usedWildcards.Add(m.Entry.WildcardName);
-        }
 
         bool indexBehavior = context.Input.Get(T2IParamTypes.WildcardSeedBehavior, "Random") == "Index";
         Func<long> nextIndex = indexBehavior
@@ -195,7 +191,12 @@ public static class WildcardHandler
             total += matched[i].Count;
         }
 
-        return WildcardSelection.Pick(
+        // Record a file in the used-wildcard metadata only when a pick actually lands on it — not every
+        // candidate of a comma/glob fan-out — so SwarmUI reports what truly contributed. First-hit order.
+        List<string> hitOrdered = [];
+        HashSet<string> hit = [];
+
+        string result = WildcardSelection.Pick(
             total,
             picks,
             separator,
@@ -204,15 +205,28 @@ public static class WildcardHandler
             {
                 int i = LocateDataset(offsets, globalIndex);
                 MatchedDataset m = matched[i];
+                if (hit.Add(m.Entry.WildcardName))
+                {
+                    hitOrdered.Add(m.Entry.WildcardName);
+                }
                 long localIndex = globalIndex - offsets[i];
-                string result = context.Parse(DatasetManager.Backend.GetPromptAt(m.Entry.Path, m.PromptColumn, m.Filter, localIndex)).Trim();
-                if (result.Length == 0)
+                string value = context.Parse(DatasetManager.Backend.GetPromptAt(m.Entry.Path, m.PromptColumn, m.Filter, localIndex)).Trim();
+                if (value.Length == 0)
                 {
                     Logs.Warning(
                         $"Quarry wildcard '{m.Entry.WildcardName}': blank result from prompt column '{m.PromptColumn}' at row {localIndex} (file '{m.Entry.Path}').");
                 }
-                return result;
+                return value;
             });
+
+        foreach (string name in hitOrdered)
+        {
+            if (!usedWildcards.Contains(name))
+            {
+                usedWildcards.Add(name);
+            }
+        }
+        return result;
     }
 
     /// <summary>Builds the per-file selection plan, or null when the file has no prompt column to read.</summary>
