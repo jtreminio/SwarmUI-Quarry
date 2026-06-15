@@ -1,9 +1,6 @@
 namespace Quarry;
 
-/// <summary>Maps a DuckDB column type string (as returned by <c>DESCRIBE</c>) to a
-/// <see cref="ColumnKind"/>. List/array types (e.g. <c>VARCHAR[]</c>, <c>INTEGER[3]</c>,
-/// <c>LIST(VARCHAR)</c>) become <see cref="ColumnKind.List"/>; everything else is scalar.
-/// Pure and side-effect free.</summary>
+// Maps a DuckDB DESCRIBE type string to a ColumnKind; list/array types (VARCHAR[], INTEGER[3], LIST(...)) are List.
 public static class DuckDbTypeMapper
 {
     public static ColumnKind MapKind(string duckDbType)

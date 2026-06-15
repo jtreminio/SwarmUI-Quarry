@@ -1,25 +1,16 @@
 namespace Quarry;
 
-/// <summary>Translates a parsed <see cref="WildcardQuery"/> plus a dataset <see cref="ColumnSchema"/>
-/// into a parameterized DuckDB WHERE expression. Matching is always "contains", never exact: a
-/// scalar/text column is matched by case-insensitive substring; a list column by case-insensitive
-/// substring against each element (so <c>girl</c> matches the elements <c>girls</c> and <c>young girl</c>).
-/// Column identifiers are validated against the schema and double-quoted using their canonical casing;
-/// every value is bound as a parameter. Pure and side-effect free, so it can be unit-tested without a
-/// database.</summary>
+// Matching is always case-insensitive "contains", never exact: a scalar column by substring, a list
+// column by substring against each element (so `girl` matches `girls` and `young girl`). Values are
+// always bound as parameters, never interpolated. Pure, so it can be unit-tested without a database.
 public static class SqlFilterBuilder
 {
-    /// <summary>The reserved clause column name that expands to a dataset's configured tag columns, searched
-    /// together as one merged column. See <see cref="TagColumnResolver"/>.</summary>
+    // Reserved clause column that expands to a dataset's configured tag columns, searched as one merged column.
     public const string TagsKeyword = "tags";
 
     public static SqlFilter Build(WildcardQuery query, ColumnSchema schema)
         => Build(query, schema, Array.Empty<ColumnInfo>());
 
-    /// <summary>Builds the WHERE expression. A clause whose column is the <see cref="TagsKeyword"/> and that
-    /// has at least one resolved <paramref name="tagColumns"/> entry matches across all of those columns as a
-    /// single merged column; every other clause (including <c>tags</c> when nothing is configured) is matched
-    /// against the literal schema column, exactly as before.</summary>
     public static SqlFilter Build(WildcardQuery query, ColumnSchema schema, IReadOnlyList<ColumnInfo> tagColumns)
     {
         if (!query.HasFilter)
@@ -40,7 +31,7 @@ public static class SqlFilterBuilder
                 throw new WildcardQueryException(
                     $"Column '{clause.Column}' does not exist in dataset '{query.Name}'.");
             }
-            string quoted = QuoteIdentifier(column.Name);
+            string quoted = SqlText.QuoteIdentifier(column.Name);
             string[] placeholders = new string[clause.Values.Count];
             for (int i = 0; i < clause.Values.Count; i++)
             {
@@ -55,11 +46,8 @@ public static class SqlFilterBuilder
         return new SqlFilter(string.Join(" AND ", terms), parameters);
     }
 
-    /// <summary>The <c>tags</c> keyword: the configured tag columns are treated as one merged column. Each
-    /// value is bound once (reused across columns) and matches if it is present in ANY tag column — a scalar
-    /// column via case-insensitive substring, a list column via case-insensitive substring against each
-    /// element. <c>=</c> needs any value to match, <c>==</c> needs every value to match (cumulatively across
-    /// columns), <c>!=</c> needs none.</summary>
+    // The `tags` keyword: configured tag columns treated as one merged column. Each value is bound once
+    // and matches if present in ANY tag column; Any/All/None then combine across values as usual.
     private static string BuildMergedTagTerm(IReadOnlyList<ColumnInfo> tagColumns, QueryClause clause, List<QueryParameter> parameters)
     {
         string[] valueMatches = new string[clause.Values.Count];
@@ -71,65 +59,35 @@ public static class SqlFilterBuilder
             string[] perColumn = new string[tagColumns.Count];
             for (int c = 0; c < tagColumns.Count; c++)
             {
-                string quoted = QuoteIdentifier(tagColumns[c].Name);
+                string quoted = SqlText.QuoteIdentifier(tagColumns[c].Name);
                 perColumn[c] = tagColumns[c].Kind == ColumnKind.List
                     ? ListElementContains(quoted, placeholder)
-                    : $"contains(lower({quoted}), lower({placeholder}))";
+                    : ScalarContains(quoted, placeholder);
             }
             valueMatches[i] = perColumn.Length == 1 ? perColumn[0] : $"({string.Join(" OR ", perColumn)})";
         }
-        return clause.Op switch
-        {
-            MatchOp.Any => $"({string.Join(" OR ", valueMatches)})",
-            MatchOp.All => $"({string.Join(" AND ", valueMatches)})",
-            MatchOp.None => $"NOT ({string.Join(" OR ", valueMatches)})",
-            _ => throw new WildcardQueryException($"Unsupported operator for column '{clause.Column}'."),
-        };
+        return Combine(clause, valueMatches);
     }
 
-    /// <summary>Scalar/text column: case-insensitive substring via <c>contains(lower(col), lower($p))</c>.
-    /// Using contains() rather than LIKE avoids having to escape <c>%</c> and <c>_</c> in user values.</summary>
     private static string BuildContainsTerm(string column, QueryClause clause, string[] placeholders)
-    {
-        string[] checks = new string[placeholders.Length];
-        for (int i = 0; i < placeholders.Length; i++)
-        {
-            checks[i] = $"contains(lower({column}), lower({placeholders[i]}))";
-        }
-        return clause.Op switch
-        {
-            MatchOp.Any => $"({string.Join(" OR ", checks)})",
-            MatchOp.All => $"({string.Join(" AND ", checks)})",
-            MatchOp.None => $"NOT ({string.Join(" OR ", checks)})",
-            _ => throw new WildcardQueryException($"Unsupported operator for column '{clause.Column}'."),
-        };
-    }
+        => Combine(clause, [.. placeholders.Select(p => ScalarContains(column, p))]);
 
-    /// <summary>List column: case-insensitive substring against each element. A value matches when ANY element
-    /// of the list contains it (so <c>girl</c> matches <c>girls</c> and <c>young girl</c>). <c>=</c> needs any
-    /// value to match an element, <c>==</c> needs every value to, <c>!=</c> needs none.</summary>
     private static string BuildListTerm(string column, QueryClause clause, string[] placeholders)
-    {
-        string[] checks = new string[placeholders.Length];
-        for (int i = 0; i < placeholders.Length; i++)
-        {
-            checks[i] = ListElementContains(column, placeholders[i]);
-        }
-        return clause.Op switch
-        {
-            MatchOp.Any => $"({string.Join(" OR ", checks)})",
-            MatchOp.All => $"({string.Join(" AND ", checks)})",
-            MatchOp.None => $"NOT ({string.Join(" OR ", checks)})",
-            _ => throw new WildcardQueryException($"Unsupported operator for column '{clause.Column}'."),
-        };
-    }
+        => Combine(clause, [.. placeholders.Select(p => ListElementContains(column, p))]);
 
-    /// <summary>True when any element of the list <paramref name="column"/> contains <paramref name="placeholder"/>
-    /// as a case-insensitive substring. Uses a list lambda (one pass over the elements, no row explosion) so it
-    /// stays a single scan, unlike UNNEST.</summary>
+    // Using contains() rather than LIKE avoids escaping `%` and `_` in user values.
+    private static string ScalarContains(string column, string placeholder)
+        => $"contains(lower({column}), lower({placeholder}))";
+
+    // A list lambda stays one scan (no row explosion), unlike UNNEST.
     private static string ListElementContains(string column, string placeholder)
         => $"len(list_filter({column}, x -> contains(lower(x), lower({placeholder})))) > 0";
 
-    /// <summary>Double-quotes a DuckDB identifier, escaping embedded double-quotes by doubling them.</summary>
-    private static string QuoteIdentifier(string identifier) => $"\"{identifier.Replace("\"", "\"\"")}\"";
+    private static string Combine(QueryClause clause, IReadOnlyList<string> checks) => clause.Op switch
+    {
+        MatchOp.Any => $"({string.Join(" OR ", checks)})",
+        MatchOp.All => $"({string.Join(" AND ", checks)})",
+        MatchOp.None => $"NOT ({string.Join(" OR ", checks)})",
+        _ => throw new WildcardQueryException($"Unsupported operator for column '{clause.Column}'."),
+    };
 }

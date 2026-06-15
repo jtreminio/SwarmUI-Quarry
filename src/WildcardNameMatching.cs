@@ -2,13 +2,10 @@ using System.Text.RegularExpressions;
 
 namespace Quarry;
 
-/// <summary>Expands the NAME portion of a <c>&lt;wc:NAME[...]&gt;</c> reference that may target more than one
-/// dataset: a comma-separated list (<c>a,b,c</c>) and/or glob patterns (<c>quarry/*</c>). Pure and
-/// side-effect free — the handler maps the resulting names/patterns onto actual datasets.</summary>
+/// <summary>Expands the NAME of a <c>&lt;q:NAME[...]&gt;</c> reference that may target more than one dataset:
+/// a comma-separated list (<c>a,b,c</c>) and/or glob patterns (<c>quarry/*</c>).</summary>
 public static class WildcardNameMatching
 {
-    /// <summary>Splits a reference name on commas, trims each part, and drops empties. A bare name with no
-    /// comma yields a single-element list.</summary>
     public static IReadOnlyList<string> SplitNames(string name)
     {
         List<string> parts = [];
@@ -27,12 +24,10 @@ public static class WildcardNameMatching
         return parts;
     }
 
-    /// <summary>True when the pattern contains a glob metacharacter (<c>*</c> or <c>?</c>).</summary>
     public static bool IsGlob(string pattern) => pattern is not null && (pattern.Contains('*') || pattern.Contains('?'));
 
     /// <summary>Case-insensitive glob match anchored to the whole candidate. <c>*</c> matches any run of
-    /// characters (including <c>/</c>); <c>?</c> matches a single character; every other character is
-    /// literal.</summary>
+    /// characters (including <c>/</c>); <c>?</c> matches a single character; everything else is literal.</summary>
     public static bool GlobMatches(string pattern, string candidate)
     {
         if (pattern is null || candidate is null)

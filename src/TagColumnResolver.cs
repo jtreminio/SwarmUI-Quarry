@@ -1,16 +1,10 @@
 namespace Quarry;
 
-/// <summary>Resolves a dataset's user-configured tag column names against its actual
-/// <see cref="ColumnSchema"/>: keeps only the names that exist (any casing), maps each to its canonical
-/// <see cref="ColumnInfo"/>, drops duplicates, and preserves the configured order. Columns that are not in
-/// the schema are silently ignored. Pure and side-effect free — mirrors <see cref="PromptColumnResolver"/>.
-///
-/// The returned list is what <see cref="SqlFilterBuilder"/> treats as a single "merged" column when a clause
-/// uses the <c>tags</c> keyword. When nothing is configured (or none of the configured names exist), it falls
-/// back to <paramref name="fallbackColumn"/> — typically the resolved prompt column — so <c>tags</c> still
-/// searches something useful on files that were never set up (e.g. a single-column prompt file).</summary>
+// Keeps the configured tag columns that exist (any casing), in order, deduped to canonical casing.
 public static class TagColumnResolver
 {
+    // When nothing resolves, falls back to fallbackColumn (typically the prompt column) so `tags` still
+    // searches something on datasets that were never set up.
     public static List<ColumnInfo> Resolve(IReadOnlyList<string> configured, ColumnSchema schema, string fallbackColumn = null)
     {
         List<ColumnInfo> result = [];

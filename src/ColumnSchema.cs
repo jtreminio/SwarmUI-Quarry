@@ -1,30 +1,19 @@
 namespace Quarry;
 
-/// <summary>Whether a dataset column holds a single scalar value or a list/array of values.
-/// Determines which SQL matching strategy <see cref="SqlFilterBuilder"/> uses.</summary>
 public enum ColumnKind
 {
     Scalar,
     List,
 }
 
-/// <summary>One dataset column: its canonical name (exact casing as stored in the dataset) and
-/// whether it is scalar or list-typed.</summary>
-public sealed class ColumnInfo
+public sealed class ColumnInfo(string name, ColumnKind kind)
 {
-    public string Name { get; }
-    public ColumnKind Kind { get; }
-
-    public ColumnInfo(string name, ColumnKind kind)
-    {
-        Name = name;
-        Kind = kind;
-    }
+    public string Name { get; } = name;
+    public ColumnKind Kind { get; } = kind;
 }
 
-/// <summary>The columns of a dataset, as introspected from DuckDB's <c>DESCRIBE</c>. Preserves column
-/// order (so "first column" is meaningful) while offering case-insensitive lookup that always resolves
-/// back to a column's canonical casing (DuckDB quoted identifiers are case-sensitive).</summary>
+// Preserves dataset column order while offering case-insensitive lookup back to canonical casing
+// (DuckDB quoted identifiers are case-sensitive).
 public sealed class ColumnSchema
 {
     private readonly List<ColumnInfo> _ordered;
@@ -40,10 +29,7 @@ public sealed class ColumnSchema
         }
     }
 
-    /// <summary>Columns in dataset order.</summary>
     public IReadOnlyList<ColumnInfo> Columns => _ordered;
 
-    /// <summary>Resolves a user-supplied column name (any casing) to its canonical
-    /// <see cref="ColumnInfo"/>. Returns false when no such column exists.</summary>
     public bool TryGet(string column, out ColumnInfo info) => _byName.TryGetValue(column, out info);
 }

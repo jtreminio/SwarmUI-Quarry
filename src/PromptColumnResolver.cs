@@ -1,13 +1,11 @@
 namespace Quarry;
 
-/// <summary>Decides which column supplies a dataset's prompt text: the user-configured column when it
-/// exists in the schema, otherwise an auto-pick — a conventionally named column if present, else the
-/// first column. Pure and side-effect free.</summary>
+// Picks the column supplying prompt text: configured if it exists, else a conventional name, else the first column.
 public static class PromptColumnResolver
 {
     private static readonly string[] PreferredNames = ["prompt", "text", "caption", "description", "value"];
 
-    /// <summary>Returns the resolved (canonical-cased) column name, or null when the schema has no columns.</summary>
+    // Returns the canonical-cased column name, or null when the schema has no columns.
     public static string Resolve(string configuredColumn, ColumnSchema schema)
     {
         if (!string.IsNullOrWhiteSpace(configuredColumn) && schema.TryGet(configuredColumn, out ColumnInfo configured))

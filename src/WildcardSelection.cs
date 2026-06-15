@@ -1,9 +1,7 @@
 namespace Quarry;
 
-/// <summary>The seeded, reproducible row-selection shared by the wildcard handler, mirroring SwarmUI
-/// core's wildcard picking: draw <c>picks</c> indices in <c>[0, total)</c> from the supplied index
-/// source (without replacement until the pool is exhausted, then refilled), fetch each, and join with
-/// the separator. Pure — no DuckDB, no SwarmUI — so the algorithm is unit-testable on its own.</summary>
+// Seeded row picking mirroring SwarmUI core: draw `picks` indices in [0, total) without replacement
+// until the pool is exhausted (then refill), fetch each, and join with the separator.
 public static class WildcardSelection
 {
     public static string Pick(long total, int picks, string separator, Func<long> nextIndex, Func<long, string> fetch)

@@ -1,6 +1,5 @@
 namespace Quarry;
 
-/// <summary>Thrown when a <c>&lt;wc:...&gt;</c> query string is syntactically malformed.</summary>
 public sealed class WildcardQueryParseException : WildcardQueryException
 {
     public WildcardQueryParseException(string message) : base(message)
@@ -8,18 +7,14 @@ public sealed class WildcardQueryParseException : WildcardQueryException
     }
 }
 
-/// <summary>Parses the data portion of a <c>&lt;wc:NAME[col=v1,v2; col2&amp;=...; col3!=...]&gt;</c>
-/// tag into a <see cref="WildcardQuery"/>. Pure and side-effect free.
-///
-/// Grammar (whitespace around every token is trimmed):
+/// <summary>Parses the data portion of a <c>&lt;q:NAME[clause; clause; ...]&gt;</c> tag (whitespace trimmed):
 /// <code>
-///   data    = NAME [ '[' clause { ';' clause } ']' ]
-///   clause  = COLUMN OP value { ',' value }
-///   OP      = '='  (any)  | '=='  (all)  | '!='  (none)    — all "contains", never exact
+///   data   = NAME [ '[' clause { ';' clause } ']' ]
+///   clause = COLUMN OP value { ',' value }
+///   OP     = '=' (any) | '==' (all) | '!=' (none)
 /// </code>
-/// The operator is found at the FIRST <c>=</c>: a preceding <c>!</c> means none, a following <c>=</c>
-/// means all, otherwise any. Values may therefore contain later <c>=</c> characters. Empty clauses
-/// (e.g. a trailing <c>;</c>) are ignored.</summary>
+/// The operator is found at the FIRST <c>=</c> (a preceding <c>!</c> means none, a following <c>=</c> means
+/// all, otherwise any), so values may contain later <c>=</c> characters.</summary>
 public static class WildcardQueryParser
 {
     public static WildcardQuery Parse(string data)

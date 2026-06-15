@@ -1,21 +1,20 @@
 namespace Quarry;
 
-/// <summary>How many of a clause's listed values a row must match. Matching is always "contains",
-/// never exact: a scalar/text column contains the value as a case-insensitive substring; a list column
-/// has the value as an element.</summary>
+/// <summary>How many of a clause's values a row must match. Always "contains", never exact: a scalar column
+/// contains the value as a case-insensitive substring; a list column has it as an element.</summary>
 public enum MatchOp
 {
-    /// <summary><c>=</c> — the column matches at least ONE of the values (contains-any / list_has_any).</summary>
+    /// <summary><c>=</c> — matches at least ONE value.</summary>
     Any,
 
-    /// <summary><c>==</c> — the column matches ALL of the values (contains-all / list_has_all).</summary>
+    /// <summary><c>==</c> — matches ALL values.</summary>
     All,
 
-    /// <summary><c>!=</c> — the column matches NONE of the values.</summary>
+    /// <summary><c>!=</c> — matches NONE of the values.</summary>
     None,
 }
 
-/// <summary>A single <c>column op values</c> filter, e.g. <c>tags==brunette,punk</c> or <c>Prompt=girl</c>.</summary>
+/// <summary>A single <c>column op values</c> filter, e.g. <c>tags==brunette,punk</c>.</summary>
 public sealed class QueryClause
 {
     public string Column { get; }
@@ -30,14 +29,12 @@ public sealed class QueryClause
     }
 }
 
-/// <summary>A parsed wildcard reference: a wildcard <see cref="Name"/> plus zero or more
-/// AND-ed filter <see cref="Clauses"/> (a row must satisfy every clause).</summary>
+/// <summary>A parsed reference: a <see cref="Name"/> plus zero or more AND-ed filter <see cref="Clauses"/>.</summary>
 public sealed class WildcardQuery
 {
     public string Name { get; }
     public IReadOnlyList<QueryClause> Clauses { get; }
 
-    /// <summary>True when the reference carried a <c>[...]</c> filter.</summary>
     public bool HasFilter => Clauses.Count > 0;
 
     public WildcardQuery(string name, IReadOnlyList<QueryClause> clauses)

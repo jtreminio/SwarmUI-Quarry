@@ -11,7 +11,7 @@ public class QuarryExtension : Extension
 {
     private string SettingsFilePath => $"{Program.DataDir}/Quarry.json";
 
-    /// <summary>Serializes requirement installs so two rapid clicks can't launch overlapping ~235 MB downloads.</summary>
+    // Serializes requirement installs so two rapid clicks can't launch overlapping ~235 MB downloads.
     private static readonly SemaphoreSlim InstallLock = new(1, 1);
 
     public override void OnPreInit()
@@ -22,14 +22,11 @@ public class QuarryExtension : Extension
 
     public override void OnInit()
     {
-        // Remember our own folder so the DuckDB backend can cache the lance extension inside it (see
-        // DatasetManager.ExtensionFolder). Set before anything that might open a DuckDB connection.
+        // Set before anything opens a DuckDB connection: the backend caches the lance extension under this folder.
         DatasetManager.ExtensionFolder = FilePath;
         LoadSettings();
         ApplyDefaultDatasetsFolder();
         DatasetManager.Initialize();
-        // Register our own <q:...> prompt tag. It's exclusively ours (no piggybacking on wc/wildcard), so there's
-        // no init-order/chaining concern — a plain OnInit registration is enough.
         WildcardHandler.Initialize();
 
         API.RegisterAPICall(QuarryGetSettings, false, Permissions.FundamentalGenerateTabAccess);
@@ -47,10 +44,7 @@ public class QuarryExtension : Extension
         Logs.Info($"Quarry extension initialized ({status}).");
     }
 
-    /// <summary>When no datasets folder is configured (fresh install, or the user cleared it), default it to a
-    /// <c>Quarry</c> directory beside SwarmUI's Wildcards folder — honoring any user override of the Wildcards
-    /// path, since <see cref="WildcardsHelper.Folder"/> reads the live setting (core initializes it before
-    /// extensions' OnInit runs). The folder is created best-effort so it's ready to drop datasets into.</summary>
+    // Default the datasets folder to a Quarry directory beside SwarmUI's (possibly user-overridden) Wildcards folder.
     private static void ApplyDefaultDatasetsFolder()
     {
         if (!string.IsNullOrWhiteSpace(DatasetManager.DatasetsFolder))
@@ -76,6 +70,16 @@ public class QuarryExtension : Extension
     public override void OnShutdown()
     {
         DatasetManager.Shutdown();
+    }
+
+    private static JArray ToJArray(IEnumerable<string> values)
+    {
+        JArray array = [];
+        foreach (string value in values)
+        {
+            array.Add(value);
+        }
+        return array;
     }
 
     #region Settings persistence
@@ -161,8 +165,7 @@ public class QuarryExtension : Extension
     {
         bool requirementsInstalled = DatasetManager.RequirementsInstalled;
         JArray datasets = [];
-        // Reading dataset schemas/counts needs the lance extension; until it's installed the UI shows only the
-        // install gate, so skip the (otherwise failing, wasteful) enumeration entirely.
+        // Reading schemas/counts needs the lance extension; until it's installed the UI shows only the install gate.
         if (requirementsInstalled)
         {
             foreach (DatasetInfo info in DatasetManager.GetDatasetsInfo(includeRowCounts))
@@ -182,7 +185,7 @@ public class QuarryExtension : Extension
                     ["columns"] = columns,
                     ["resolvedPromptColumn"] = info.ResolvedPromptColumn,
                     ["configuredPromptColumn"] = info.ConfiguredPromptColumn,
-                    ["configuredTagColumns"] = new JArray(info.ConfiguredTagColumns),
+                    ["configuredTagColumns"] = ToJArray(info.ConfiguredTagColumns),
                     ["rowCount"] = info.RowCount,
                     ["error"] = info.Error,
                 });
@@ -230,9 +233,6 @@ public class QuarryExtension : Extension
         {
             return Task.FromResult(new JObject { ["success"] = false, ["error"] = error });
         }
-        // Warm the cache (schema + row count + preview for every changed/uncached dataset) so the table can
-        // show counts now and later previews are instant. After warming, the counts come from the cache, so
-        // asking for them here is cheap (no fresh scans).
         int warmed = DatasetManager.WarmAll();
         JObject response = BuildSettingsResponse(includeRowCounts: true);
         response["message"] = warmed > 0 ? $"{message} Warmed {warmed} dataset(s)." : message;
@@ -248,30 +248,14 @@ public class QuarryExtension : Extension
         {
             return Task.FromResult(new JObject { ["success"] = false, ["error"] = error });
         }
-        JArray columnsArr = [];
-        foreach (string column in columns)
-        {
-            columnsArr.Add(column);
-        }
-        JArray rowsArr = [];
-        foreach (List<string> row in rows)
-        {
-            JArray rowArr = [];
-            foreach (string cell in row)
-            {
-                rowArr.Add(cell);
-            }
-            rowsArr.Add(rowArr);
-        }
         JObject response = new()
         {
             ["success"] = true,
             ["dataset"] = dataset,
-            ["columns"] = columnsArr,
-            ["rows"] = rowsArr,
+            ["columns"] = ToJArray(columns),
+            ["rows"] = new JArray(rows.Select(ToJArray)),
         };
-        // The usable-pick row count is loaded lazily here (on preview) rather than eagerly for every dataset
-        // at startup. Best-effort: a count failure must not hide the sample rows we already read.
+        // Loaded lazily here rather than for every dataset at startup; best-effort so a count failure can't hide rows.
         (bool countSuccess, long? rowCount, _) = DatasetManager.GetUsableRowCount(dataset);
         if (countSuccess && rowCount is not null)
         {
@@ -280,27 +264,16 @@ public class QuarryExtension : Extension
         return Task.FromResult(response);
     }
 
-    /// <summary>Given the current prompt text, returns the wildcard names of the Quarry datasets it references,
-    /// so the settings UI can flag in-use files. Uses the same resolution as real expansion (comma lists, globs,
-    /// fuzzy match); filters in the reference are ignored.</summary>
+    // Returns the wildcard names of Quarry datasets the current prompt references, so the UI can flag in-use files.
     public Task<JObject> QuarryResolveReferences(Session session, string prompt)
     {
-        JArray names = [];
-        foreach (string name in WildcardHandler.ResolveReferencedDatasetNames(prompt ?? ""))
-        {
-            names.Add(name);
-        }
         return Task.FromResult(new JObject
         {
             ["success"] = true,
-            ["names"] = names,
+            ["names"] = ToJArray(WildcardHandler.ResolveReferencedDatasetNames(prompt ?? "")),
         });
     }
 
-    /// <summary>Installs Quarry's runtime requirement (the DuckDB <c>lance</c> extension) — a one-time ~235 MB
-    /// download from the official DuckDB extension repo. Long-running, so it runs off the request thread and is
-    /// serialized by <see cref="InstallLock"/> against overlapping installs. On success the datasets are
-    /// re-synced so they're readable immediately; the frontend then reloads settings to reveal the panel.</summary>
     public async Task<JObject> QuarryInstallRequirements(Session session)
     {
         await InstallLock.WaitAsync(Program.GlobalProgramCancel);
@@ -325,14 +298,9 @@ public class QuarryExtension : Extension
         }
     }
 
-    /// <summary>Reads the calling user's stored HuggingFace API token (empty when none is set). The official
-    /// dataset repo is public, so downloads work without it — but it is sent when present to ease rate limits
-    /// and to reach any gated/private content the user has access to.</summary>
+    // The official repo is public, so the token is optional; sent when present to ease rate limits and reach gated content.
     private static string GetHfToken(Session session) => session?.User?.GetGenericData("huggingface_api", "key") ?? "";
 
-    /// <summary>Lists the ready-made datasets available on the official HuggingFace collection, each flagged
-    /// with whether it is already installed in the Quarry datasets folder (so the UI can mark it and offer a
-    /// redownload). Also reports whether the caller has an HF token set, for an informational hint.</summary>
     public async Task<JObject> QuarryListAvailableDatasets(Session session)
     {
         try
@@ -365,10 +333,7 @@ public class QuarryExtension : Extension
         }
     }
 
-    /// <summary>Starts downloading one dataset (every file of its <c>*.lance</c> folder) from the official
-    /// HuggingFace collection into the Quarry datasets folder, using the caller's HF token when set. Returns as
-    /// soon as the background download is queued; the UI polls <see cref="QuarryDownloadStatus"/> for progress.
-    /// <paramref name="redownload"/> replaces an already-installed copy (e.g. to pick up an update).</summary>
+    // Queues a background download; the UI polls QuarryDownloadStatus. redownload replaces an installed copy.
     public async Task<JObject> QuarryDownloadDataset(Session session, string dataset, bool redownload = false)
     {
         (bool ok, string error, int id) = await DatasetDownloader.StartDownloadAsync(dataset, redownload, GetHfToken(session));
@@ -377,7 +342,6 @@ public class QuarryExtension : Extension
             : new JObject { ["success"] = false, ["error"] = error };
     }
 
-    /// <summary>Reports progress of the in-flight (or most recently finished) dataset download, for the polling UI.</summary>
     public Task<JObject> QuarryDownloadStatus(Session session)
     {
         DatasetDownloader.DownloadStatus status = DatasetDownloader.GetStatus();
@@ -394,8 +358,7 @@ public class QuarryExtension : Extension
             ["filesTotal"] = status.FilesTotal,
             ["perSecond"] = status.PerSecond,
         };
-        // Only include "error" when there actually is one — the WebAPI layer logs an error for any response
-        // that merely *contains* an "error" key (even a null one), which would spam the log on every poll.
+        // Only include "error" when non-empty: the WebAPI logs an error for any response that contains an "error" key.
         if (!string.IsNullOrEmpty(status.Error))
         {
             response["error"] = status.Error;
@@ -403,7 +366,6 @@ public class QuarryExtension : Extension
         return Task.FromResult(response);
     }
 
-    /// <summary>Cancels the in-flight dataset download, if any.</summary>
     public Task<JObject> QuarryCancelDownload(Session session)
     {
         DatasetDownloader.Cancel();
