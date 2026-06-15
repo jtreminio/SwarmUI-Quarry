@@ -4,9 +4,9 @@ public static class SqlFilterBuilder
 {
     public const string TagsKeyword = "tags";
 
-    public static SqlFilter Build(WildcardQuery query, ColumnSchema schema) => Build(query, schema, []);
+    public static SqlFilter Build(Query query, ColumnSchema schema) => Build(query, schema, []);
 
-    public static SqlFilter Build(WildcardQuery query, ColumnSchema schema, IReadOnlyList<ColumnInfo> tagColumns)
+    public static SqlFilter Build(Query query, ColumnSchema schema, IReadOnlyList<ColumnInfo> tagColumns)
     {
         if (!query.HasFilter)
         {
@@ -23,7 +23,7 @@ public static class SqlFilterBuilder
             }
             if (!schema.TryGet(clause.Column, out ColumnInfo column))
             {
-                throw new WildcardQueryException(
+                throw new QueryException(
                     $"Column '{clause.Column}' does not exist in dataset '{query.Name}'.");
             }
             string quoted = SqlText.QuoteIdentifier(column.Name);
@@ -79,6 +79,6 @@ public static class SqlFilterBuilder
         MatchOp.Any => $"({string.Join(" OR ", checks)})",
         MatchOp.All => $"({string.Join(" AND ", checks)})",
         MatchOp.None => $"NOT ({string.Join(" OR ", checks)})",
-        _ => throw new WildcardQueryException($"Unsupported operator for column '{clause.Column}'."),
+        _ => throw new QueryException($"Unsupported operator for column '{clause.Column}'."),
     };
 }

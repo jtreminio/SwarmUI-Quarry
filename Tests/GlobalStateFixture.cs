@@ -9,7 +9,7 @@ public class QuarryTestsCollection : ICollectionFixture<GlobalStateFixture>
 }
 
 /// <summary>Snapshots and restores SwarmUI's global prompt-tag dictionaries so tests that
-/// mutate them (e.g. registering our wildcard processor) don't leak into other tests.</summary>
+/// mutate them (e.g. registering our prompt-tag processor) don't leak into other tests.</summary>
 public sealed class GlobalStateFixture : IDisposable
 {
     private readonly Dictionary<string, Func<string, T2IPromptHandling.PromptTagContext, string>> _promptBasic;

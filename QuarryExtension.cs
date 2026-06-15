@@ -25,7 +25,7 @@ public class QuarryExtension : Extension
         LoadSettings();
         ApplyDefaultDatasetsFolder();
         DatasetManager.Initialize();
-        WildcardHandler.Initialize();
+        PromptTagHandler.Initialize();
 
         API.RegisterAPICall(QuarryGetSettings, false, Permissions.FundamentalGenerateTabAccess);
         API.RegisterAPICall(QuarrySaveSettings, true, Permissions.FundamentalGenerateTabAccess);
@@ -276,7 +276,7 @@ public class QuarryExtension : Extension
         return Task.FromResult(new JObject
         {
             ["success"] = true,
-            ["names"] = ToJArray(WildcardHandler.ResolveReferencedDatasetNames(prompt ?? "")),
+            ["names"] = ToJArray(PromptTagHandler.ResolveReferencedDatasetNames(prompt ?? "")),
         });
     }
 

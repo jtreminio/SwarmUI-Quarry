@@ -10,7 +10,7 @@ public static class DatasetWarmer
     public static int WarmAll(DuckDbQueryBackend backend, IReadOnlyCollection<DatasetEntry> datasets, int previewLimit)
     {
         List<DatasetEntry> pending = [.. datasets.Where(entry =>
-            !DatasetCache.IsFullyCached(entry.WildcardName.ToLowerFast(), entry.FileHash, ColumnConfig.GetPromptColumn(entry.WildcardName), previewLimit))];
+            !DatasetCache.IsFullyCached(entry.Name.ToLowerFast(), entry.FileHash, ColumnConfig.GetPromptColumn(entry.Name), previewLimit))];
         if (pending.Count == 0)
         {
             return 0;
@@ -38,7 +38,7 @@ public static class DatasetWarmer
             }
             catch (Exception ex)
             {
-                Logs.Debug($"Quarry: filtered count failed for '{misses[0].Entry.WildcardName}': {ex.Message}");
+                Logs.Debug($"Quarry: filtered count failed for '{misses[0].Entry.Name}': {ex.Message}");
             }
             return;
         }
@@ -53,7 +53,7 @@ public static class DatasetWarmer
                 }
                 catch (Exception ex)
                 {
-                    Logs.Debug($"Quarry: filtered count failed for '{entry.WildcardName}': {ex.Message}");
+                    Logs.Debug($"Quarry: filtered count failed for '{entry.Name}': {ex.Message}");
                 }
             });
         }
@@ -63,12 +63,12 @@ public static class DatasetWarmer
 
     private static void WarmOne(IDatasetReader reader, DatasetEntry entry, int limit)
     {
-        string key = entry.WildcardName.ToLowerFast();
+        string key = entry.Name.ToLowerFast();
         try
         {
             ColumnSchema schema = reader.GetSchema(entry.Path);
             DatasetCache.StoreSchema(key, entry.FileHash, schema);
-            string resolved = PromptColumnResolver.Resolve(ColumnConfig.GetPromptColumn(entry.WildcardName), schema) ?? "";
+            string resolved = PromptColumnResolver.Resolve(ColumnConfig.GetPromptColumn(entry.Name), schema) ?? "";
             long count = reader.CountRows(entry.Path, SqlFilter.None);
             DatasetCache.StoreRowCount(key, entry.FileHash, resolved, count);
             (List<string> columns, List<List<string>> rows) = reader.GetSampleRows(entry.Path, limit);
@@ -76,7 +76,7 @@ public static class DatasetWarmer
         }
         catch (Exception ex)
         {
-            Logs.Debug($"Quarry: warm failed for '{entry.WildcardName}': {ex.Message}");
+            Logs.Debug($"Quarry: warm failed for '{entry.Name}': {ex.Message}");
         }
     }
 }

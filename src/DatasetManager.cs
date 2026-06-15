@@ -5,7 +5,7 @@ using SwarmUI.Utils;
 
 namespace Quarry;
 
-public sealed record DatasetEntry(string WildcardName, string Path, string FileHash);
+public sealed record DatasetEntry(string Name, string Path, string FileHash);
 
 public static class DatasetManager
 {
@@ -64,22 +64,22 @@ public static class DatasetManager
         }
     }
 
-    public static DatasetEntry Resolve(string wildcardName)
+    public static DatasetEntry Resolve(string name)
     {
-        if (!IsActive || wildcardName is null)
+        if (!IsActive || name is null)
         {
             return null;
         }
-        return Datasets.TryGetValue(wildcardName.ToLowerFast(), out DatasetEntry entry) ? entry : null;
+        return Datasets.TryGetValue(name.ToLowerFast(), out DatasetEntry entry) ? entry : null;
     }
 
-    public static string GetConfiguredPromptColumn(string wildcardName) => ColumnConfig.GetPromptColumn(wildcardName);
+    public static string GetConfiguredPromptColumn(string name) => ColumnConfig.GetPromptColumn(name);
 
     public static void SetPromptColumns(IReadOnlyDictionary<string, string> columns) => ColumnConfig.SetPromptColumns(columns);
 
     public static IReadOnlyDictionary<string, string> GetPromptColumnsSnapshot() => ColumnConfig.GetPromptColumnsSnapshot();
 
-    public static IReadOnlyList<string> GetConfiguredTagColumns(string wildcardName) => ColumnConfig.GetTagColumns(wildcardName);
+    public static IReadOnlyList<string> GetConfiguredTagColumns(string name) => ColumnConfig.GetTagColumns(name);
 
     public static void SetTagColumns(IReadOnlyDictionary<string, IReadOnlyList<string>> columns) => ColumnConfig.SetTagColumns(columns);
 
@@ -87,11 +87,11 @@ public static class DatasetManager
 
     public static IReadOnlyCollection<DatasetEntry> AllDatasets => [.. Datasets.Values];
 
-    public static IReadOnlyList<string> AllDatasetNames => [.. Datasets.Values.Select(e => e.WildcardName)];
+    public static IReadOnlyList<string> AllDatasetNames => [.. Datasets.Values.Select(e => e.Name)];
 
     public static ColumnSchema GetSchema(DatasetEntry entry)
     {
-        string key = entry.WildcardName.ToLowerFast();
+        string key = entry.Name.ToLowerFast();
         if (DatasetCache.TryGetSchema(key, entry.FileHash, out ColumnSchema cached))
         {
             return cached;
@@ -103,7 +103,7 @@ public static class DatasetManager
 
     public static long GetRowCount(DatasetEntry entry, string promptColumn)
     {
-        string key = entry.WildcardName.ToLowerFast();
+        string key = entry.Name.ToLowerFast();
         string column = promptColumn ?? "";
         if (DatasetCache.TryGetRowCount(key, entry.FileHash, column, out long cached))
         {
@@ -134,17 +134,17 @@ public static class DatasetManager
         => DatasetWarmer.WarmFilteredCounts(Backend, requests);
 
     public static bool TryGetCachedRowCount(DatasetEntry entry, string promptColumn, out long count)
-        => DatasetCache.TryGetRowCount(entry.WildcardName.ToLowerFast(), entry.FileHash, promptColumn ?? "", out count);
+        => DatasetCache.TryGetRowCount(entry.Name.ToLowerFast(), entry.FileHash, promptColumn ?? "", out count);
 
     public static List<DatasetInfo> GetDatasetsInfo(bool includeRowCounts = false)
     {
         List<DatasetInfo> result = [];
-        foreach (DatasetEntry entry in Datasets.Values.OrderBy(e => e.WildcardName, StringComparer.OrdinalIgnoreCase))
+        foreach (DatasetEntry entry in Datasets.Values.OrderBy(e => e.Name, StringComparer.OrdinalIgnoreCase))
         {
             try
             {
                 ColumnSchema schema = GetSchema(entry);
-                string resolved = PromptColumnResolver.Resolve(GetConfiguredPromptColumn(entry.WildcardName), schema);
+                string resolved = PromptColumnResolver.Resolve(GetConfiguredPromptColumn(entry.Name), schema);
                 long? rowCount = TryGetCachedRowCount(entry, resolved, out long cachedCount) ? cachedCount : null;
                 if (rowCount is null && includeRowCounts)
                 {
@@ -156,28 +156,28 @@ public static class DatasetManager
                     {
                     }
                 }
-                result.Add(new DatasetInfo(entry.WildcardName, [.. schema.Columns], resolved, GetConfiguredPromptColumn(entry.WildcardName), [.. GetConfiguredTagColumns(entry.WildcardName)], rowCount, null));
+                result.Add(new DatasetInfo(entry.Name, [.. schema.Columns], resolved, GetConfiguredPromptColumn(entry.Name), [.. GetConfiguredTagColumns(entry.Name)], rowCount, null));
             }
             catch (Exception ex)
             {
-                result.Add(new DatasetInfo(entry.WildcardName, [], null, GetConfiguredPromptColumn(entry.WildcardName), [.. GetConfiguredTagColumns(entry.WildcardName)], null, ex.Message));
+                result.Add(new DatasetInfo(entry.Name, [], null, GetConfiguredPromptColumn(entry.Name), [.. GetConfiguredTagColumns(entry.Name)], null, ex.Message));
             }
         }
         DatasetCache.PersistIfDirty();
         return result;
     }
 
-    public static (bool Success, long? RowCount, string Error) GetUsableRowCount(string wildcardName)
+    public static (bool Success, long? RowCount, string Error) GetUsableRowCount(string name)
     {
-        DatasetEntry entry = Resolve(wildcardName);
+        DatasetEntry entry = Resolve(name);
         if (entry is null)
         {
-            return (false, null, $"Unknown dataset '{wildcardName}'.");
+            return (false, null, $"Unknown dataset '{name}'.");
         }
         try
         {
             ColumnSchema schema = GetSchema(entry);
-            string resolved = PromptColumnResolver.Resolve(GetConfiguredPromptColumn(entry.WildcardName), schema);
+            string resolved = PromptColumnResolver.Resolve(GetConfiguredPromptColumn(entry.Name), schema);
             long count = GetRowCount(entry, resolved);
             DatasetCache.PersistIfDirty();
             return (true, count, null);
@@ -188,14 +188,14 @@ public static class DatasetManager
         }
     }
 
-    public static (bool Success, List<string> Columns, List<List<string>> Rows, string Error) PreviewDataset(string wildcardName, int limit)
+    public static (bool Success, List<string> Columns, List<List<string>> Rows, string Error) PreviewDataset(string name, int limit)
     {
-        DatasetEntry entry = Resolve(wildcardName);
+        DatasetEntry entry = Resolve(name);
         if (entry is null)
         {
-            return (false, null, null, $"Unknown dataset '{wildcardName}'.");
+            return (false, null, null, $"Unknown dataset '{name}'.");
         }
-        string key = entry.WildcardName.ToLowerFast();
+        string key = entry.Name.ToLowerFast();
         if (DatasetCache.TryGetPreview(key, entry.FileHash, limit, out DatasetCache.PreviewData cached))
         {
             return (true, cached.Columns, cached.Rows, null);
@@ -213,14 +213,14 @@ public static class DatasetManager
         }
     }
 
-    public static bool ClearPreviewCache(string wildcardName)
+    public static bool ClearPreviewCache(string name)
     {
-        DatasetEntry entry = Resolve(wildcardName);
+        DatasetEntry entry = Resolve(name);
         if (entry is null)
         {
             return false;
         }
-        DatasetCache.ClearPreview(entry.WildcardName.ToLowerFast());
+        DatasetCache.ClearPreview(entry.Name.ToLowerFast());
         DatasetCache.PersistIfDirty();
         return true;
     }
@@ -248,7 +248,7 @@ public static class DatasetManager
             foreach (string datasetPath in DatasetScanner.Enumerate(root))
             {
                 string relative = Path.GetRelativePath(root, datasetPath);
-                string name = WildcardNaming.ToWildcardName(relative);
+                string name = DatasetNaming.ToName(relative);
                 string key = name.ToLowerFast();
                 if (!seen.Add(key))
                 {

@@ -6,11 +6,11 @@ public static class ColumnConfig
     private static readonly Dictionary<string, List<string>> TagColumns = new(StringComparer.OrdinalIgnoreCase);
     private static readonly object Lock = new();
 
-    public static string GetPromptColumn(string wildcardName)
+    public static string GetPromptColumn(string name)
     {
         lock (Lock)
         {
-            return PromptColumns.TryGetValue(wildcardName, out string column) ? column : null;
+            return PromptColumns.TryGetValue(name, out string column) ? column : null;
         }
     }
 
@@ -37,11 +37,11 @@ public static class ColumnConfig
         }
     }
 
-    public static IReadOnlyList<string> GetTagColumns(string wildcardName)
+    public static IReadOnlyList<string> GetTagColumns(string name)
     {
         lock (Lock)
         {
-            return TagColumns.TryGetValue(wildcardName, out List<string> columns) ? [.. columns] : [];
+            return TagColumns.TryGetValue(name, out List<string> columns) ? [.. columns] : [];
         }
     }
 

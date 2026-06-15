@@ -1,6 +1,6 @@
 namespace Quarry;
 
-public static class WildcardSelection
+public static class RandomSelection
 {
     public static string Pick(long total, int picks, string separator, Func<long> nextIndex, Func<long, string> fetch)
     {

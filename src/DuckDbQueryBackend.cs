@@ -4,7 +4,7 @@ using SwarmUI.Utils;
 
 namespace Quarry;
 
-public sealed class DuckDbQueryBackend : IWildcardQueryBackend, IDisposable
+public sealed class DuckDbQueryBackend : IQueryBackend, IDisposable
 {
     private sealed class Conn : IDatasetReader, IDisposable
     {

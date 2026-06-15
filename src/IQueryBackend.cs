@@ -1,6 +1,6 @@
 namespace Quarry;
 
-public interface IWildcardQueryBackend
+public interface IQueryBackend
 {
     ColumnSchema GetSchema(string datasetPath);
     long CountRows(string datasetPath, SqlFilter filter);

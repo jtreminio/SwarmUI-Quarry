@@ -14,7 +14,7 @@ public sealed class QueryClause(string column, MatchOp op, IReadOnlyList<string>
     public IReadOnlyList<string> Values { get; } = values;
 }
 
-public sealed class WildcardQuery(string name, IReadOnlyList<QueryClause> clauses)
+public sealed class Query(string name, IReadOnlyList<QueryClause> clauses)
 {
     public string Name { get; } = name;
     public IReadOnlyList<QueryClause> Clauses { get; } = clauses;

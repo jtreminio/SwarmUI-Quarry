@@ -36,7 +36,7 @@ public sealed class DatasetSource
             ".json" => new DatasetSource($"read_json({literal})", false),
             ".jsonl" or ".ndjson" => new DatasetSource($"read_ndjson({literal})", false),
             ".lance" => new DatasetSource(literal, true),
-            _ => throw new WildcardQueryException($"Unsupported dataset file type '{ext}' for '{path}'."),
+            _ => throw new QueryException($"Unsupported dataset file type '{ext}' for '{path}'."),
         };
     }
 

@@ -93,7 +93,7 @@ export const setAddToExistingTag = (value: boolean): void => {
 /// The current "add to existing tag" preference.
 export const getAddToExistingTag = (): boolean => addToExistingTag;
 
-// Mirrors the backend reference matcher (WildcardHandler.ReferenceTagRegex): an optional `[count]` / `[n-m]`
+// Mirrors the backend reference matcher (PromptTagHandler.ReferenceTagRegex): an optional `[count]` / `[n-m]`
 // after `q`, then the inner `NAME-list[filter]`. Reserved chars `< >` can't appear inside, so `[^>]*` is safe.
 const Q_TAG_PATTERN = "<(q(?:\\[\\d+(?:-\\d+)?\\])?):([^>]*)>";
 

@@ -1,8 +1,8 @@
 namespace Quarry;
 
-public static class WildcardNaming
+public static class DatasetNaming
 {
-    public static string ToWildcardName(string relativePath)
+    public static string ToName(string relativePath)
     {
         string normalized = relativePath.Replace('\\', '/').TrimStart('/');
         int lastSlash = normalized.LastIndexOf('/');

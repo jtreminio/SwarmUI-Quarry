@@ -11,14 +11,14 @@ public class SqlFilterBuilderTests
 
     private static SqlFilter Build(string data, params (string, ColumnKind)[] cols)
     {
-        return SqlFilterBuilder.Build(WildcardQueryParser.Parse(data), Schema(cols));
+        return SqlFilterBuilder.Build(QueryParser.Parse(data), Schema(cols));
     }
 
     private static SqlFilter BuildWithTags(string data, string[] tagColumns, params (string, ColumnKind)[] cols)
     {
         ColumnSchema schema = Schema(cols);
         List<ColumnInfo> tags = [.. tagColumns.Select(t => { schema.TryGet(t, out ColumnInfo c); return c; })];
-        return SqlFilterBuilder.Build(WildcardQueryParser.Parse(data), schema, tags);
+        return SqlFilterBuilder.Build(QueryParser.Parse(data), schema, tags);
     }
 
     [Fact]
@@ -171,7 +171,7 @@ public class SqlFilterBuilderTests
     [Fact]
     public void UnknownColumn_Throws()
     {
-        Assert.Throws<WildcardQueryException>(() => Build("p[missing=a]", ("tags", ColumnKind.List)));
+        Assert.Throws<QueryException>(() => Build("p[missing=a]", ("tags", ColumnKind.List)));
     }
 
     [Fact]

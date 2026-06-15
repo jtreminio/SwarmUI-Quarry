@@ -34,7 +34,7 @@ public class DatasetSourceTests
     [Fact]
     public void Resolve_UnsupportedType_Throws()
     {
-        Assert.Throws<WildcardQueryException>(() => DatasetSource.Resolve("/d/notes.txt"));
+        Assert.Throws<QueryException>(() => DatasetSource.Resolve("/d/notes.txt"));
     }
 
     [Theory]

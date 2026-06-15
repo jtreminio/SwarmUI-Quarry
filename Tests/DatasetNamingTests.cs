@@ -2,7 +2,7 @@ using Xunit;
 
 namespace Quarry.Tests;
 
-public class WildcardNamingTests
+public class DatasetNamingTests
 {
     [Theory]
     [InlineData("prompts/1girl.parquet", "prompts/1girl")]
@@ -12,8 +12,8 @@ public class WildcardNamingTests
     [InlineData("styles.v2/list.jsonl", "styles.v2/list")]
     [InlineData("data.lance", "data")]
     [InlineData("noext", "noext")]
-    public void ToWildcardName_StripsFinalExtensionAndNormalizes(string relative, string expected)
+    public void ToName_StripsFinalExtensionAndNormalizes(string relative, string expected)
     {
-        Assert.Equal(expected, WildcardNaming.ToWildcardName(relative));
+        Assert.Equal(expected, DatasetNaming.ToName(relative));
     }
 }

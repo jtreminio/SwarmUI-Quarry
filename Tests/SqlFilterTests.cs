@@ -11,7 +11,7 @@ public class SqlFilterTests
         => new(cols.Select(c => new ColumnInfo(c.name, c.kind)));
 
     private static SqlFilter Build(string data, params (string, ColumnKind)[] cols)
-        => SqlFilterBuilder.Build(WildcardQueryParser.Parse(data), Schema(cols));
+        => SqlFilterBuilder.Build(QueryParser.Parse(data), Schema(cols));
 
     [Fact]
     public void EmptyFilter_HasEmptyCacheKey()

@@ -1,16 +1,16 @@
 namespace Quarry;
 
-public sealed class WildcardQueryParseException(string message) : WildcardQueryException(message)
+public sealed class QueryParseException(string message) : QueryException(message)
 {
 }
 
-public static class WildcardQueryParser
+public static class QueryParser
 {
-    public static WildcardQuery Parse(string data)
+    public static Query Parse(string data)
     {
         if (data is null)
         {
-            throw new WildcardQueryParseException("Wildcard query is null.");
+            throw new QueryParseException("Query is null.");
         }
         int open = data.IndexOf('[');
         if (open < 0)
@@ -18,27 +18,27 @@ public static class WildcardQueryParser
             string bareName = data.Trim();
             if (bareName.Length == 0)
             {
-                throw new WildcardQueryParseException("Wildcard name is empty.");
+                throw new QueryParseException("Dataset name is empty.");
             }
-            return new WildcardQuery(bareName, []);
+            return new Query(bareName, []);
         }
         if (data.Length == 0 || data[^1] != ']')
         {
-            throw new WildcardQueryParseException($"Wildcard query '{data}' is missing a closing ']'.");
+            throw new QueryParseException($"Query '{data}' is missing a closing ']'.");
         }
         string name = data[..open].Trim();
         if (name.Length == 0)
         {
-            throw new WildcardQueryParseException($"Wildcard query '{data}' has an empty name.");
+            throw new QueryParseException($"Query '{data}' has an empty name.");
         }
         string body = data[(open + 1)..^1];
         List<QueryClause> clauses = ParseClauses(body, data);
         if (clauses.Count == 0)
         {
-            throw new WildcardQueryParseException(
-                $"Wildcard query '{data}' has an empty '[]' filter; remove the brackets or add a clause.");
+            throw new QueryParseException(
+                $"Query '{data}' has an empty '[]' filter; remove the brackets or add a clause.");
         }
-        return new WildcardQuery(name, clauses);
+        return new Query(name, clauses);
     }
 
     private static List<QueryClause> ParseClauses(string body, string original)
@@ -61,7 +61,7 @@ public static class WildcardQueryParser
         int eq = clause.IndexOf('=');
         if (eq < 0)
         {
-            throw new WildcardQueryParseException(
+            throw new QueryParseException(
                 $"Clause '{clause}' in '{original}' is missing an operator (=, ==, or !=).");
         }
         MatchOp op;
@@ -88,7 +88,7 @@ public static class WildcardQueryParser
         string column = clause[..columnEnd].Trim();
         if (column.Length == 0)
         {
-            throw new WildcardQueryParseException($"Clause '{clause}' in '{original}' is missing a column name.");
+            throw new QueryParseException($"Clause '{clause}' in '{original}' is missing a column name.");
         }
         IReadOnlyList<string> values = ParseValues(clause[valueStart..], clause, original);
         return new QueryClause(column, op, values);
@@ -107,7 +107,7 @@ public static class WildcardQueryParser
         }
         if (values.Count == 0)
         {
-            throw new WildcardQueryParseException(
+            throw new QueryParseException(
                 $"Clause '{clause}' in '{original}' has no values after the operator.");
         }
         return values;

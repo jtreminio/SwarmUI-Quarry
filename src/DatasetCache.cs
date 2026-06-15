@@ -128,7 +128,7 @@ public static class DatasetCache
             : new CacheEntry { Hash = hash };
 
     public static string FilteredCountKey(DatasetEntry entry, SqlFilter filter)
-        => $"{entry.WildcardName.ToLowerFast()}|{entry.FileHash}|{filter.CacheKey}";
+        => $"{entry.Name.ToLowerFast()}|{entry.FileHash}|{filter.CacheKey}";
 
     public static bool TryGetFilteredCount(string filteredCountKey, out long count)
         => FilteredCounts.TryGetValue(filteredCountKey, out count);

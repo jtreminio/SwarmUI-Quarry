@@ -5,7 +5,7 @@ using SwarmUI.Utils;
 
 namespace Quarry;
 
-public static class WildcardHandler
+public static class PromptTagHandler
 {
     public const string TagPrefix = "q";
 
@@ -17,12 +17,12 @@ public static class WildcardHandler
 
     private static string Processor(string data, T2IPromptHandling.PromptTagContext context)
     {
-        WildcardQuery query;
+        Query query;
         try
         {
-            query = WildcardQueryParser.Parse(data);
+            query = QueryParser.Parse(data);
         }
-        catch (WildcardQueryException ex)
+        catch (QueryException ex)
         {
             if (DatasetManager.IsActive)
             {
@@ -44,7 +44,7 @@ public static class WildcardHandler
         {
             return ProcessTargets(query, targets, multi, context);
         }
-        catch (WildcardQueryException ex)
+        catch (QueryException ex)
         {
             context.TrackWarning($"Quarry '{query.Name}': {ex.Message}");
             return "";
@@ -70,20 +70,20 @@ public static class WildcardHandler
         HashSet<string> seen = [];
         foreach (Match match in ReferenceTagRegex.Matches(prompt))
         {
-            WildcardQuery query;
+            Query query;
             try
             {
-                query = WildcardQueryParser.Parse(match.Groups[1].Value);
+                query = QueryParser.Parse(match.Groups[1].Value);
             }
-            catch (WildcardQueryException)
+            catch (QueryException)
             {
                 continue;
             }
             foreach (DatasetEntry entry in ResolveTargets(query.Name))
             {
-                if (seen.Add(entry.WildcardName.ToLowerFast()))
+                if (seen.Add(entry.Name.ToLowerFast()))
                 {
-                    names.Add(entry.WildcardName);
+                    names.Add(entry.Name);
                 }
             }
         }
@@ -94,13 +94,13 @@ public static class WildcardHandler
     {
         List<DatasetEntry> targets = [];
         HashSet<string> seen = [];
-        foreach (string part in WildcardNameMatching.SplitNames(name))
+        foreach (string part in DatasetNameMatching.SplitNames(name))
         {
-            if (WildcardNameMatching.IsGlob(part))
+            if (DatasetNameMatching.IsGlob(part))
             {
-                foreach (DatasetEntry entry in DatasetManager.AllDatasets.OrderBy(e => e.WildcardName, StringComparer.OrdinalIgnoreCase))
+                foreach (DatasetEntry entry in DatasetManager.AllDatasets.OrderBy(e => e.Name, StringComparer.OrdinalIgnoreCase))
                 {
-                    if (WildcardNameMatching.GlobMatches(part, entry.WildcardName) && seen.Add(entry.WildcardName.ToLowerFast()))
+                    if (DatasetNameMatching.GlobMatches(part, entry.Name) && seen.Add(entry.Name.ToLowerFast()))
                     {
                         targets.Add(entry);
                     }
@@ -109,7 +109,7 @@ public static class WildcardHandler
             else
             {
                 string card = T2IParamTypes.GetBestInList(part, DatasetManager.AllDatasetNames);
-                if (card is not null && DatasetManager.Resolve(card) is DatasetEntry entry && seen.Add(entry.WildcardName.ToLowerFast()))
+                if (card is not null && DatasetManager.Resolve(card) is DatasetEntry entry && seen.Add(entry.Name.ToLowerFast()))
                 {
                     targets.Add(entry);
                 }
@@ -118,9 +118,9 @@ public static class WildcardHandler
         return targets;
     }
 
-    private static bool IsMultiReference(string name) => name.Contains(',') || WildcardNameMatching.IsGlob(name);
+    private static bool IsMultiReference(string name) => name.Contains(',') || DatasetNameMatching.IsGlob(name);
 
-    private static string ProcessTargets(WildcardQuery query, List<DatasetEntry> targets, bool multi, T2IPromptHandling.PromptTagContext context)
+    private static string ProcessTargets(Query query, List<DatasetEntry> targets, bool multi, T2IPromptHandling.PromptTagContext context)
     {
         List<PlanDraft> drafts = [];
         foreach (DatasetEntry entry in targets)
@@ -132,7 +132,7 @@ public static class WildcardHandler
             }
             catch (Exception ex) when (multi)
             {
-                Logs.Debug($"Quarry: skipping '{entry.WildcardName}' in '{query.Name}': {ex.Message}");
+                Logs.Debug($"Quarry: skipping '{entry.Name}' in '{query.Name}': {ex.Message}");
                 continue;
             }
             if (draft is not null)
@@ -160,7 +160,7 @@ public static class WildcardHandler
             }
             catch (Exception ex) when (multi)
             {
-                Logs.Debug($"Quarry: skipping '{draft.Entry.WildcardName}' in '{query.Name}': {ex.Message}");
+                Logs.Debug($"Quarry: skipping '{draft.Entry.Name}' in '{query.Name}': {ex.Message}");
                 continue;
             }
             matched.Add(plan);
@@ -192,7 +192,7 @@ public static class WildcardHandler
         List<string> hitOrdered = [];
         HashSet<string> hit = [];
 
-        string result = WildcardSelection.Pick(
+        string result = RandomSelection.Pick(
             total,
             picks,
             separator,
@@ -206,11 +206,11 @@ public static class WildcardHandler
                 if (value.Length == 0)
                 {
                     Logs.Warning(
-                        $"Quarry wildcard '{m.Entry.WildcardName}': blank result from prompt column '{m.PromptColumn}' near row {localIndex} (file '{m.Entry.Path}').");
+                        $"Quarry dataset '{m.Entry.Name}': blank result from prompt column '{m.PromptColumn}' near row {localIndex} (file '{m.Entry.Path}').");
                 }
-                else if (hit.Add(m.Entry.WildcardName))
+                else if (hit.Add(m.Entry.Name))
                 {
-                    hitOrdered.Add(m.Entry.WildcardName);
+                    hitOrdered.Add(m.Entry.Name);
                 }
                 return value;
             });
@@ -227,16 +227,16 @@ public static class WildcardHandler
 
     private sealed record PlanDraft(DatasetEntry Entry, string PromptColumn, SqlFilter Filter);
 
-    private static PlanDraft DraftPlan(WildcardQuery query, DatasetEntry entry, T2IPromptHandling.PromptTagContext context)
+    private static PlanDraft DraftPlan(Query query, DatasetEntry entry, T2IPromptHandling.PromptTagContext context)
     {
         ColumnSchema schema = DatasetManager.GetSchema(entry);
-        string promptColumn = PromptColumnResolver.Resolve(DatasetManager.GetConfiguredPromptColumn(entry.WildcardName), schema);
+        string promptColumn = PromptColumnResolver.Resolve(DatasetManager.GetConfiguredPromptColumn(entry.Name), schema);
         if (promptColumn is null)
         {
-            context.TrackWarning($"Quarry wildcard '{entry.WildcardName}' has no columns to read.");
+            context.TrackWarning($"Quarry dataset '{entry.Name}' has no columns to read.");
             return null;
         }
-        List<ColumnInfo> tagColumns = TagColumnResolver.Resolve(DatasetManager.GetConfiguredTagColumns(entry.WildcardName), schema, promptColumn);
+        List<ColumnInfo> tagColumns = TagColumnResolver.Resolve(DatasetManager.GetConfiguredTagColumns(entry.Name), schema, promptColumn);
         SqlFilter filter = SqlFilterBuilder.Build(query, schema, tagColumns);
         return new PlanDraft(entry, promptColumn, filter);
     }

@@ -83,7 +83,7 @@ public static class DatasetDownloader
         List<RemoteDataset> result = [];
         foreach (KeyValuePair<string, (long Size, int Count)> kv in byFolder)
         {
-            string name = WildcardNaming.ToWildcardName(kv.Key);
+            string name = DatasetNaming.ToName(kv.Key);
             result.Add(new RemoteDataset(name, kv.Key, kv.Value.Size, kv.Value.Count, isInstalled(kv.Key)));
         }
         result.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));

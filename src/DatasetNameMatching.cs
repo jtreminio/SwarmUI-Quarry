@@ -2,7 +2,7 @@ using System.Text.RegularExpressions;
 
 namespace Quarry;
 
-public static class WildcardNameMatching
+public static class DatasetNameMatching
 {
     public static IReadOnlyList<string> SplitNames(string name)
     {
