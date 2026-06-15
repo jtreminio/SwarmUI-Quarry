@@ -1,8 +1,8 @@
 // Hooks Quarry into SwarmUI's prompt-tag autocompleter (genpage/gentab/prompttools.js). Registering a `q`
 // prefix makes `<q` offer "Quarry" in the suggestion popover (like every other `<tag`), `<q:` list every
 // dataset, a comma offer the next dataset in a combined pull, `[` — when the tag targets a single dataset — list
-// that dataset's columns (its configured tag columns first) to filter on, and `:` list the columns usable as the
-// prompt-column override.
+// that dataset's columns (its configured tag columns first) to filter on (then the `=`/`==`/`!=` operators once a
+// column is chosen), and `:` list the columns usable as the prompt-column override.
 //
 // The suggestion engine (computeQuarryCompletions) is a pure function of (typed text, dataset list) so it can be
 // unit-tested without the DOM or the core autocompleter. registerQuarryCompletion() is the thin glue that wires
@@ -52,6 +52,14 @@ interface FilterColumn {
 }
 
 const MAX_DATASET_SUGGESTIONS = 50;
+
+// The operators a filter clause can use, offered once its column is complete (mirrors the README: `=` any,
+// `==` all, `!=` none).
+const FILTER_OPERATORS: ReadonlyArray<{ op: string; hint: string }> = [
+    { op: "=", hint: "match any of the values" },
+    { op: "==", hint: "match all of the values" },
+    { op: "!=", hint: "match none of the values" },
+];
 
 const findDataset = (
     list: CompletionDataset[],
@@ -181,20 +189,22 @@ const completeFilterColumn = (
     if (/[=!]/.test(clause)) {
         return [];
     }
-    const frag = clause.trim().toLowerCase();
-    const matches = filterByFragment(
-        orderColumnsForFilter(dataset),
-        frag,
-        (c) => c.name,
-        false,
-    );
-    if (matches.length === 1 && matches[0].name.toLowerCase() === frag) {
-        return [];
-    }
-    // Rebuild the text up to the start of the current clause (names + `[` + any earlier `clause;` parts), then
-    // append the chosen column — leaving the cursor ready for the operator and value.
+    // Rebuild the text up to the start of the current clause (names + `[` + any earlier `clause;` parts); the
+    // chosen column or operator is appended onto this.
     const head = `<q:${suffix.slice(0, lastOpen + 1 + (semiIdx === -1 ? 0 : semiIdx + 1))}`;
-    return matches.map((c) => ({
+    const columns = orderColumnsForFilter(dataset);
+    const frag = clause.trim().toLowerCase();
+    // Once the column name is complete, suggest the operators that follow it (rather than re-listing the column).
+    const exact = columns.find((c) => c.name.toLowerCase() === frag);
+    if (exact) {
+        return FILTER_OPERATORS.map((o) => ({
+            apply: `${head}${exact.name}${o.op}`,
+            label: o.op,
+            hint: o.hint,
+        }));
+    }
+    // Otherwise list the columns to filter on (tag columns first), narrowed by what's typed.
+    return filterByFragment(columns, frag, (c) => c.name, false).map((c) => ({
         apply: head + c.name,
         label: c.name,
         hint: c.hint,

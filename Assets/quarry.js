@@ -33,6 +33,11 @@
     }));
   };
   var MAX_DATASET_SUGGESTIONS = 50;
+  var FILTER_OPERATORS = [
+    { op: "=", hint: "match any of the values" },
+    { op: "==", hint: "match all of the values" },
+    { op: "!=", hint: "match none of the values" }
+  ];
   var findDataset = (list, name) => {
     const low = name.trim().toLowerCase();
     return list.find((d) => d.name.toLowerCase() === low) ?? null;
@@ -117,18 +122,18 @@
     if (/[=!]/.test(clause)) {
       return [];
     }
-    const frag = clause.trim().toLowerCase();
-    const matches = filterByFragment(
-      orderColumnsForFilter(dataset),
-      frag,
-      (c) => c.name,
-      false
-    );
-    if (matches.length === 1 && matches[0].name.toLowerCase() === frag) {
-      return [];
-    }
     const head = `<q:${suffix.slice(0, lastOpen + 1 + (semiIdx === -1 ? 0 : semiIdx + 1))}`;
-    return matches.map((c) => ({
+    const columns = orderColumnsForFilter(dataset);
+    const frag = clause.trim().toLowerCase();
+    const exact = columns.find((c) => c.name.toLowerCase() === frag);
+    if (exact) {
+      return FILTER_OPERATORS.map((o) => ({
+        apply: `${head}${exact.name}${o.op}`,
+        label: o.op,
+        hint: o.hint
+      }));
+    }
+    return filterByFragment(columns, frag, (c) => c.name, false).map((c) => ({
       apply: head + c.name,
       label: c.name,
       hint: c.hint

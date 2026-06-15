@@ -137,6 +137,37 @@ describe("computeQuarryCompletions — filter columns", () => {
         expect(labels("characters[ta")).toEqual(["tags"]);
     });
 
+    it("suggests the three operators once the column name is complete", () => {
+        expect(computeQuarryCompletions("characters[tags", ALL)).toEqual([
+            {
+                apply: "<q:characters[tags=",
+                label: "=",
+                hint: "match any of the values",
+            },
+            {
+                apply: "<q:characters[tags==",
+                label: "==",
+                hint: "match all of the values",
+            },
+            {
+                apply: "<q:characters[tags!=",
+                label: "!=",
+                hint: "match none of the values",
+            },
+        ]);
+    });
+
+    it("offers operators for a complete column in a later clause too", () => {
+        expect(labels("characters[source")).toEqual(["=", "==", "!="]);
+        expect(
+            computeQuarryCompletions("characters[tags=girl;source", ALL)[0],
+        ).toEqual({
+            apply: "<q:characters[tags=girl;source=",
+            label: "=",
+            hint: "match any of the values",
+        });
+    });
+
     it("does not offer columns for a multi-dataset tag", () => {
         expect(labels("characters,creatures[")).toEqual([]);
     });
