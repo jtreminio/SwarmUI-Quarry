@@ -1,20 +1,9 @@
 namespace Quarry;
 
-public sealed class WildcardQueryParseException : WildcardQueryException
+public sealed class WildcardQueryParseException(string message) : WildcardQueryException(message)
 {
-    public WildcardQueryParseException(string message) : base(message)
-    {
-    }
 }
 
-/// <summary>Parses the data portion of a <c>&lt;q:NAME[clause; clause; ...]&gt;</c> tag (whitespace trimmed):
-/// <code>
-///   data   = NAME [ '[' clause { ';' clause } ']' ]
-///   clause = COLUMN OP value { ',' value }
-///   OP     = '=' (any) | '==' (all) | '!=' (none)
-/// </code>
-/// The operator is found at the FIRST <c>=</c> (a preceding <c>!</c> means none, a following <c>=</c> means
-/// all, otherwise any), so values may contain later <c>=</c> characters.</summary>
 public static class WildcardQueryParser
 {
     public static WildcardQuery Parse(string data)
@@ -31,7 +20,7 @@ public static class WildcardQueryParser
             {
                 throw new WildcardQueryParseException("Wildcard name is empty.");
             }
-            return new WildcardQuery(bareName, Array.Empty<QueryClause>());
+            return new WildcardQuery(bareName, []);
         }
         if (data.Length == 0 || data[^1] != ']')
         {

@@ -5,9 +5,6 @@ using SwarmUI.Utils;
 
 namespace Quarry;
 
-/// <summary>Registers and serves Quarry's <c>&lt;q:NAME[query]&gt;</c> prompt-tag from our datasets via DuckDB.
-/// The <c>q</c> prefix is exclusively Quarry's — it never chains to core's <c>wc</c>/<c>wildcard</c> handlers;
-/// a non-matching <c>q</c> reference is dropped (with a warning only when the extension is active).</summary>
 public static class WildcardHandler
 {
     public const string TagPrefix = "q";
@@ -60,15 +57,9 @@ public static class WildcardHandler
         }
     }
 
-    /// <summary>Matches a <c>&lt;q:...&gt;</c> tag (optional <c>[n]</c> / <c>[n-m]</c> count, like core),
-    /// capturing the inner <c>NAME[query]</c>. Reserved chars <c>&lt; &gt;</c> can't appear in a value, so
-    /// stopping at the first <c>&gt;</c> is safe.</summary>
     private static readonly Regex ReferenceTagRegex =
         new(@"<q(?:\[\d+(?:-\d+)?\])?:([^>]*)>", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-    /// <summary>The distinct wildcard names of every dataset that would serve the <c>q</c> references in
-    /// <paramref name="prompt"/>, resolved with the same name handling as real expansion so the settings UI can
-    /// flag what would be used. Filters are ignored; an unparseable or non-matching tag is skipped.</summary>
     public static IReadOnlyList<string> ResolveReferencedDatasetNames(string prompt)
     {
         List<string> names = [];
@@ -99,10 +90,6 @@ public static class WildcardHandler
         return names;
     }
 
-    /// <summary>Resolves a reference NAME (comma list and/or globs) to the datasets it targets. A glob matches
-    /// every known dataset; a plain name resolves via the same fuzzy <see cref="T2IParamTypes.GetBestInList"/>
-    /// SwarmUI uses for wildcards, but against our dataset names, never the Wildcards folder. De-duplicated by
-    /// lowercased name, preserving discovery order.</summary>
     private static List<DatasetEntry> ResolveTargets(string name)
     {
         List<DatasetEntry> targets = [];
@@ -135,9 +122,6 @@ public static class WildcardHandler
 
     private static string ProcessTargets(WildcardQuery query, List<DatasetEntry> targets, bool multi, T2IPromptHandling.PromptTagContext context)
     {
-        // Pass 1 (scan-free): resolve each target's prompt column and build its filter from the cached schema.
-        // In a fan-out, one unusable file must not abort the rest; a single explicit reference still surfaces
-        // its error via the caller's catch.
         List<PlanDraft> drafts = [];
         foreach (DatasetEntry entry in targets)
         {
@@ -156,13 +140,10 @@ public static class WildcardHandler
                 drafts.Add(draft);
             }
         }
-        // A filtered count is a live scan (the filter defeats both the cached total and Lance's count
-        // pushdown). For a fan-out, warm them in parallel so the query costs about its slowest single dataset.
         if (multi)
         {
             DatasetManager.WarmFilteredCounts([.. drafts.Where(draft => !draft.Filter.IsEmpty).Select(draft => (draft.Entry, draft.Filter))]);
         }
-        // Pass 2: size each dataset's pick pool from the (now warm) counts.
         List<MatchedDataset> matched = [];
         foreach (PlanDraft draft in drafts)
         {
@@ -174,8 +155,6 @@ public static class WildcardHandler
                 {
                     continue;
                 }
-                // With a filter, the unfiltered total (a cached metadata read) lets the fetch gauge
-                // selectivity; with none it equals the count.
                 long totalRows = draft.Filter.IsEmpty ? count : DatasetManager.GetRowCount(draft.Entry, draft.PromptColumn);
                 plan = new MatchedDataset(draft.Entry, draft.PromptColumn, draft.Filter, count, totalRows);
             }
@@ -195,8 +174,6 @@ public static class WildcardHandler
         {
             return null;
         }
-        // Quarry tracks its contributions in `used_quarry`, kept separate from core's `used_wildcards`. Core
-        // serializes every ExtraMeta key into the saved image metadata, so this surfaces there automatically.
         List<string> usedQuarry = context.Input.ExtraMeta.GetOrCreate("used_quarry", () => new List<string>()) as List<string>;
 
         bool indexBehavior = context.Input.Get(T2IParamTypes.WildcardSeedBehavior, "Random") == "Index";
@@ -204,8 +181,6 @@ public static class WildcardHandler
             ? () => context.Input.GetWildcardSeed()
             : () => context.Input.GetWildcardRandom().Next();
 
-        // Pool every matching row across the matched files: a global index in [0, total) maps into whichever
-        // file's row range contains it, so larger files contribute proportionally more picks.
         long total = 0;
         long[] offsets = new long[matched.Count];
         for (int i = 0; i < matched.Count; i++)
@@ -214,8 +189,6 @@ public static class WildcardHandler
             total += matched[i].Count;
         }
 
-        // Record a file in used_quarry only when a pick actually lands on it (not every fan-out candidate), in
-        // first-hit order.
         List<string> hitOrdered = [];
         HashSet<string> hit = [];
 
@@ -263,16 +236,11 @@ public static class WildcardHandler
             context.TrackWarning($"Quarry wildcard '{entry.WildcardName}' has no columns to read.");
             return null;
         }
-        // No configured tag columns → the prompt column doubles as the tag column, so `[tags=…]` still works
-        // without any per-file setup.
         List<ColumnInfo> tagColumns = TagColumnResolver.Resolve(DatasetManager.GetConfiguredTagColumns(entry.WildcardName), schema, promptColumn);
         SqlFilter filter = SqlFilterBuilder.Build(query, schema, tagColumns);
         return new PlanDraft(entry, promptColumn, filter);
     }
 
-    /// <summary>Sizes a draft's pick pool. No filter → the invariant total from the warm cache. A filter in a
-    /// fan-out reads back the count warmed in parallel (a miss means its count failed → 0, dropped); a single
-    /// explicit reference counts directly so any error surfaces.</summary>
     private static long ResolveCount(PlanDraft draft, bool multi)
     {
         if (draft.Filter.IsEmpty)
@@ -298,7 +266,5 @@ public static class WildcardHandler
         return 0;
     }
 
-    // A queried row can't be estimated cheaply and an unmatched tag is dropped, so either way it contributes
-    // nothing.
     private static string Estimator(string data, T2IPromptHandling.PromptTagContext context) => "";
 }

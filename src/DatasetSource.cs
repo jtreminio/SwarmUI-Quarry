@@ -1,6 +1,5 @@
 namespace Quarry;
 
-// Resolves a dataset file path to the DuckDB FROM-clause expression that reads it, chosen by extension.
 public sealed class DatasetSource
 {
     public string FromExpression { get; }

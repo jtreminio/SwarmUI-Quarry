@@ -5,42 +5,20 @@ using SwarmUI.Utils;
 
 namespace Quarry;
 
-// A dataset served as a <q:NAME> reference: its WildcardName, the absolute Path, and a cheap change FileHash.
 public sealed record DatasetEntry(string WildcardName, string Path, string FileHash);
 
-// Orchestrates the datasets folder: scans it, tracks a name -> dataset map, owns the shared DuckDB backend,
-// and delegates derived state to DatasetCache / ColumnConfig / DatasetWarmer. Quarry serves its own <q:> tag
-// and writes nothing to SwarmUI's Wildcards folder.
 public static class DatasetManager
 {
     public static string DatasetsFolder { get; set; } = "";
-
-    // This extension's own folder (SwarmUI's Extension.FilePath), set during OnInit. Empty until then.
     public static string ExtensionFolder { get; set; } = "";
-
     public static string CacheFolder => DatasetCache.CacheFolder;
-
-    // Active whenever a datasets folder is set (one is created by default on init) — no separate enable toggle.
     public static bool IsActive => !string.IsNullOrWhiteSpace(DatasetsFolder);
-
-    // key = wildcard name lowercased
     private static readonly ConcurrentDictionary<string, DatasetEntry> Datasets = new();
-
-    // Number of preview rows the UI requests and that warming pre-caches; kept in sync so a warmed preview is a
-    // cache hit for the real request.
     public const int DefaultPreviewLimit = 100;
-
-    // Ceiling for a single preview, grown by the modal's "Load more" (which adds 500 rows per click). Bounds
-    // both the persisted sample (the whole cache file is rewritten on each preview) and the rendered table,
-    // while sitting well above any realistic "peek at more rows".
     public const int MaxPreviewLimit = 10000;
-
     private static DuckDbQueryBackend _backend;
-
     public static DuckDbQueryBackend Backend => _backend ??= new DuckDbQueryBackend();
 
-    // Whether the DuckDB lance extension is installed and loadable. Best-effort: any probe failure reports
-    // false (the UI then offers to install). Cheap — an in-engine catalog lookup, no download and no scan.
     public static bool RequirementsInstalled
     {
         get
@@ -56,7 +34,6 @@ public static class DatasetManager
         }
     }
 
-    // Downloads a ~235 MB signed binary on first run; blocking and slow, so call it off the request thread.
     public static void InstallRequirements() => Backend.InstallLance();
 
     public static int Count => Datasets.Count;
@@ -124,9 +101,6 @@ public static class DatasetManager
         return schema;
     }
 
-    // The dataset's total row count, which (blank-prompt rows are excluded at ingest) is also the usable-pick
-    // count. For Lance this is a metadata read, no scan. Keyed by the resolved prompt column so a config change
-    // never serves a count stored under a different column.
     public static long GetRowCount(DatasetEntry entry, string promptColumn)
     {
         string key = entry.WildcardName.ToLowerFast();
@@ -143,8 +117,6 @@ public static class DatasetManager
     public static bool TryGetFilteredCount(DatasetEntry entry, SqlFilter filter, out long count)
         => DatasetCache.TryGetFilteredCount(DatasetCache.FilteredCountKey(entry, filter), out count);
 
-    // Rows matching `filter`, cached for the file's current hash. On a miss it scans once on the shared
-    // connection. For a fan-out over many datasets, call WarmFilteredCounts first to populate in parallel.
     public static long CountRowsFiltered(DatasetEntry entry, SqlFilter filter)
     {
         string key = DatasetCache.FilteredCountKey(entry, filter);
@@ -164,10 +136,6 @@ public static class DatasetManager
     public static bool TryGetCachedRowCount(DatasetEntry entry, string promptColumn, out long count)
         => DatasetCache.TryGetRowCount(entry.WildcardName.ToLowerFast(), entry.FileHash, promptColumn ?? "", out count);
 
-    // Per-dataset info for the settings UI. The schema is always read (cheap, bounded sample). A cached row
-    // count is surfaced when one exists (e.g. warmed in a prior session) so counts show on first load without a
-    // Refresh; only when `includeRowCounts` (the Refresh path, after a warm) is an uncached count computed —
-    // eagerly counting every dataset here once made initial load hang.
     public static List<DatasetInfo> GetDatasetsInfo(bool includeRowCounts = false)
     {
         List<DatasetInfo> result = [];
@@ -186,7 +154,6 @@ public static class DatasetManager
                     }
                     catch
                     {
-                        // Row count is a best-effort display value; a failure must not hide a readable dataset.
                     }
                 }
                 result.Add(new DatasetInfo(entry.WildcardName, [.. schema.Columns], resolved, GetConfiguredPromptColumn(entry.WildcardName), [.. GetConfiguredTagColumns(entry.WildcardName)], rowCount, null));
@@ -196,13 +163,10 @@ public static class DatasetManager
                 result.Add(new DatasetInfo(entry.WildcardName, [], null, GetConfiguredPromptColumn(entry.WildcardName), [.. GetConfiguredTagColumns(entry.WildcardName)], null, ex.Message));
             }
         }
-        // Reading schemas above may have populated cache entries — flush them once for the whole batch.
         DatasetCache.PersistIfDirty();
         return result;
     }
 
-    // The on-demand counterpart to the deliberately count-free GetDatasetsInfo: the preview path calls it so
-    // each file is counted only when the user actually asks for it.
     public static (bool Success, long? RowCount, string Error) GetUsableRowCount(string wildcardName)
     {
         DatasetEntry entry = Resolve(wildcardName);
@@ -249,8 +213,6 @@ public static class DatasetManager
         }
     }
 
-    // Drops one dataset's cached preview sample (e.g. after the user grew it with "Load more") so the next
-    // preview reloads the default first page. Returns false for an unknown dataset.
     public static bool ClearPreviewCache(string wildcardName)
     {
         DatasetEntry entry = Resolve(wildcardName);
@@ -266,14 +228,10 @@ public static class DatasetManager
     public static int WarmAll()
         => IsActive ? DatasetWarmer.WarmAll(Backend, [.. Datasets.Values], DefaultPreviewLimit) : 0;
 
-    // Scans the datasets folder and rebuilds the name -> dataset map. Drops datasets no longer present,
-    // invalidates changed entries, and resets the DuckDB connection when anything changed.
     public static void Sync()
     {
         if (!IsActive)
         {
-            // Keep the file-backed cache intact (hash-keyed, only discarded when a file changes), so re-enabling
-            // Quarry doesn't recompute counts/previews. Just stop serving.
             Datasets.Clear();
             return;
         }
@@ -286,9 +244,6 @@ public static class DatasetManager
                 return;
             }
             HashSet<string> seen = [];
-            // Whether any dataset was added, removed, or had its file change. If so we reset the DuckDB
-            // connection below: a regenerated Lance dataset keeps its path but gets new fragment files, and the
-            // old connection's cached manifest would still point at the deleted ones.
             bool contentChanged = false;
             foreach (string datasetPath in DatasetScanner.Enumerate(root))
             {
@@ -349,7 +304,7 @@ public static class DatasetManager
     {
         try
         {
-            if (Directory.Exists(path)) // Lance dataset directory
+            if (Directory.Exists(path))
             {
                 return $"dir:{new DirectoryInfo(path).LastWriteTimeUtc.Ticks}";
             }
@@ -363,9 +318,6 @@ public static class DatasetManager
     }
 }
 
-// Settings-UI view of one dataset: its columns, the resolved prompt column (what would be used now), the
-// explicitly configured column (if any), the row count (null when unknown), and an error if the schema
-// couldn't be read.
 public sealed record DatasetInfo(
     string Name,
     IReadOnlyList<ColumnInfo> Columns,

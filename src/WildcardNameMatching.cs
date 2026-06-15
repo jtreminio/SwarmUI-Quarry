@@ -2,8 +2,6 @@ using System.Text.RegularExpressions;
 
 namespace Quarry;
 
-/// <summary>Expands the NAME of a <c>&lt;q:NAME[...]&gt;</c> reference that may target more than one dataset:
-/// a comma-separated list (<c>a,b,c</c>) and/or glob patterns (<c>quarry/*</c>).</summary>
 public static class WildcardNameMatching
 {
     public static IReadOnlyList<string> SplitNames(string name)
@@ -26,8 +24,6 @@ public static class WildcardNameMatching
 
     public static bool IsGlob(string pattern) => pattern is not null && (pattern.Contains('*') || pattern.Contains('?'));
 
-    /// <summary>Case-insensitive glob match anchored to the whole candidate. <c>*</c> matches any run of
-    /// characters (including <c>/</c>); <c>?</c> matches a single character; everything else is literal.</summary>
     public static bool GlobMatches(string pattern, string candidate)
     {
         if (pattern is null || candidate is null)

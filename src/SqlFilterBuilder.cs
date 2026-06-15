@@ -1,15 +1,10 @@
 namespace Quarry;
 
-// Matching is always case-insensitive "contains", never exact: a scalar column by substring, a list
-// column by substring against each element (so `girl` matches `girls` and `young girl`). Values are
-// always bound as parameters, never interpolated. Pure, so it can be unit-tested without a database.
 public static class SqlFilterBuilder
 {
-    // Reserved clause column that expands to a dataset's configured tag columns, searched as one merged column.
     public const string TagsKeyword = "tags";
 
-    public static SqlFilter Build(WildcardQuery query, ColumnSchema schema)
-        => Build(query, schema, Array.Empty<ColumnInfo>());
+    public static SqlFilter Build(WildcardQuery query, ColumnSchema schema) => Build(query, schema, []);
 
     public static SqlFilter Build(WildcardQuery query, ColumnSchema schema, IReadOnlyList<ColumnInfo> tagColumns)
     {
@@ -46,8 +41,6 @@ public static class SqlFilterBuilder
         return new SqlFilter(string.Join(" AND ", terms), parameters);
     }
 
-    // The `tags` keyword: configured tag columns treated as one merged column. Each value is bound once
-    // and matches if present in ANY tag column; Any/All/None then combine across values as usual.
     private static string BuildMergedTagTerm(IReadOnlyList<ColumnInfo> tagColumns, QueryClause clause, List<QueryParameter> parameters)
     {
         string[] valueMatches = new string[clause.Values.Count];
@@ -75,11 +68,9 @@ public static class SqlFilterBuilder
     private static string BuildListTerm(string column, QueryClause clause, string[] placeholders)
         => Combine(clause, [.. placeholders.Select(p => ListElementContains(column, p))]);
 
-    // Using contains() rather than LIKE avoids escaping `%` and `_` in user values.
     private static string ScalarContains(string column, string placeholder)
         => $"contains(lower({column}), lower({placeholder}))";
 
-    // A list lambda stays one scan (no row explosion), unlike UNNEST.
     private static string ListElementContains(string column, string placeholder)
         => $"len(list_filter({column}, x -> contains(lower(x), lower({placeholder})))) > 0";
 

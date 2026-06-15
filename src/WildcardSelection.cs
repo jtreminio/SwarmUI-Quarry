@@ -1,7 +1,5 @@
 namespace Quarry;
 
-// Seeded row picking mirroring SwarmUI core: draw `picks` indices in [0, total) without replacement
-// until the pool is exhausted (then refill), fetch each, and join with the separator.
 public static class WildcardSelection
 {
     public static string Pick(long total, int picks, string separator, Func<long> nextIndex, Func<long, string> fetch)
@@ -19,7 +17,7 @@ public static class WildcardSelection
             parts.Add(fetch(index));
             if (used.Count >= total)
             {
-                used.Clear(); // pool exhausted — allow repeats again (matches core for picks > total)
+                used.Clear();
             }
         }
         return string.Join(separator, parts);

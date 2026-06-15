@@ -8,31 +8,22 @@ using SwarmUI.Utils;
 
 namespace Quarry;
 
-// Name is the <q:NAME> it becomes once installed; RepoPath is the in-repo path of its *.lance folder.
 public sealed record RemoteDataset(string Name, string RepoPath, long SizeBytes, int FileCount, bool Installed);
 
-// RelativePath is the file's path within the dataset folder, used as the on-disk sub-path.
 public sealed record RemoteFile(string RepoPath, string RelativePath, long SizeBytes);
 
 public static class DatasetDownloader
 {
     public const string RepoId = "jtreminio/prompt-dataset";
-
     public static string RepoUrl => $"https://huggingface.co/datasets/{RepoId}";
-
     private const string TreeApiBase = "https://huggingface.co/api/datasets/" + RepoId + "/tree/main";
     private const string ResolveBase = "https://huggingface.co/datasets/" + RepoId + "/resolve/main";
-
-    // Strips whitespace/control chars from a token before it reaches an Authorization header (prevents header injection).
     private static readonly AsciiMatcher TokenCleaner = new(AsciiMatcher.BothCaseLetters + AsciiMatcher.Digits + "-_.");
-
-    #region Available-list (HF tree) with short cache
     private static readonly SemaphoreSlim ListLock = new(1, 1);
     private static List<RemoteDataset> _listCache;
     private static DateTime _listCacheUtc;
     private static readonly TimeSpan ListTtl = TimeSpan.FromMinutes(5);
 
-    // The remote listing is cached briefly; installed-ness is recomputed every call so a just-finished download shows.
     public static async Task<List<RemoteDataset>> ListAvailableAsync(string token)
     {
         List<RemoteDataset> remote = await GetRemoteListAsync(token);
@@ -61,7 +52,6 @@ public static class DatasetDownloader
 
     public static void InvalidateListCache() => _listCache = null;
 
-    // Groups a recursive HF tree into one RemoteDataset per top-level *.lance folder, summing sizes and file counts.
     public static List<RemoteDataset> ParseAvailableDatasets(JArray tree, Func<string, bool> isInstalled)
     {
         Dictionary<string, (long Size, int Count)> byFolder = new(StringComparer.Ordinal);
@@ -79,7 +69,7 @@ public static class DatasetDownloader
             int slash = path.IndexOf('/');
             if (slash <= 0)
             {
-                continue; // a top-level file (README.md, .gitattributes) — not part of any dataset
+                continue;
             }
             string folder = path[..slash];
             if (!folder.EndsWith(".lance", StringComparison.OrdinalIgnoreCase))
@@ -100,7 +90,6 @@ public static class DatasetDownloader
         return result;
     }
 
-    // Every file entry under repoPath/, with the prefix stripped to the on-disk relative path. Dirs are skipped.
     public static List<RemoteFile> ParseDatasetFiles(JArray tree, string repoPath)
     {
         string prefix = repoPath + "/";
@@ -120,10 +109,7 @@ public static class DatasetDownloader
         }
         return files;
     }
-    #endregion
 
-    #region HF HTTP
-    // GETs an HF tree URL, following Link rel="next" pagination so repos larger than one page are fully enumerated.
     private static async Task<JArray> FetchTreeAsync(string url, string token)
     {
         JArray all = [];
@@ -179,13 +165,9 @@ public static class DatasetDownloader
     }
 
     private static string CleanToken(string token) => string.IsNullOrEmpty(token) ? "" : TokenCleaner.TrimToMatches(token);
-
     private static string EncodeRepoPath(string repoPath) => string.Join('/', repoPath.Split('/').Select(Uri.EscapeDataString));
-
     private static string ResolveUrl(string repoPath) => $"{ResolveBase}/{EncodeRepoPath(repoPath)}?download=true";
-    #endregion
 
-    #region Install state
     private static bool IsInstalled(string repoPath)
     {
         string folder = DatasetManager.DatasetsFolder;
@@ -202,11 +184,7 @@ public static class DatasetDownloader
             return false;
         }
     }
-    #endregion
 
-    #region Download orchestration
-    // The single in-flight (or most recently finished) download's progress; the UI polls a snapshot.
-    // State is one of idle, starting, downloading, finalizing, done, error, cancelled.
     public sealed class DownloadStatus
     {
         public int Id { get; set; }
@@ -245,8 +223,6 @@ public static class DatasetDownloader
         }
     }
 
-    // Validates against the live listing, then kicks off the download on a background task. Refuses a second
-    // concurrent download or a missing datasets folder. redownload re-fetches an already-installed dataset.
     public static async Task<(bool Ok, string Error, int Id)> StartDownloadAsync(string datasetName, bool redownload, string token)
     {
         string folder = DatasetManager.DatasetsFolder;
@@ -296,7 +272,6 @@ public static class DatasetDownloader
     {
         string folder = DatasetManager.DatasetsFolder;
         string finalDir = Path.Combine(folder, target.RepoPath);
-        // Dot-prefixed temp/trash dirs are invisible to the scanner, so no partial dataset is ever picked up.
         string tempDir = Path.Combine(folder, $".{target.RepoPath}.swarmdl-tmp");
         string trashDir = Path.Combine(folder, $".{target.RepoPath}.swarmdl-old");
         try
@@ -339,7 +314,6 @@ public static class DatasetDownloader
                 doneFiles++;
                 SetState(id, s => { s.BytesDone = completed; s.FilesDone = doneFiles; s.PerSecond = 0; });
             }
-            // Atomic swap: the new folder goes live before the slow recursive delete of any old copy.
             SetState(id, s => s.State = "finalizing");
             SafeDeleteDir(trashDir);
             bool hadOld = Directory.Exists(finalDir);
@@ -363,7 +337,6 @@ public static class DatasetDownloader
             {
                 SafeDeleteDir(trashDir);
             }
-            // Register + warm the new dataset so it shows up (with its row count) without a manual Refresh.
             DatasetManager.Refresh();
             DatasetManager.WarmAll();
             InvalidateListCache();
@@ -390,7 +363,6 @@ public static class DatasetDownloader
         return ParseDatasetFiles(tree, repoPath);
     }
 
-    // Id-guard: a superseded run's late callback can't clobber a newer run's status.
     private static void SetState(int id, Action<DownloadStatus> mutate)
     {
         lock (StateLock)
@@ -417,5 +389,4 @@ public static class DatasetDownloader
             Logs.Debug($"Quarry: could not remove temp dir '{dir}': {ex.Message}");
         }
     }
-    #endregion
 }

@@ -12,8 +12,6 @@ public sealed class ColumnInfo(string name, ColumnKind kind)
     public ColumnKind Kind { get; } = kind;
 }
 
-// Preserves dataset column order while offering case-insensitive lookup back to canonical casing
-// (DuckDB quoted identifiers are case-sensitive).
 public sealed class ColumnSchema
 {
     private readonly List<ColumnInfo> _ordered;

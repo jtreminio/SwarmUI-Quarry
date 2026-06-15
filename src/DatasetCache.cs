@@ -6,23 +6,14 @@ using SwarmUI.Utils;
 
 namespace Quarry;
 
-// Per-file derived data (schema, usable row count, preview sample) plus filtered (queried) row counts, all
-// keyed by the file's hash so a changed file can never serve stale data. Persisted to disk so a restart
-// doesn't recompute them: a cold rescan of every matched dataset for a <q:*[...]> filter was measured at up
-// to ~a minute, since the filter defeats both the cached total and Lance's count pushdown.
 public static class DatasetCache
 {
-    // Bumped on any incompatible change to the on-disk format; a mismatch discards the file and rebuilds.
     private const int CacheVersion = 1;
-
     private static readonly ConcurrentDictionary<string, CacheEntry> Cache = new();
     private static readonly ConcurrentDictionary<string, long> FilteredCounts = new();
     private static readonly object CacheLock = new();
     private static volatile bool _cacheDirty;
 
-    // Root for all regenerable cache data: a git-ignored .cache folder inside the extension folder, so all
-    // derived state lives together, survives restarts, and can be wiped to force a clean rebuild. Falls back
-    // to the SwarmUI data dir (then the current dir) before the extension folder is known.
     public static string CacheFolder
     {
         get
@@ -44,15 +35,9 @@ public static class DatasetCache
 
     public sealed record PreviewData(int Limit, List<string> Columns, List<List<string>> Rows)
     {
-        // Whether this cached sample can serve a request for `limit` rows: it already holds at least that many,
-        // or it holds the whole dataset (the fetch at `Limit` came back short, so there are no more rows). Lets
-        // a 100-row preview open serve a previously loaded-more 600-row sample, while a still-larger "Load more"
-        // request misses and re-fetches to grow it.
         public bool Satisfies(int limit) => Rows.Count >= limit || Rows.Count < Limit;
     }
 
-    // One file's hash-keyed results: any subset may be present (filled in lazily); the whole entry is
-    // invalidated together when the file's hash changes.
     private sealed record CacheEntry
     {
         public required string Hash { get; init; }
@@ -98,9 +83,6 @@ public static class DatasetCache
         return false;
     }
 
-    // True when the cache holds this file's schema, row count (for the column resolved now), and a preview at
-    // `limit`, all under its current hash. The cached count is tied to a prompt column, so a config edit that
-    // changes the resolved column makes it stale.
     public static bool IsFullyCached(string key, string hash, string configuredColumn, int limit)
     {
         if (!Cache.TryGetValue(key, out CacheEntry cached) || cached.Hash != hash
@@ -140,8 +122,6 @@ public static class DatasetCache
         }
     }
 
-    // The existing entry to update when its hash still matches, or a fresh one (dropping any now-stale
-    // schema/count/preview) when the file has changed. Caller must hold CacheLock.
     private static CacheEntry BaseFor(string key, string hash) =>
         Cache.TryGetValue(key, out CacheEntry existing) && existing.Hash == hash
             ? existing
@@ -159,8 +139,6 @@ public static class DatasetCache
         _cacheDirty = true;
     }
 
-    // Drops cache entries whose file changed, was removed, or was renamed, so the session cache can't grow
-    // unbounded across re-syncs. Filtered-count keys are `name|hash|filterKey`; only the first two validate.
     public static void Prune(IReadOnlyDictionary<string, DatasetEntry> liveDatasets)
     {
         foreach (string key in FilteredCounts.Keys.ToList())
@@ -189,8 +167,6 @@ public static class DatasetCache
         }
     }
 
-    // Drops just one dataset's cached preview sample (keeping its schema/row-count), so the next preview
-    // reloads the default first page. Backs the modal's per-dataset "Clear cache" button.
     public static void ClearPreview(string key)
     {
         lock (CacheLock)
@@ -203,7 +179,6 @@ public static class DatasetCache
         }
     }
 
-    // Drops the entry only when the file's hash changed (caller decides what counts as live).
     public static void InvalidateIfChanged(string key, string hash)
     {
         if (Cache.TryGetValue(key, out CacheEntry cached) && cached.Hash != hash)
@@ -233,7 +208,6 @@ public static class DatasetCache
         }
     }
 
-    // Writes the whole cache to disk via a temp file + atomic move. Caller holds CacheLock.
     private static void Save()
     {
         JObject datasets = [];
@@ -281,8 +255,6 @@ public static class DatasetCache
         File.Move(temp, CacheFilePath, overwrite: true);
     }
 
-    // Best-effort: a missing, unreadable, or wrong-version file just leaves the cache empty (everything is
-    // recomputed on demand). Stored hashes are re-validated against the live files during Sync.
     public static void Load()
     {
         try

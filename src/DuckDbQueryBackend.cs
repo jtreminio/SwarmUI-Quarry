@@ -4,12 +4,8 @@ using SwarmUI.Utils;
 
 namespace Quarry;
 
-// Reads any DuckDB-supported dataset (CSV/JSON/JSONL/Parquet natively, Lance via the lance extension).
-// A single shared connection serves interactive previews and generation, serialized by a lock (a single
-// DuckDB connection is not thread-safe); bulk cache warming fans out over a throwaway pool via RunPooled.
 public sealed class DuckDbQueryBackend : IWildcardQueryBackend, IDisposable
 {
-    // Driven by one thread at a time: the shared instance under the backend lock, a pooled instance by its worker.
     private sealed class Conn : IDatasetReader, IDisposable
     {
         private DuckDBConnection _connection;
@@ -21,9 +17,7 @@ public sealed class DuckDbQueryBackend : IWildcardQueryBackend, IDisposable
         {
             _connection = new DuckDBConnection("DataSource=:memory:");
             _connection.Open();
-            // preserve_insertion_order keeps LIMIT/OFFSET selection reproducible.
             Execute("SET preserve_insertion_order = true;");
-            // Pin the extension store before any INSTALL/LOAD/probe so they agree on where extensions live.
             string extensionDirectory = ResolveExtensionDirectory();
             if (extensionDirectory is not null)
             {
@@ -32,8 +26,6 @@ public sealed class DuckDbQueryBackend : IWildcardQueryBackend, IDisposable
             _lanceLoaded = false;
         }
 
-        // The extension's .cache/duckdb, so the one-time ~235MB lance install survives container restarts
-        // (DuckDB's default ~/.duckdb is ephemeral there). Null (DuckDB stays on its default) if uncreatable.
         private static string ResolveExtensionDirectory()
         {
             try
@@ -49,7 +41,6 @@ public sealed class DuckDbQueryBackend : IWildcardQueryBackend, IDisposable
             }
         }
 
-        // Rebuild the connection to drop stale Lance manifests (pointing at regenerated, now-missing fragments).
         public void Reset()
         {
             _connection.Dispose();
@@ -98,8 +89,6 @@ public sealed class DuckDbQueryBackend : IWildcardQueryBackend, IDisposable
         {
             DatasetSource source = PrepareSource(datasetPath);
             using DuckDBCommand cmd = _connection.CreateCommand();
-            // Evaluate the filter as a SELECT-list expression over an UNFILTERED row (not WHERE) so the
-            // LIMIT/OFFSET still pushes down to a native O(1) Lance seek (a WHERE would defeat it).
             string matchExpr = filter.IsEmpty ? "TRUE" : $"({filter.WhereClause})";
             cmd.CommandText =
                 $"SELECT {SqlText.QuoteIdentifier(promptColumn)}, {matchExpr} FROM {source.FromExpression} LIMIT 1 OFFSET {index};";
@@ -158,15 +147,12 @@ public sealed class DuckDbQueryBackend : IWildcardQueryBackend, IDisposable
             _lanceLoaded = true;
         }
 
-        // lance is a core extension for this DuckDB build (no `FROM community`); the first install downloads
-        // a ~235MB signed binary and caches it on disk for later connections and restarts.
         public void InstallLance()
         {
             Execute("INSTALL lance; LOAD lance;");
             _lanceLoaded = true;
         }
 
-        // Cheap catalog probe: neither downloads nor loads. False when lance is unknown or has no row.
         public bool IsLanceInstalled()
         {
             using DuckDBCommand cmd = _connection.CreateCommand();
@@ -228,7 +214,6 @@ public sealed class DuckDbQueryBackend : IWildcardQueryBackend, IDisposable
         }
     }
 
-    // Install on a throwaway connection so the slow first-run download never holds the shared lock.
     public void InstallLance()
     {
         using Conn temp = new();
@@ -243,7 +228,6 @@ public sealed class DuckDbQueryBackend : IWildcardQueryBackend, IDisposable
         }
     }
 
-    // Rebuild the shared connection to drop cached dataset metadata when on-disk datasets change.
     public void Reset()
     {
         lock (_lock)
@@ -252,9 +236,6 @@ public sealed class DuckDbQueryBackend : IWildcardQueryBackend, IDisposable
         }
     }
 
-    // Runs read-only jobs across up to maxParallelism short-lived independent connections (one per worker
-    // thread, each handed its own IDatasetReader), so the per-connection "one command at a time" rule holds
-    // and the shared interactive connection is never touched. Blocks until every job completes.
     public void RunPooled(IReadOnlyList<Action<IDatasetReader>> jobs, int maxParallelism)
     {
         if (jobs is null || jobs.Count == 0)
@@ -278,7 +259,6 @@ public sealed class DuckDbQueryBackend : IWildcardQueryBackend, IDisposable
         Task.WaitAll(tasks);
     }
 
-    // null/DBNull -> "", a list/array -> [a, b, c], everything else -> ToString.
     private static string Stringify(object value)
     {
         if (value is null or DBNull)

@@ -1,7 +1,5 @@
 namespace Quarry;
 
-// User-chosen prompt and tag columns per dataset. The `tags` filter keyword searches across all of a
-// dataset's tag columns as one merged column.
 public static class ColumnConfig
 {
     private static readonly Dictionary<string, string> PromptColumns = new(StringComparer.OrdinalIgnoreCase);

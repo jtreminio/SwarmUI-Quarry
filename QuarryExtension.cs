@@ -10,13 +10,7 @@ namespace Quarry;
 public class QuarryExtension : Extension
 {
     private string SettingsFilePath => $"{Program.DataDir}/Quarry.json";
-
-    // Serializes requirement installs so two rapid clicks can't launch overlapping ~235 MB downloads.
     private static readonly SemaphoreSlim InstallLock = new(1, 1);
-
-    // Frontend behaviour preference, persisted in Quarry.json: when on, clicking a dataset name appends it to
-    // the prompt's first existing <q:...> tag instead of inserting a separate one. The backend only stores and
-    // echoes it — the Quarry tab reads it to decide how to edit the prompt.
     private static bool AddToExistingTag;
 
     public override void OnPreInit()
@@ -27,7 +21,6 @@ public class QuarryExtension : Extension
 
     public override void OnInit()
     {
-        // Set before anything opens a DuckDB connection: the backend caches the lance extension under this folder.
         DatasetManager.ExtensionFolder = FilePath;
         LoadSettings();
         ApplyDefaultDatasetsFolder();
@@ -50,7 +43,6 @@ public class QuarryExtension : Extension
         Logs.Info($"Quarry extension initialized ({status}).");
     }
 
-    // Default the datasets folder to a Quarry directory beside SwarmUI's (possibly user-overridden) Wildcards folder.
     private static void ApplyDefaultDatasetsFolder()
     {
         if (!string.IsNullOrWhiteSpace(DatasetManager.DatasetsFolder))
@@ -173,7 +165,6 @@ public class QuarryExtension : Extension
     {
         bool requirementsInstalled = DatasetManager.RequirementsInstalled;
         JArray datasets = [];
-        // Reading schemas/counts needs the lance extension; until it's installed the UI shows only the install gate.
         if (requirementsInstalled)
         {
             foreach (DatasetInfo info in DatasetManager.GetDatasetsInfo(includeRowCounts))
@@ -265,7 +256,6 @@ public class QuarryExtension : Extension
             ["columns"] = ToJArray(columns),
             ["rows"] = new JArray(rows.Select(ToJArray)),
         };
-        // Loaded lazily here rather than for every dataset at startup; best-effort so a count failure can't hide rows.
         (bool countSuccess, long? rowCount, _) = DatasetManager.GetUsableRowCount(dataset);
         if (countSuccess && rowCount is not null)
         {
@@ -274,8 +264,6 @@ public class QuarryExtension : Extension
         return Task.FromResult(response);
     }
 
-    // Drops the cached preview sample for one dataset so the next preview reloads the default first page. Backs
-    // the preview modal's "Clear cache" button (used after "Load more" has grown the sample).
     public Task<JObject> QuarryClearPreviewCache(Session session, string dataset)
     {
         return Task.FromResult(DatasetManager.ClearPreviewCache(dataset)
@@ -283,7 +271,6 @@ public class QuarryExtension : Extension
             : new JObject { ["success"] = false, ["error"] = $"Unknown dataset '{dataset}'." });
     }
 
-    // Returns the wildcard names of Quarry datasets the current prompt references, so the UI can flag in-use files.
     public Task<JObject> QuarryResolveReferences(Session session, string prompt)
     {
         return Task.FromResult(new JObject
@@ -317,7 +304,6 @@ public class QuarryExtension : Extension
         }
     }
 
-    // The official repo is public, so the token is optional; sent when present to ease rate limits and reach gated content.
     private static string GetHfToken(Session session) => session?.User?.GetGenericData("huggingface_api", "key") ?? "";
 
     public async Task<JObject> QuarryListAvailableDatasets(Session session)
@@ -352,7 +338,6 @@ public class QuarryExtension : Extension
         }
     }
 
-    // Queues a background download; the UI polls QuarryDownloadStatus. redownload replaces an installed copy.
     public async Task<JObject> QuarryDownloadDataset(Session session, string dataset, bool redownload = false)
     {
         (bool ok, string error, int id) = await DatasetDownloader.StartDownloadAsync(dataset, redownload, GetHfToken(session));
@@ -377,7 +362,6 @@ public class QuarryExtension : Extension
             ["filesTotal"] = status.FilesTotal,
             ["perSecond"] = status.PerSecond,
         };
-        // Only include "error" when non-empty: the WebAPI logs an error for any response that contains an "error" key.
         if (!string.IsNullOrEmpty(status.Error))
         {
             response["error"] = status.Error;
