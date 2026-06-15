@@ -1,3 +1,4 @@
+import { openDownloadModal } from "./download";
 import { insertQuarryTag, onReferences, recomputeReferences } from "./prompt";
 import { QUARRY_TAB_BODY_ID } from "./tab";
 import type {
@@ -6,6 +7,7 @@ import type {
     PreviewResponse,
     SettingsResponse,
 } from "./types";
+import { escapeHtml } from "./util";
 
 const MESSAGE_TIMEOUT_MS = 5000;
 export const PREVIEW_ROW_LIMIT = 100;
@@ -13,11 +15,8 @@ const PREVIEW_MODAL_ID = "quarry-preview-modal";
 const PREVIEW_TITLE_ID = "quarry-preview-title";
 const PREVIEW_BODY_ID = "quarry-preview-body";
 
-export const escapeHtml = (text: string): string => {
-    const div = document.createElement("div");
-    div.textContent = text;
-    return div.innerHTML;
-};
+// Re-exported from ./util so existing imports (and the settings tests) keep working unchanged.
+export { escapeHtml };
 
 export const renderStatus = (active: boolean, count: number): string =>
     active
@@ -148,6 +147,7 @@ export const renderForm = (enabled: boolean, folder: string): string => `
                     <div id="quarry-status" class="quarry-status-line"></div>
                     <div class="quarry-actions">
                         <button type="button" id="quarry-refresh" class="basic-button">🔄 Refresh</button>
+                        <button type="button" id="quarry-download-datasets" class="basic-button" title="Browse and download ready-made datasets from the official collection">⬇ Download Datasets</button>
                     </div>
                     <div id="quarry-datasets" class="quarry-datasets"></div>
                 </div>
@@ -475,6 +475,10 @@ const ensureFormRendered = (): void => {
     document
         .getElementById("quarry-refresh")
         ?.addEventListener("click", refresh);
+    document
+        .getElementById("quarry-download-datasets")
+        // Reload settings after the modal closes so freshly-downloaded datasets appear in the table.
+        ?.addEventListener("click", () => openDownloadModal(loadSettings));
     document
         .getElementById("quarry-datasets")
         ?.addEventListener("click", datasetsClickHandler);

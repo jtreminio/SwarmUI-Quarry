@@ -51,3 +51,45 @@ export interface ReferencesResponse {
     success: boolean;
     names?: string[];
 }
+
+// One ready-made dataset on the official HuggingFace collection (QuarryListAvailableDatasets).
+export interface RemoteDatasetDto {
+    name: string;
+    repoPath: string;
+    sizeBytes: number;
+    fileCount: number;
+    installed: boolean;
+}
+
+export interface AvailableDatasetsResponse {
+    success: boolean;
+    repo?: string;
+    repoUrl?: string;
+    // Whether the user has a HuggingFace token set (downloads work without one — the repo is public).
+    tokenSet?: boolean;
+    datasets?: RemoteDatasetDto[];
+    error?: string;
+}
+
+// Result of kicking off a download (QuarryDownloadDataset); `id` identifies the run for status polling.
+export interface StartDownloadResponse {
+    success: boolean;
+    id?: number;
+    error?: string;
+}
+
+// Live progress of the single in-flight dataset download (QuarryDownloadStatus).
+export interface DownloadStatusResponse {
+    success: boolean;
+    active?: boolean;
+    id?: number;
+    dataset?: string;
+    // idle | starting | downloading | finalizing | done | error | cancelled
+    state?: string;
+    bytesDone?: number;
+    bytesTotal?: number;
+    filesDone?: number;
+    filesTotal?: number;
+    perSecond?: number;
+    error?: string;
+}

@@ -35,6 +35,10 @@ public class QuarryExtension : Extension
         API.RegisterAPICall(QuarryPreviewDataset, false, Permissions.FundamentalGenerateTabAccess);
         API.RegisterAPICall(QuarryResolveReferences, false, Permissions.FundamentalGenerateTabAccess);
         API.RegisterAPICall(QuarryInstallRequirements, true, Permissions.InstallFeatures);
+        API.RegisterAPICall(QuarryListAvailableDatasets, false, Permissions.FundamentalGenerateTabAccess);
+        API.RegisterAPICall(QuarryDownloadDataset, true, Permissions.InstallFeatures);
+        API.RegisterAPICall(QuarryDownloadStatus, false, Permissions.FundamentalGenerateTabAccess);
+        API.RegisterAPICall(QuarryCancelDownload, true, Permissions.InstallFeatures);
 
         string status = DatasetManager.IsActive ? $"enabled, folder: {DatasetManager.DatasetsFolder}" : "disabled";
         Logs.Info($"Quarry extension initialized ({status}).");
@@ -320,6 +324,85 @@ public class QuarryExtension : Extension
         {
             InstallLock.Release();
         }
+    }
+
+    /// <summary>Reads the calling user's stored HuggingFace API token (empty when none is set). The official
+    /// dataset repo is public, so downloads work without it — but it is sent when present to ease rate limits
+    /// and to reach any gated/private content the user has access to.</summary>
+    private static string GetHfToken(Session session) => session?.User?.GetGenericData("huggingface_api", "key") ?? "";
+
+    /// <summary>Lists the ready-made datasets available on the official HuggingFace collection, each flagged
+    /// with whether it is already installed in the Quarry datasets folder (so the UI can mark it and offer a
+    /// redownload). Also reports whether the caller has an HF token set, for an informational hint.</summary>
+    public async Task<JObject> QuarryListAvailableDatasets(Session session)
+    {
+        try
+        {
+            List<RemoteDataset> datasets = await DatasetDownloader.ListAvailableAsync(GetHfToken(session));
+            JArray arr = [];
+            foreach (RemoteDataset dataset in datasets)
+            {
+                arr.Add(new JObject
+                {
+                    ["name"] = dataset.Name,
+                    ["repoPath"] = dataset.RepoPath,
+                    ["sizeBytes"] = dataset.SizeBytes,
+                    ["fileCount"] = dataset.FileCount,
+                    ["installed"] = dataset.Installed,
+                });
+            }
+            return new JObject
+            {
+                ["success"] = true,
+                ["repo"] = DatasetDownloader.RepoId,
+                ["repoUrl"] = DatasetDownloader.RepoUrl,
+                ["tokenSet"] = !string.IsNullOrEmpty(GetHfToken(session)),
+                ["datasets"] = arr,
+            };
+        }
+        catch (Exception ex)
+        {
+            return new JObject { ["success"] = false, ["error"] = ex.Message };
+        }
+    }
+
+    /// <summary>Starts downloading one dataset (every file of its <c>*.lance</c> folder) from the official
+    /// HuggingFace collection into the Quarry datasets folder, using the caller's HF token when set. Returns as
+    /// soon as the background download is queued; the UI polls <see cref="QuarryDownloadStatus"/> for progress.
+    /// <paramref name="redownload"/> replaces an already-installed copy (e.g. to pick up an update).</summary>
+    public async Task<JObject> QuarryDownloadDataset(Session session, string dataset, bool redownload = false)
+    {
+        (bool ok, string error, int id) = await DatasetDownloader.StartDownloadAsync(dataset, redownload, GetHfToken(session));
+        return ok
+            ? new JObject { ["success"] = true, ["id"] = id }
+            : new JObject { ["success"] = false, ["error"] = error };
+    }
+
+    /// <summary>Reports progress of the in-flight (or most recently finished) dataset download, for the polling UI.</summary>
+    public Task<JObject> QuarryDownloadStatus(Session session)
+    {
+        DatasetDownloader.DownloadStatus status = DatasetDownloader.GetStatus();
+        return Task.FromResult(new JObject
+        {
+            ["success"] = true,
+            ["active"] = status.Active,
+            ["id"] = status.Id,
+            ["dataset"] = status.Dataset,
+            ["state"] = status.State,
+            ["bytesDone"] = status.BytesDone,
+            ["bytesTotal"] = status.BytesTotal,
+            ["filesDone"] = status.FilesDone,
+            ["filesTotal"] = status.FilesTotal,
+            ["perSecond"] = status.PerSecond,
+            ["error"] = status.Error,
+        });
+    }
+
+    /// <summary>Cancels the in-flight dataset download, if any.</summary>
+    public Task<JObject> QuarryCancelDownload(Session session)
+    {
+        DatasetDownloader.Cancel();
+        return Task.FromResult(new JObject { ["success"] = true });
     }
     #endregion
 }

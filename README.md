@@ -14,6 +14,12 @@ Don't have data yet? A whole collection of prompt datasets — **already convert
 
 It's dozens of `*.lance` folders covering Stable Diffusion, Midjourney, Flux, Danbooru tags, photography, and more. Drop them in your Quarry datasets folder (see [Setup](#setup)) and they show up as wildcards right away — no conversion needed.
 
+### Easiest: the **Download Datasets** button
+
+Open the **Quarry** tab in SwarmUI's bottom bar and click **⬇ Download Datasets**. A window lists every dataset in the collection with its size — click **Download** next to any one and it's pulled straight into your Quarry datasets folder, with a live progress bar. Datasets you already have are marked with a green ✓ and offer a **Redownload** button to refresh them (handy when one has been updated).
+
+It uses your [Hugging Face token](https://huggingface.co/settings/tokens) if you've set one (under the **User** tab), but this collection is public, so it works without one too.
+
 ### Grab the whole collection (recommended)
 
 Install the Hugging Face command-line tool, then download everything straight into your Quarry datasets folder — point `--local-dir` at it and every `*.lance` folder lands exactly where Quarry looks:

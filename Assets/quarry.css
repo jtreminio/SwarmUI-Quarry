@@ -220,3 +220,130 @@
     font-size: 0.95em;
     color: var(--text-soft);
 }
+
+/* --- Download Datasets modal --- */
+
+.quarry-download-dialog {
+    max-width: 60rem;
+}
+
+.quarry-download-body {
+    max-height: 65vh;
+    overflow: auto;
+}
+
+.quarry-download-note {
+    color: var(--text-soft);
+    font-size: 0.9em;
+    margin-bottom: 0.6rem;
+}
+
+.quarry-download-tokenhint {
+    display: inline-block;
+    margin-left: 0.25rem;
+    font-style: italic;
+}
+
+.quarry-download-loading,
+.quarry-download-error,
+.quarry-remote-empty {
+    color: var(--text-soft);
+    font-style: italic;
+    padding: 0.5rem;
+}
+
+.quarry-download-error {
+    color: var(--red);
+}
+
+.quarry-download-message {
+    margin-top: 0.5rem;
+    min-height: 1.2em;
+    font-size: 0.95em;
+}
+
+.quarry-download-message-success {
+    color: var(--green);
+}
+
+.quarry-download-message-error {
+    color: var(--red);
+}
+
+.quarry-download-message-info {
+    color: var(--text-soft);
+}
+
+.quarry-remote-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.quarry-remote-table th {
+    text-align: left;
+    font-weight: 600;
+    font-size: 0.9em;
+    color: var(--text-soft);
+    padding: 0.25rem 0.5rem;
+    border-bottom: 1px solid var(--light-border);
+}
+
+.quarry-remote-table td {
+    padding: 0.35rem 0.5rem;
+    vertical-align: middle;
+}
+
+.quarry-remote-row:nth-child(even) {
+    background: var(--background-gray);
+}
+
+/* Installed datasets are highlighted green — the same cue the settings table uses for in-prompt datasets. */
+.quarry-remote-installed {
+    background: color-mix(in srgb, var(--green) 16%, transparent);
+    box-shadow: inset 3px 0 0 var(--green);
+}
+
+.quarry-remote-check {
+    color: var(--green);
+    font-weight: 700;
+}
+
+.quarry-remote-name {
+    font-family: monospace;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+.quarry-remote-size {
+    white-space: nowrap;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-soft);
+}
+
+.quarry-remote-action {
+    white-space: nowrap;
+    min-width: 11rem;
+}
+
+/* Progress bar shown in the action cell while a dataset downloads. */
+.quarry-dl-progress {
+    height: 0.5rem;
+    border-radius: 0.25rem;
+    background: var(--background-gray);
+    overflow: hidden;
+}
+
+.quarry-dl-bar {
+    height: 100%;
+    width: 0;
+    background: var(--green);
+    transition: width 0.3s ease;
+}
+
+.quarry-dl-info {
+    font-size: 0.8em;
+    color: var(--text-soft);
+    margin: 0.2rem 0;
+    font-variant-numeric: tabular-nums;
+}
