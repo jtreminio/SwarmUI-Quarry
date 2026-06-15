@@ -22,9 +22,18 @@ export interface SettingsResponse {
     enabled?: boolean;
     datasetsFolder?: string;
     active?: boolean;
+    // False when Quarry's runtime requirement (the DuckDB lance extension) isn't installed yet; the UI then
+    // shows only the install gate. Omitted/true once it's available.
+    requirementsInstalled?: boolean;
     count?: number;
     datasets?: DatasetDto[];
     message?: string;
+    error?: string;
+}
+
+// Result of the QuarryInstallRequirements endpoint (installs the DuckDB lance extension).
+export interface InstallResponse {
+    success: boolean;
     error?: string;
 }
 
@@ -33,7 +42,7 @@ export interface PreviewResponse {
     dataset?: string;
     columns?: string[];
     rows?: string[][];
-    // Usable-pick row count, loaded lazily alongside the preview rows (null when it couldn't be counted).
+    // Row count, loaded lazily alongside the preview rows (null when it couldn't be counted).
     rowCount?: number | null;
     error?: string;
 }

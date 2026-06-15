@@ -11,6 +11,9 @@ public class QuarryExtension : Extension
 {
     private string SettingsFilePath => $"{Program.DataDir}/Quarry.json";
 
+    /// <summary>Serializes requirement installs so two rapid clicks can't launch overlapping ~235 MB downloads.</summary>
+    private static readonly SemaphoreSlim InstallLock = new(1, 1);
+
     public override void OnPreInit()
     {
         ScriptFiles.Add("Assets/quarry.js");
@@ -20,6 +23,7 @@ public class QuarryExtension : Extension
     public override void OnInit()
     {
         LoadSettings();
+        ApplyDefaultDatasetsFolder();
         DatasetManager.Initialize();
         // Register our own <q:...> prompt tag. It's exclusively ours (no piggybacking on wc/wildcard), so there's
         // no init-order/chaining concern — a plain OnInit registration is enough.
@@ -30,9 +34,36 @@ public class QuarryExtension : Extension
         API.RegisterAPICall(QuarryRefresh, true, Permissions.FundamentalGenerateTabAccess);
         API.RegisterAPICall(QuarryPreviewDataset, false, Permissions.FundamentalGenerateTabAccess);
         API.RegisterAPICall(QuarryResolveReferences, false, Permissions.FundamentalGenerateTabAccess);
+        API.RegisterAPICall(QuarryInstallRequirements, true, Permissions.InstallFeatures);
 
         string status = DatasetManager.IsActive ? $"enabled, folder: {DatasetManager.DatasetsFolder}" : "disabled";
         Logs.Info($"Quarry extension initialized ({status}).");
+    }
+
+    /// <summary>When no datasets folder is configured (fresh install, or the user cleared it), default it to a
+    /// <c>Quarry</c> directory beside SwarmUI's Wildcards folder — honoring any user override of the Wildcards
+    /// path, since <see cref="WildcardsHelper.Folder"/> reads the live setting (core initializes it before
+    /// extensions' OnInit runs). The folder is created best-effort so it's ready to drop datasets into.</summary>
+    private static void ApplyDefaultDatasetsFolder()
+    {
+        if (!string.IsNullOrWhiteSpace(DatasetManager.DatasetsFolder))
+        {
+            return;
+        }
+        string parent = Path.GetDirectoryName(WildcardsHelper.Folder.TrimEnd('/', '\\'));
+        if (string.IsNullOrEmpty(parent))
+        {
+            return;
+        }
+        DatasetManager.DatasetsFolder = Path.Combine(parent, "Quarry");
+        try
+        {
+            Directory.CreateDirectory(DatasetManager.DatasetsFolder);
+        }
+        catch (Exception ex)
+        {
+            Logs.Warning($"Quarry: could not create default datasets folder '{DatasetManager.DatasetsFolder}': {ex.Message}");
+        }
     }
 
     public override void OnShutdown()
@@ -123,28 +154,34 @@ public class QuarryExtension : Extension
     #region API endpoints
     private static JObject BuildSettingsResponse(bool includeRowCounts = false)
     {
+        bool requirementsInstalled = DatasetManager.RequirementsInstalled;
         JArray datasets = [];
-        foreach (DatasetInfo info in DatasetManager.GetDatasetsInfo(includeRowCounts))
+        // Reading dataset schemas/counts needs the lance extension; until it's installed the UI shows only the
+        // install gate, so skip the (otherwise failing, wasteful) enumeration entirely.
+        if (requirementsInstalled)
         {
-            JArray columns = [];
-            foreach (ColumnInfo column in info.Columns)
+            foreach (DatasetInfo info in DatasetManager.GetDatasetsInfo(includeRowCounts))
             {
-                columns.Add(new JObject
+                JArray columns = [];
+                foreach (ColumnInfo column in info.Columns)
                 {
-                    ["name"] = column.Name,
-                    ["kind"] = column.Kind.ToString().ToLowerInvariant(),
+                    columns.Add(new JObject
+                    {
+                        ["name"] = column.Name,
+                        ["kind"] = column.Kind.ToString().ToLowerInvariant(),
+                    });
+                }
+                datasets.Add(new JObject
+                {
+                    ["name"] = info.Name,
+                    ["columns"] = columns,
+                    ["resolvedPromptColumn"] = info.ResolvedPromptColumn,
+                    ["configuredPromptColumn"] = info.ConfiguredPromptColumn,
+                    ["configuredTagColumns"] = new JArray(info.ConfiguredTagColumns),
+                    ["rowCount"] = info.RowCount,
+                    ["error"] = info.Error,
                 });
             }
-            datasets.Add(new JObject
-            {
-                ["name"] = info.Name,
-                ["columns"] = columns,
-                ["resolvedPromptColumn"] = info.ResolvedPromptColumn,
-                ["configuredPromptColumn"] = info.ConfiguredPromptColumn,
-                ["configuredTagColumns"] = new JArray(info.ConfiguredTagColumns),
-                ["rowCount"] = info.RowCount,
-                ["error"] = info.Error,
-            });
         }
         return new JObject
         {
@@ -152,6 +189,7 @@ public class QuarryExtension : Extension
             ["enabled"] = DatasetManager.Enabled,
             ["datasetsFolder"] = DatasetManager.DatasetsFolder,
             ["active"] = DatasetManager.IsActive,
+            ["requirementsInstalled"] = requirementsInstalled,
             ["count"] = DatasetManager.Count,
             ["datasets"] = datasets,
         };
@@ -254,6 +292,34 @@ public class QuarryExtension : Extension
             ["success"] = true,
             ["names"] = names,
         });
+    }
+
+    /// <summary>Installs Quarry's runtime requirement (the DuckDB <c>lance</c> extension) — a one-time ~235 MB
+    /// download from the official DuckDB extension repo. Long-running, so it runs off the request thread and is
+    /// serialized by <see cref="InstallLock"/> against overlapping installs. On success the datasets are
+    /// re-synced so they're readable immediately; the frontend then reloads settings to reveal the panel.</summary>
+    public async Task<JObject> QuarryInstallRequirements(Session session)
+    {
+        await InstallLock.WaitAsync(Program.GlobalProgramCancel);
+        try
+        {
+            if (DatasetManager.RequirementsInstalled)
+            {
+                return new JObject { ["success"] = true };
+            }
+            await Task.Run(DatasetManager.InstallRequirements);
+            DatasetManager.Refresh();
+            return new JObject { ["success"] = true };
+        }
+        catch (Exception ex)
+        {
+            Logs.Error($"Quarry: failed to install requirements: {ex.Message}");
+            return new JObject { ["success"] = false, ["error"] = ex.Message };
+        }
+        finally
+        {
+            InstallLock.Release();
+        }
     }
     #endregion
 }

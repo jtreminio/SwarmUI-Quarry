@@ -189,7 +189,7 @@
         <td>${renderDatasetNameButton(name)}</td>
         <td><select class="quarry-dataset-column" data-dataset="${name}">${renderDatasetOptions(dataset)}</select></td>
         <td class="quarry-dataset-tags" title="Columns the 'tags' keyword searches across">${renderTagCheckboxes(dataset)}</td>
-        <td class="quarry-dataset-rows" data-dataset="${name}" title="Usable picks (rows with a non-empty prompt) — loads when you preview this dataset">${formatRowCount(dataset.rowCount)}</td>
+        <td class="quarry-dataset-rows" data-dataset="${name}" title="Rows in the dataset (loads when you preview it if not already counted)">${formatRowCount(dataset.rowCount)}</td>
         <td><button type="button" class="basic-button quarry-preview-button" data-dataset="${name}" title="Preview the first ${PREVIEW_ROW_LIMIT} rows">👁 Preview</button></td>
     </tr>`;
   };
@@ -255,6 +255,21 @@
                 <button type="submit" class="basic-button">Save Settings</button>
             </div>
         </form>
+    </div>`;
+  var renderInstallGate = () => `
+    <div class="quarry-settings quarry-install-gate">
+        <div class="input-group input-group-open">
+            <span class="input-group-header input-group-noshrink">
+                <span class="header-label-wrap"><span class="header-label">🦆 Quarry</span></span>
+            </span>
+            <div class="input-group-content">
+                <p class="quarry-install-intro">Quarry needs the DuckDB <code>lance</code> extension to read its datasets — a one-time download of a ~235&nbsp;MB signed binary from the official DuckDB extension repository.</p>
+                <div class="quarry-actions">
+                    <button type="button" id="quarry-install" class="basic-button">⬇ Install Requirements</button>
+                </div>
+                <div id="quarry-install-status" class="quarry-install-status"></div>
+            </div>
+        </div>
     </div>`;
   var collectPromptColumns = (container) => {
     const result = {};
@@ -339,9 +354,15 @@
   };
   var loadSettings = () => {
     genericRequest("QuarryGetSettings", {}, (data) => {
-      if (data.success) {
-        applyResponse(data);
+      if (!data.success) {
+        return;
       }
+      if (data.requirementsInstalled === false) {
+        showInstallGate();
+        return;
+      }
+      ensureFormRendered();
+      applyResponse(data);
     });
   };
   var saveSettings = () => {
@@ -458,7 +479,7 @@
         if (data.success) {
           const count = data.rowCount ?? null;
           applyRowCount(dataset, count);
-          const summary = count == null ? "" : `<div class="quarry-preview-summary">${formatRowCount(count)} usable row(s) with a non-empty prompt.</div>`;
+          const summary = count == null ? "" : `<div class="quarry-preview-summary">${formatRowCount(count)} row(s).</div>`;
           bodyEl.innerHTML = summary + renderPreviewTable(data.columns ?? [], data.rows ?? []);
         } else {
           bodyEl.innerHTML = `<div class="quarry-preview-error">${escapeHtml(data.error ?? "Failed to load preview.")}</div>`;
@@ -466,40 +487,89 @@
       }
     );
   };
-  var init = () => {
+  var datasetsClickHandler = (event) => {
+    const target = event.target;
+    const previewButton = target?.closest(
+      ".quarry-preview-button"
+    );
+    if (previewButton) {
+      const dataset = previewButton.getAttribute("data-dataset");
+      if (dataset) {
+        openPreview(dataset);
+      }
+      return;
+    }
+    const nameButton = target?.closest(
+      ".quarry-dataset-name-link"
+    );
+    if (nameButton) {
+      const dataset = nameButton.getAttribute("data-dataset");
+      if (dataset) {
+        insertQuarryTag(dataset);
+      }
+    }
+  };
+  var ensureFormRendered = () => {
+    if (document.getElementById("quarry-form")) {
+      return;
+    }
     const host = document.getElementById(QUARRY_TAB_BODY_ID);
     if (!host) {
       return;
     }
     host.innerHTML = renderForm(false, "");
-    loadSettings();
     document.getElementById("quarry-form")?.addEventListener("submit", (event) => {
       event.preventDefault();
       saveSettings();
     });
     document.getElementById("quarry-refresh")?.addEventListener("click", refresh);
-    document.getElementById("quarry-datasets")?.addEventListener("click", (event) => {
-      const target = event.target;
-      const previewButton = target?.closest(
-        ".quarry-preview-button"
-      );
-      if (previewButton) {
-        const dataset = previewButton.getAttribute("data-dataset");
-        if (dataset) {
-          openPreview(dataset);
+    document.getElementById("quarry-datasets")?.addEventListener("click", datasetsClickHandler);
+  };
+  var installRequirements = () => {
+    const button = document.getElementById(
+      "quarry-install"
+    );
+    const status = document.getElementById("quarry-install-status");
+    if (button) {
+      button.disabled = true;
+    }
+    if (status) {
+      status.textContent = "Installing… downloading the DuckDB lance extension (~235 MB). This can take a few minutes — please wait.";
+    }
+    genericRequest("QuarryInstallRequirements", {}, (data) => {
+      if (data.success) {
+        if (status) {
+          status.textContent = "Installed! Loading…";
         }
-        return;
-      }
-      const nameButton = target?.closest(
-        ".quarry-dataset-name-link"
-      );
-      if (nameButton) {
-        const dataset = nameButton.getAttribute("data-dataset");
-        if (dataset) {
-          insertQuarryTag(dataset);
+        loadSettings();
+      } else {
+        if (button) {
+          button.disabled = false;
+        }
+        if (status) {
+          status.textContent = `Install failed: ${data.error ?? "unknown error"}`;
         }
       }
     });
+  };
+  var showInstallGate = () => {
+    if (document.getElementById("quarry-install")) {
+      return;
+    }
+    const host = document.getElementById(QUARRY_TAB_BODY_ID);
+    if (!host) {
+      return;
+    }
+    host.innerHTML = renderInstallGate();
+    document.getElementById("quarry-install")?.addEventListener("click", installRequirements);
+  };
+  var init = () => {
+    const host = document.getElementById(QUARRY_TAB_BODY_ID);
+    if (!host) {
+      return;
+    }
+    host.innerHTML = `<div class="quarry-loading">Loading…</div>`;
+    loadSettings();
     onReferences(applyTableHighlights);
   };
   var quarry = {

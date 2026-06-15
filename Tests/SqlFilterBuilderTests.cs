@@ -188,42 +188,6 @@ public class SqlFilterBuilderTests
         Assert.Equal("(contains(lower(\"wei\"\"rd\"), lower($p0)))", f.WhereClause);
     }
 
-    // --- NonEmptyPrompt + And ------------------------------------------------------------------------
-
-    [Fact]
-    public void NonEmptyPrompt_BuildsTrimmedCastLengthCheck_NoParams()
-    {
-        SqlFilter f = SqlFilterBuilder.NonEmptyPrompt("prompt");
-        Assert.Equal("length(trim(CAST(\"prompt\" AS VARCHAR))) > 0", f.WhereClause);
-        Assert.Empty(f.Parameters);
-    }
-
-    [Fact]
-    public void NonEmptyPrompt_EscapesIdentifierQuotes()
-    {
-        SqlFilter f = SqlFilterBuilder.NonEmptyPrompt("we\"ird");
-        Assert.Equal("length(trim(CAST(\"we\"\"ird\" AS VARCHAR))) > 0", f.WhereClause);
-    }
-
-    [Fact]
-    public void And_DropsEmptyOperand()
-    {
-        SqlFilter nonEmpty = SqlFilterBuilder.NonEmptyPrompt("prompt");
-        Assert.Same(nonEmpty, SqlFilterBuilder.And(SqlFilter.None, nonEmpty));
-        Assert.Same(nonEmpty, SqlFilterBuilder.And(nonEmpty, SqlFilter.None));
-    }
-
-    [Fact]
-    public void And_CombinesClausesAndConcatenatesParameters()
-    {
-        SqlFilter query = Build("p[source=civitai]", ("source", ColumnKind.Scalar));
-        SqlFilter combined = SqlFilterBuilder.And(query, SqlFilterBuilder.NonEmptyPrompt("prompt"));
-        Assert.Equal(
-            "(contains(lower(\"source\"), lower($p0))) AND length(trim(CAST(\"prompt\" AS VARCHAR))) > 0",
-            combined.WhereClause);
-        Assert.Equal(new[] { "civitai" }, combined.Parameters.Select(p => p.Value));
-    }
-
     [Fact]
     public void ValuesAreBound_NotInterpolated()
     {

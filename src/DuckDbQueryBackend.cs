@@ -120,6 +120,27 @@ public sealed class DuckDbQueryBackend : IWildcardQueryBackend, IDisposable
             _lanceLoaded = true;
         }
 
+        /// <summary>Installs and loads the <c>lance</c> core extension on this connection. The first install
+        /// downloads a ~235 MB signed binary from extensions.duckdb.org and caches it under ~/.duckdb; later
+        /// connections (and process restarts) load it from that cache. No <c>FROM community</c>: <c>lance</c>
+        /// is a core extension for this DuckDB build, and the community repo has no build for it (a 404).</summary>
+        public void InstallLance()
+        {
+            Execute("INSTALL lance; LOAD lance;");
+            _lanceLoaded = true;
+        }
+
+        /// <summary>True when the <c>lance</c> extension is installed (cached on disk) or already loaded. Reads
+        /// DuckDB's extension catalog — it neither downloads nor loads the extension — so it is a cheap,
+        /// side-effect-free probe. Returns false when lance is unknown to this build or the catalog has no row.</summary>
+        public bool IsLanceInstalled()
+        {
+            using DuckDBCommand cmd = _connection.CreateCommand();
+            cmd.CommandText = "SELECT (installed OR loaded) FROM duckdb_extensions() WHERE extension_name = 'lance';";
+            object result = cmd.ExecuteScalar();
+            return result is bool installed && installed;
+        }
+
         private void Execute(string sql)
         {
             using DuckDBCommand cmd = _connection.CreateCommand();
@@ -168,6 +189,26 @@ public sealed class DuckDbQueryBackend : IWildcardQueryBackend, IDisposable
         lock (_lock)
         {
             return _shared.GetSampleRows(datasetPath, limit);
+        }
+    }
+
+    /// <summary>Installs Quarry's <c>lance</c> requirement on a throwaway connection, so the slow first-run
+    /// download (~235 MB) never holds the shared lock that interactive queries serialize on. Once it is cached
+    /// on disk, the shared connection's lazy <see cref="Conn.EnsureLanceLoaded"/> finds it (a fast no-op +
+    /// load). Blocking — call it off the request thread. Throws on failure (offline, unsupported platform).</summary>
+    public void InstallLance()
+    {
+        using Conn temp = new();
+        temp.InstallLance();
+    }
+
+    /// <summary>True when the DuckDB <c>lance</c> extension is installed or loaded — a cheap catalog probe on
+    /// the shared connection (no download, no scan). See <see cref="Conn.IsLanceInstalled"/>.</summary>
+    public bool IsLanceInstalled()
+    {
+        lock (_lock)
+        {
+            return _shared.IsLanceInstalled();
         }
     }
 

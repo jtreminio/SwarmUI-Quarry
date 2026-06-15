@@ -34,7 +34,9 @@ public static class DatasetManager
     private static readonly ConcurrentDictionary<string, CacheEntry> Cache = new();
     private static readonly object CacheLock = new();
     private static volatile bool _cacheDirty;
-    private const int CacheVersion = 1;
+    // v2: a cached row count is now the dataset's raw total (blank-prompt rows are filtered at ingest), not a
+    // live non-empty scan — so discard counts persisted by older versions, which meant something different.
+    private const int CacheVersion = 2;
     /// <summary>Number of preview rows the UI requests and that warming pre-caches. Keep in sync with the
     /// preview limit the API/frontend use, so a warmed preview is a cache hit for the real request.</summary>
     public const int DefaultPreviewLimit = 100;
@@ -46,6 +48,29 @@ public static class DatasetManager
 
     /// <summary>The shared DuckDB query engine, created on first use.</summary>
     public static DuckDbQueryBackend Backend => _backend ??= new DuckDbQueryBackend();
+
+    /// <summary>True when Quarry's runtime requirement — the DuckDB <c>lance</c> extension — is installed and
+    /// loadable, so datasets can actually be read. Best-effort: any probe failure reports false (the UI then
+    /// offers to install). Cheap — an in-engine extension-catalog lookup, no download and no scan.</summary>
+    public static bool RequirementsInstalled
+    {
+        get
+        {
+            try
+            {
+                return Backend.IsLanceInstalled();
+            }
+            catch
+            {
+                return false;
+            }
+        }
+    }
+
+    /// <summary>Installs Quarry's runtime requirement (the DuckDB <c>lance</c> extension). Blocking and slow on
+    /// first run — it downloads a ~235 MB signed binary from the official DuckDB extension repo and caches it
+    /// under <c>~/.duckdb</c> — so callers should run it off the request thread. Throws on failure.</summary>
+    public static void InstallRequirements() => Backend.InstallLance();
 
     public static int Count => Datasets.Count;
 
@@ -175,11 +200,11 @@ public static class DatasetManager
         return schema;
     }
 
-    /// <summary>Returns the number of rows whose <paramref name="promptColumn"/> is non-empty — i.e. the rows
-    /// this dataset can actually contribute as wildcard picks — so the UI count matches what a query yields and
-    /// never includes blank rows. Cached until the underlying file OR the resolved prompt column changes (the
-    /// column choice affects the count, but not the file hash). A null/empty prompt column (a dataset with no
-    /// readable columns) falls back to the raw total.</summary>
+    /// <summary>Returns the dataset's total row count — which, because blank-prompt rows are excluded at
+    /// ingest (scripts/to_lancedb.py), is also the count of usable wildcard picks. For a Lance dataset this is
+    /// a metadata read (no scan). Cached until the underlying file changes; keyed by the resolved prompt
+    /// column too — the column has no effect on the raw total, but keying by it stops a config change from
+    /// serving a count that was stored under a different column.</summary>
     public static long GetRowCount(DatasetEntry entry, string promptColumn)
     {
         string key = entry.WildcardName.ToLowerFast();
@@ -189,10 +214,7 @@ public static class DatasetManager
         {
             return cached.RowCount;
         }
-        SqlFilter filter = string.IsNullOrEmpty(promptColumn)
-            ? SqlFilter.None
-            : SqlFilterBuilder.NonEmptyPrompt(promptColumn);
-        long count = Backend.CountRows(entry.Path, filter);
+        long count = Backend.CountRows(entry.Path, SqlFilter.None);
         StoreRowCount(key, entry.FileHash, column, count);
         return count;
     }
@@ -216,12 +238,13 @@ public static class DatasetManager
 
     /// <summary>Per-dataset info for the settings UI: columns (name + list-ness) and the resolved prompt column.
     /// Reading the schema is cheap (DuckDB samples it, bounded regardless of file size), so it is always
-    /// included. A row count is a full-scan that scales with file size, so it is surfaced from the cache
-    /// whenever one exists (e.g. warmed in a prior session and loaded from disk on startup) — letting counts
-    /// show on first load without a Refresh. Only when <paramref name="includeRowCounts"/> is set (the Refresh
-    /// path, after a warm) is an uncached count computed by a fresh scan; otherwise it is left null and loaded
-    /// lazily when the user previews that dataset (see <see cref="GetUsableRowCount"/>). Eagerly counting every
-    /// dataset here is what made an initial load hang, and made large datasets appear to never load.</summary>
+    /// included. A row count can be costly (a full scan for CSV/JSON; a cheap metadata read for Lance/Parquet),
+    /// so it is surfaced from the cache whenever one exists (e.g. warmed in a prior session and loaded from
+    /// disk on startup) — letting counts show on first load without a Refresh. Only when
+    /// <paramref name="includeRowCounts"/> is set (the Refresh path, after a warm) is an uncached count
+    /// computed; otherwise it is left null and loaded lazily when the user previews that dataset (see
+    /// <see cref="GetUsableRowCount"/>). Eagerly counting every dataset here is what once made an initial load
+    /// hang, and made large datasets appear to never load.</summary>
     public static List<DatasetInfo> GetDatasetsInfo(bool includeRowCounts = false)
     {
         List<DatasetInfo> result = [];
@@ -362,7 +385,7 @@ public static class DatasetManager
         return cached.RowCountColumn == resolved;
     }
 
-    /// <summary>Warms one dataset on a pooled connection: schema → resolved prompt column → usable count →
+    /// <summary>Warms one dataset on a pooled connection: schema → resolved prompt column → row count →
     /// preview, storing each into the cache. Best-effort — an unreadable dataset is logged and skipped so it
     /// never faults the warm run (the interactive path will surface its error later).</summary>
     private static void WarmOne(IDatasetReader reader, DatasetEntry entry, int limit)
@@ -373,10 +396,9 @@ public static class DatasetManager
             ColumnSchema schema = reader.GetSchema(entry.Path);
             StoreSchema(key, entry.FileHash, schema);
             string resolved = PromptColumnResolver.Resolve(GetConfiguredPromptColumn(entry.WildcardName), schema) ?? "";
-            SqlFilter filter = string.IsNullOrEmpty(resolved)
-                ? SqlFilter.None
-                : SqlFilterBuilder.NonEmptyPrompt(resolved);
-            long count = reader.CountRows(entry.Path, filter);
+            // The raw total (a Lance metadata read, no scan). Blanks are filtered at ingest, so it equals the
+            // usable-pick count; keyed by the resolved column only so a prompt-column config change re-warms it.
+            long count = reader.CountRows(entry.Path, SqlFilter.None);
             StoreRowCount(key, entry.FileHash, resolved, count);
             (List<string> columns, List<List<string>> rows) = reader.GetSampleRows(entry.Path, limit);
             StorePreview(key, entry.FileHash, new PreviewData(limit, columns, rows));
@@ -768,8 +790,8 @@ public static class DatasetManager
 }
 
 /// <summary>Settings-UI view of one dataset: its columns, the resolved prompt column (what would be used
-/// now), the explicitly configured column (if any), the count of rows with a non-empty prompt — i.e. usable
-/// picks (null when unknown), and an error message if the schema couldn't be read.</summary>
+/// now), the explicitly configured column (if any), the dataset's row count (null when unknown), and an
+/// error message if the schema couldn't be read.</summary>
 public sealed record DatasetInfo(
     string Name,
     IReadOnlyList<ColumnInfo> Columns,

@@ -9,6 +9,12 @@ The input is read with DuckDB (which handles all three formats) as a *stream* of
 Arrow record batches and written straight into a Lance dataset, so even large
 files convert without loading everything into memory.
 
+Rows whose prompt column is empty or whitespace-only are dropped during conversion
+(see ``--prompt-column``), so the dataset holds only usable wildcard picks. This lets
+the Quarry extension pick a random row with a plain ``LIMIT/OFFSET`` -- a native O(1)
+Lance seek -- instead of a non-empty ``WHERE`` filter, which would defeat that pushdown
+and force a full scan on every single prompt.
+
 Each input file becomes its own single ``<name>.lance`` dataset directory and
 nothing else. This writes the dataset directly with ``pylance`` rather than
 through ``lancedb``, so there is no surrounding ``.lancedb`` database directory
@@ -101,6 +107,34 @@ def reader_sql(fmt: str) -> str:
     return "read_json(?, format='newline_delimited')"
 
 
+# Conventionally named text columns, in preference order. Mirrors the extension's PromptColumnResolver so the
+# column we strip blanks from is the same one it will later read prompts from.
+_PREFERRED_PROMPT_COLUMNS = ("prompt", "text", "caption", "description", "value")
+
+
+def quote_ident(name: str) -> str:
+    """Double-quote a SQL identifier, escaping embedded double quotes."""
+    return '"' + name.replace('"', '""') + '"'
+
+
+def resolve_prompt_column(columns: list[str], override: str | None) -> str | None:
+    """Pick the column whose blank rows should be dropped, mirroring the extension's PromptColumnResolver: an
+    explicit ``override`` if given, else the first conventionally named text column, else the first column.
+    Returns ``None`` only for an empty schema. Matching is case-insensitive; the dataset's own casing wins."""
+    if override:
+        for col in columns:
+            if col.lower() == override.lower():
+                return col
+        raise SystemExit(
+            f"error: --prompt-column {override!r} not found; columns: {', '.join(columns) or '(none)'}"
+        )
+    by_lower = {col.lower(): col for col in columns}
+    for preferred in _PREFERRED_PROMPT_COLUMNS:
+        if preferred in by_lower:
+            return by_lower[preferred]
+    return columns[0] if columns else None
+
+
 def plan_jobs(path: Path, output: str | None, override_format: str | None) -> list[tuple[Path, Path]]:
     """Resolve the input path into a list of (source file, output .lance) jobs."""
     if path.is_file():
@@ -138,16 +172,33 @@ def plan_jobs(path: Path, output: str | None, override_format: str | None) -> li
     raise SystemExit(f"error: no such file or directory: {path}")
 
 
-def convert_one(src: Path, fmt: str, out_path: Path, mode: str, batch_rows: int):
+def convert_one(src: Path, fmt: str, out_path: Path, mode: str, batch_rows: int, prompt_column: str | None):
     """Stream one file into a Lance dataset; return (rows, column names).
+
+    Rows whose prompt column is empty/whitespace are dropped here, so the dataset holds only usable wildcard
+    picks. ``length(trim(CAST(col AS VARCHAR))) > 0`` matches the test the extension used to apply at query
+    time (a NULL or all-whitespace value is excluded); doing it at ingest lets the extension select rows with a
+    pushed-down ``LIMIT/OFFSET`` instead. An empty schema (no resolvable column) keeps every row.
 
     Opens its own DuckDB connection so it is safe to run from a worker thread.
     """
     con = duckdb.connect()
     try:
-        reader = con.execute(
-            f"SELECT * FROM {reader_sql(fmt)}", [str(src)]
-        ).to_arrow_reader(batch_rows)
+        reader_call = reader_sql(fmt)
+        columns = [
+            row[0]
+            for row in con.execute(
+                f"DESCRIBE SELECT * FROM {reader_call}", [str(src)]
+            ).fetchall()
+        ]
+        col = resolve_prompt_column(columns, prompt_column)
+        select_sql = (
+            f"SELECT * FROM {reader_call} "
+            f"WHERE length(trim(CAST({quote_ident(col)} AS VARCHAR))) > 0"
+            if col is not None
+            else f"SELECT * FROM {reader_call}"
+        )
+        reader = con.execute(select_sql, [str(src)]).to_arrow_reader(batch_rows)
         # lance.write_dataset modes map 1:1 to ours: "create" raises if the
         # dataset already exists, "overwrite" replaces it, "append" adds to it
         # (creating it if missing). write_dataset fully drains the reader before
@@ -188,6 +239,15 @@ def main(argv: list[str] | None = None) -> int:
         help="override the input format instead of inferring it from the extension",
     )
     parser.add_argument(
+        "--prompt-column",
+        default=None,
+        help=(
+            "column to drop blank/whitespace rows on (the prompt text column). Default: the first of "
+            "prompt/text/caption/description/value present, else the first column -- mirroring how the "
+            "Quarry extension resolves the prompt column"
+        ),
+    )
+    parser.add_argument(
         "--batch-rows",
         type=int,
         default=50_000,
@@ -225,7 +285,7 @@ def main(argv: list[str] | None = None) -> int:
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {
             pool.submit(
-                convert_one, src, fmt, out_path, args.mode, args.batch_rows
+                convert_one, src, fmt, out_path, args.mode, args.batch_rows, args.prompt_column
             ): (src, fmt, out_path)
             for src, fmt, out_path in planned
         }

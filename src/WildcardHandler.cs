@@ -14,6 +14,12 @@ public static class WildcardHandler
     /// <summary>The prompt-tag prefix this extension owns: <c>&lt;q:...&gt;</c>.</summary>
     public const string TagPrefix = "q";
 
+    /// <summary>How many rows to probe forward from a picked index when that row's prompt is blank. Datasets
+    /// are blank-filtered at ingest (scripts/to_lancedb.py), so this only matters for a dataset added without
+    /// that cleanup; a small bound skips the occasional stray empty row without letting a pathological
+    /// all-blank file loop.</summary>
+    private const int BlankProbeLimit = 8;
+
     public static void Initialize()
     {
         T2IPromptHandling.PromptTagProcessors[TagPrefix] = Processor;
@@ -209,16 +215,29 @@ public static class WildcardHandler
             {
                 int i = LocateDataset(offsets, globalIndex);
                 MatchedDataset m = matched[i];
-                if (hit.Add(m.Entry.WildcardName))
-                {
-                    hitOrdered.Add(m.Entry.WildcardName);
-                }
                 long localIndex = globalIndex - offsets[i];
-                string value = context.Parse(DatasetManager.Backend.GetPromptAt(m.Entry.Path, m.PromptColumn, m.Filter, localIndex)).Trim();
+                // Fetch the picked row. Datasets are blank-filtered at ingest, so the prompt column is
+                // non-empty — but a dataset added without that cleanup could still hold a blank row. Probe a
+                // few rows forward (deterministic, so it also holds under the Index seed behavior) so a stray
+                // blank doesn't surface as an empty expansion; the warning below is the last-resort backstop.
+                string value = "";
+                for (int probe = 0; probe < BlankProbeLimit && m.Count > 0; probe++)
+                {
+                    long row = (localIndex + probe) % m.Count;
+                    value = context.Parse(DatasetManager.Backend.GetPromptAt(m.Entry.Path, m.PromptColumn, m.Filter, row)).Trim();
+                    if (value.Length > 0)
+                    {
+                        break;
+                    }
+                }
                 if (value.Length == 0)
                 {
                     Logs.Warning(
-                        $"Quarry wildcard '{m.Entry.WildcardName}': blank result from prompt column '{m.PromptColumn}' at row {localIndex} (file '{m.Entry.Path}').");
+                        $"Quarry wildcard '{m.Entry.WildcardName}': blank result from prompt column '{m.PromptColumn}' near row {localIndex} (file '{m.Entry.Path}').");
+                }
+                else if (hit.Add(m.Entry.WildcardName))
+                {
+                    hitOrdered.Add(m.Entry.WildcardName);
                 }
                 return value;
             });
@@ -246,13 +265,16 @@ public static class WildcardHandler
         // No configured tag columns (or a single-column prompt file) → the prompt column doubles as the tag
         // column, so `[tags=…]` still works without any per-file setup.
         List<ColumnInfo> tagColumns = TagColumnResolver.Resolve(DatasetManager.GetConfiguredTagColumns(entry.WildcardName), schema, promptColumn);
-        // Exclude rows whose prompt column is empty/whitespace so blanks are never pooled or picked. The same
-        // filter object is used for both CountRows here and GetPromptAt later, so the pool size and the OFFSET
-        // fetch stay aligned. The blank-result logging in ProcessTargets remains as a backstop.
-        SqlFilter filter = SqlFilterBuilder.And(
-            SqlFilterBuilder.Build(query, schema, tagColumns),
-            SqlFilterBuilder.NonEmptyPrompt(promptColumn));
-        long count = DatasetManager.Backend.CountRows(entry.Path, filter);
+        SqlFilter filter = SqlFilterBuilder.Build(query, schema, tagColumns);
+        // Size the pick pool. With no [query] filter (the common case) this is the dataset's invariant row
+        // total, served from the warmed cache — and the matching GetPromptAt fetch is then a bare LIMIT/OFFSET
+        // that DuckDB's lance scan pushes down to a native O(1) row seek. A non-empty [query] filter is
+        // dataset-specific, so it must be counted live and the fetch scans (inherent to filtering, and the
+        // uncommon path). Blank prompt rows are excluded at ingest, so the raw total is the usable-pick total;
+        // ProcessTargets still probes past any stray blank in a dataset that skipped that cleanup.
+        long count = filter.IsEmpty
+            ? DatasetManager.GetRowCount(entry, promptColumn)
+            : DatasetManager.Backend.CountRows(entry.Path, filter);
         return new MatchedDataset(entry, promptColumn, filter, count);
     }
 

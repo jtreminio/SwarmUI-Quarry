@@ -55,34 +55,6 @@ public static class SqlFilterBuilder
         return new SqlFilter(string.Join(" AND ", terms), parameters);
     }
 
-    /// <summary>A predicate that keeps only rows whose prompt column renders to non-empty, non-whitespace
-    /// text — mirroring the C# blank test in <c>GetPromptAt</c> (null, or <c>ToString().Trim()</c> empty).
-    /// The <c>CAST(... AS VARCHAR)</c> makes it safe for any column type and matches how the value is later
-    /// stringified; a NULL stays excluded because <c>length(trim(NULL))</c> is NULL, which is not <c>&gt; 0</c>.
-    /// Binds no parameters (the column is a quoted identifier), so it always composes with <see cref="And"/>
-    /// without risk of parameter-name collisions.</summary>
-    public static SqlFilter NonEmptyPrompt(string promptColumn)
-        => new($"length(trim(CAST({QuoteIdentifier(promptColumn)} AS VARCHAR))) > 0", Array.Empty<QueryParameter>());
-
-    /// <summary>Combines two filters with AND, dropping an empty operand. Parameter lists are concatenated, so
-    /// callers must ensure the operands' parameter names don't collide — true for every current caller, which
-    /// only ANDs the parameter-less <see cref="NonEmptyPrompt"/> onto a query filter. Both sides are already
-    /// AND-joined boolean expressions, so no extra parentheses are needed.</summary>
-    public static SqlFilter And(SqlFilter left, SqlFilter right)
-    {
-        if (left.IsEmpty)
-        {
-            return right;
-        }
-        if (right.IsEmpty)
-        {
-            return left;
-        }
-        return new SqlFilter(
-            $"{left.WhereClause} AND {right.WhereClause}",
-            [.. left.Parameters, .. right.Parameters]);
-    }
-
     /// <summary>The <c>tags</c> keyword: the configured tag columns are treated as one merged column. Each
     /// value is bound once (reused across columns) and matches if it is present in ANY tag column — a scalar
     /// column via case-insensitive substring, a list column via case-insensitive substring against each

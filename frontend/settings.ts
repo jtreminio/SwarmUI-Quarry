@@ -1,6 +1,11 @@
 import { insertQuarryTag, onReferences, recomputeReferences } from "./prompt";
 import { QUARRY_TAB_BODY_ID } from "./tab";
-import type { DatasetDto, PreviewResponse, SettingsResponse } from "./types";
+import type {
+    DatasetDto,
+    InstallResponse,
+    PreviewResponse,
+    SettingsResponse,
+} from "./types";
 
 const MESSAGE_TIMEOUT_MS = 5000;
 export const PREVIEW_ROW_LIMIT = 100;
@@ -76,7 +81,7 @@ export const renderDatasetRow = (dataset: DatasetDto): string => {
         <td>${renderDatasetNameButton(name)}</td>
         <td><select class="quarry-dataset-column" data-dataset="${name}">${renderDatasetOptions(dataset)}</select></td>
         <td class="quarry-dataset-tags" title="Columns the 'tags' keyword searches across">${renderTagCheckboxes(dataset)}</td>
-        <td class="quarry-dataset-rows" data-dataset="${name}" title="Usable picks (rows with a non-empty prompt) — loads when you preview this dataset">${formatRowCount(dataset.rowCount)}</td>
+        <td class="quarry-dataset-rows" data-dataset="${name}" title="Rows in the dataset (loads when you preview it if not already counted)">${formatRowCount(dataset.rowCount)}</td>
         <td><button type="button" class="basic-button quarry-preview-button" data-dataset="${name}" title="Preview the first ${PREVIEW_ROW_LIMIT} rows">👁 Preview</button></td>
     </tr>`;
 };
@@ -152,6 +157,24 @@ export const renderForm = (enabled: boolean, folder: string): string => `
                 <button type="submit" class="basic-button">Save Settings</button>
             </div>
         </form>
+    </div>`;
+
+/// The "install requirements" gate, shown instead of the panel until the DuckDB lance extension is installed.
+/// A one-time download; the button triggers it and the status line reports progress/result.
+export const renderInstallGate = (): string => `
+    <div class="quarry-settings quarry-install-gate">
+        <div class="input-group input-group-open">
+            <span class="input-group-header input-group-noshrink">
+                <span class="header-label-wrap"><span class="header-label">🦆 Quarry</span></span>
+            </span>
+            <div class="input-group-content">
+                <p class="quarry-install-intro">Quarry needs the DuckDB <code>lance</code> extension to read its datasets — a one-time download of a ~235&nbsp;MB signed binary from the official DuckDB extension repository.</p>
+                <div class="quarry-actions">
+                    <button type="button" id="quarry-install" class="basic-button">⬇ Install Requirements</button>
+                </div>
+                <div id="quarry-install-status" class="quarry-install-status"></div>
+            </div>
+        </div>
     </div>`;
 
 export const collectPromptColumns = (
@@ -251,9 +274,16 @@ const showMessage = (message: string, type: "success" | "error"): void => {
 
 const loadSettings = (): void => {
     genericRequest<SettingsResponse>("QuarryGetSettings", {}, (data) => {
-        if (data.success) {
-            applyResponse(data);
+        if (!data.success) {
+            return;
         }
+        // Until the lance requirement is installed, show only the install gate — the panel can't read datasets.
+        if (data.requirementsInstalled === false) {
+            showInstallGate();
+            return;
+        }
+        ensureFormRendered();
+        applyResponse(data);
     });
 };
 
@@ -388,7 +418,7 @@ export const openPreview = (dataset: string): void => {
                 const summary =
                     count == null
                         ? ""
-                        : `<div class="quarry-preview-summary">${formatRowCount(count)} usable row(s) with a non-empty prompt.</div>`;
+                        : `<div class="quarry-preview-summary">${formatRowCount(count)} row(s).</div>`;
                 bodyEl.innerHTML =
                     summary +
                     renderPreviewTable(data.columns ?? [], data.rows ?? []);
@@ -399,14 +429,43 @@ export const openPreview = (dataset: string): void => {
     );
 };
 
-const init = (): void => {
-    // The Quarry datasets panel lives in the bottom-bar Quarry tab (injected by tab.ts before this runs).
+/// Click delegation for the datasets table: a preview button opens the preview modal; a dataset-name link
+/// drops a `<q:NAME>` reference into the prompt (toggling it off if the cursor sits right after one we just
+/// inserted) — the row's in-prompt highlight then follows via onReferences.
+const datasetsClickHandler = (event: Event): void => {
+    const target = event.target as HTMLElement | null;
+    const previewButton = target?.closest<HTMLElement>(
+        ".quarry-preview-button",
+    );
+    if (previewButton) {
+        const dataset = previewButton.getAttribute("data-dataset");
+        if (dataset) {
+            openPreview(dataset);
+        }
+        return;
+    }
+    const nameButton = target?.closest<HTMLElement>(
+        ".quarry-dataset-name-link",
+    );
+    if (nameButton) {
+        const dataset = nameButton.getAttribute("data-dataset");
+        if (dataset) {
+            insertQuarryTag(dataset);
+        }
+    }
+};
+
+/// Renders the settings form into the tab body and wires its controls — once. A no-op when the form is already
+/// present, so a settings reload updates values in place instead of rebuilding the form (and losing focus).
+const ensureFormRendered = (): void => {
+    if (document.getElementById("quarry-form")) {
+        return;
+    }
     const host = document.getElementById(QUARRY_TAB_BODY_ID);
     if (!host) {
         return;
     }
     host.innerHTML = renderForm(false, "");
-    loadSettings();
     document
         .getElementById("quarry-form")
         ?.addEventListener("submit", (event) => {
@@ -418,33 +477,69 @@ const init = (): void => {
         ?.addEventListener("click", refresh);
     document
         .getElementById("quarry-datasets")
-        ?.addEventListener("click", (event) => {
-            const target = event.target as HTMLElement | null;
-            const previewButton = target?.closest<HTMLElement>(
-                ".quarry-preview-button",
-            );
-            if (previewButton) {
-                const dataset = previewButton.getAttribute("data-dataset");
-                if (dataset) {
-                    openPreview(dataset);
-                }
-                return;
+        ?.addEventListener("click", datasetsClickHandler);
+};
+
+/// Triggers the one-time backend install of the DuckDB lance extension, then reloads settings — which swaps
+/// the gate for the real panel once the requirement is satisfied.
+const installRequirements = (): void => {
+    const button = document.getElementById(
+        "quarry-install",
+    ) as HTMLButtonElement | null;
+    const status = document.getElementById("quarry-install-status");
+    if (button) {
+        button.disabled = true;
+    }
+    if (status) {
+        status.textContent =
+            "Installing… downloading the DuckDB lance extension (~235 MB). This can take a few minutes — please wait.";
+    }
+    genericRequest<InstallResponse>("QuarryInstallRequirements", {}, (data) => {
+        if (data.success) {
+            if (status) {
+                status.textContent = "Installed! Loading…";
             }
-            // Clicking a dataset name drops a `<q:NAME>` reference into the prompt (toggles it off if the
-            // cursor is right after one we just inserted); the row's in-prompt highlight follows via onReferences.
-            const nameButton = target?.closest<HTMLElement>(
-                ".quarry-dataset-name-link",
-            );
-            if (nameButton) {
-                const dataset = nameButton.getAttribute("data-dataset");
-                if (dataset) {
-                    insertQuarryTag(dataset);
-                }
+            loadSettings();
+        } else {
+            if (button) {
+                button.disabled = false;
             }
-        });
+            if (status) {
+                status.textContent = `Install failed: ${data.error ?? "unknown error"}`;
+            }
+        }
+    });
+};
+
+/// Replaces the panel with the install-requirements gate and wires its button — once. A no-op when the gate is
+/// already shown, so a re-check can't clobber an in-progress install's status text.
+const showInstallGate = (): void => {
+    if (document.getElementById("quarry-install")) {
+        return;
+    }
+    const host = document.getElementById(QUARRY_TAB_BODY_ID);
+    if (!host) {
+        return;
+    }
+    host.innerHTML = renderInstallGate();
+    document
+        .getElementById("quarry-install")
+        ?.addEventListener("click", installRequirements);
+};
+
+const init = (): void => {
+    // The Quarry panel lives in the bottom-bar Quarry tab (injected by tab.ts before this runs). Render a
+    // placeholder, then loadSettings() fills in either the install gate or the real form, depending on whether
+    // the lance requirement is satisfied.
+    const host = document.getElementById(QUARRY_TAB_BODY_ID);
+    if (!host) {
+        return;
+    }
+    host.innerHTML = `<div class="quarry-loading">Loading…</div>`;
+    loadSettings();
     // Keep the table's "in prompt" flags in sync with the shared prompt watcher (started in main.ts). The
     // prompt textareas live on the generate tab but persist in the DOM, so the table stays current even while
-    // the Quarry settings panel is hidden.
+    // the Quarry settings panel is hidden. Registered once; applyTableHighlights no-ops until the table exists.
     onReferences(applyTableHighlights);
 };
 
