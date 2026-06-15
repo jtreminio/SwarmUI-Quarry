@@ -150,6 +150,18 @@ If a dataset does not have the column you asked for, Quarry quietly falls back t
 | `<q:midjourney[tags=girl]:caption>` | a "girl" entry, read from the `caption` column |
 | `<q[3]:prompts[tags=punk]>` | 3 different punk prompts |
 
+### Type-ahead suggestions
+
+You do not have to remember your dataset names. Start typing a Quarry tag in any prompt box and SwarmUI's suggestion popup helps you fill it in, exactly the way it does for `<wildcard:` and the other built-in tags:
+
+- Type `<q` and **Quarry** shows up in the list of tags.
+- After `<q:` you get a list of **every dataset**. Keep typing to narrow it.
+- Type a comma and it suggests the **next dataset** for a combined pull (the ones you have already added drop out of the list).
+- With a single dataset, type `[` and it lists **that dataset's columns** to filter on, with its tag columns first — so `<q:characters[` immediately offers `tags`. After a `;` it offers them again for your next condition.
+- Type `:` (after the name and any `[filter]`) and it lists the **columns you can use as the prompt** — the default prompt column first — for the [`:column` override](#picking-the-prompt-column-qfoobar).
+
+Picking a suggestion leaves the tag open so you can keep going — add another comma, open a `[` filter, or just type `>` to finish.
+
 ## Build tags by clicking
 
 You never have to type any of this by hand if you would rather not. In the Quarry tab, **click a dataset's name** and Quarry drops a `<q:NAME>` reference straight into your prompt at the cursor. Click that same name again and it pops back out. Datasets your current prompt is using get highlighted in the table, so you can always see what is in play.

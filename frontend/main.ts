@@ -1,3 +1,4 @@
+import { registerQuarryCompletion } from "./complete";
 import { startPromptWatcher } from "./prompt";
 import { quarry } from "./settings";
 import { injectQuarryTab } from "./tab";
@@ -10,6 +11,9 @@ injectQuarryTab();
 const boot = (): void => {
     quarry.init();
     startPromptWatcher();
+    // Wire `<q:...>` suggestions into SwarmUI's prompt autocompleter; the dataset list it draws from is kept
+    // current by settings.ts as datasets load/refresh.
+    registerQuarryCompletion();
 };
 
 if (document.readyState === "loading") {

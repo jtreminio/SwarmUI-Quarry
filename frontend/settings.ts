@@ -1,3 +1,4 @@
+import { setCompletionDatasets } from "./complete";
 import { openDownloadModal } from "./download";
 import {
     insertQuarryTag,
@@ -254,6 +255,8 @@ const applyResponse = (data: SettingsResponse): void => {
     }
     // Keep the click-behavior preference (read by insertQuarryTag) in sync with the saved value.
     setAddToExistingTag(addToExisting);
+    // Keep the `<q:...>` autocompleter's dataset list current, independent of whether the table is in the DOM.
+    setCompletionDatasets(data.datasets);
     const datasetsEl = document.getElementById("quarry-datasets");
     if (datasetsEl) {
         datasetsEl.innerHTML = renderDatasets(data.datasets ?? []);

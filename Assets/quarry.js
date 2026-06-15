@@ -1,5 +1,224 @@
 "use strict";
 (() => {
+  // frontend/util.ts
+  var escapeHtml = (text) => {
+    const div = document.createElement("div");
+    div.textContent = text;
+    return div.innerHTML;
+  };
+  var formatBytes = (bytes) => {
+    if (bytes == null || bytes < 0) {
+      return "—";
+    }
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    let value = bytes;
+    let unit = 0;
+    while (value >= 1e3 && unit < units.length - 1) {
+      value /= 1e3;
+      unit++;
+    }
+    const decimals = unit === 0 || value >= 100 ? 0 : 1;
+    return `${value.toFixed(decimals)} ${units[unit]}`;
+  };
+
+  // frontend/complete.ts
+  var datasets = [];
+  var setCompletionDatasets = (list) => {
+    datasets = (list ?? []).filter((d) => !d.error).map((d) => ({
+      name: d.name,
+      columns: d.columns ?? [],
+      tagColumns: d.configuredTagColumns ?? [],
+      promptColumn: d.resolvedPromptColumn,
+      rowCount: d.rowCount ?? null
+    }));
+  };
+  var MAX_DATASET_SUGGESTIONS = 50;
+  var findDataset = (list, name) => {
+    const low = name.trim().toLowerCase();
+    return list.find((d) => d.name.toLowerCase() === low) ?? null;
+  };
+  var filterByFragment = (items, frag, getName, prefixFirst) => {
+    if (frag.length === 0) {
+      return items.slice();
+    }
+    const matched = items.filter(
+      (i) => getName(i).toLowerCase().includes(frag)
+    );
+    if (!prefixFirst) {
+      return matched;
+    }
+    const starts = matched.filter(
+      (i) => getName(i).toLowerCase().startsWith(frag)
+    );
+    const rest = matched.filter(
+      (i) => !getName(i).toLowerCase().startsWith(frag)
+    );
+    return starts.concat(rest);
+  };
+  var orderColumnsForFilter = (dataset) => {
+    const byLower = new Map(
+      dataset.columns.map((c) => [c.name.toLowerCase(), c])
+    );
+    const used = /* @__PURE__ */ new Set();
+    const result = [];
+    const push = (col, hint) => {
+      if (!used.has(col.name.toLowerCase())) {
+        used.add(col.name.toLowerCase());
+        result.push({ name: col.name, hint });
+      }
+    };
+    for (const tag of dataset.tagColumns) {
+      const col = byLower.get(tag.trim().toLowerCase());
+      if (col) {
+        push(col, "tag column");
+      }
+    }
+    if (result.length === 0 && dataset.promptColumn) {
+      const col = byLower.get(dataset.promptColumn.toLowerCase());
+      if (col) {
+        push(col, "prompt column");
+      }
+    }
+    for (const col of dataset.columns) {
+      push(col, col.kind === "list" ? "list column" : "column");
+    }
+    return result;
+  };
+  var completeDatasetName = (suffix, list) => {
+    const commaIdx = suffix.lastIndexOf(",");
+    const frag = suffix.slice(commaIdx + 1).trim().toLowerCase();
+    const chosen = new Set(
+      suffix.slice(0, commaIdx + 1).split(",").map((s) => s.trim().toLowerCase()).filter((s) => s.length > 0)
+    );
+    const candidates = list.filter((d) => !chosen.has(d.name.toLowerCase()));
+    const matches = filterByFragment(candidates, frag, (d) => d.name, true);
+    if (matches.length === 1 && matches[0].name.toLowerCase() === frag) {
+      return [];
+    }
+    const head = `<q:${suffix.slice(0, commaIdx + 1)}`;
+    return matches.slice(0, MAX_DATASET_SUGGESTIONS).map((d) => ({
+      apply: head + d.name,
+      label: d.name,
+      hint: d.rowCount != null ? `${d.rowCount.toLocaleString()} rows` : ""
+    }));
+  };
+  var completeFilterColumn = (suffix, lastOpen, list) => {
+    const names = suffix.slice(0, lastOpen).split(",").map((s) => s.trim()).filter((s) => s.length > 0);
+    if (names.length !== 1) {
+      return [];
+    }
+    const dataset = findDataset(list, names[0]);
+    if (!dataset) {
+      return [];
+    }
+    const inner = suffix.slice(lastOpen + 1);
+    const semiIdx = inner.lastIndexOf(";");
+    const clause = semiIdx === -1 ? inner : inner.slice(semiIdx + 1);
+    if (/[=!]/.test(clause)) {
+      return [];
+    }
+    const frag = clause.trim().toLowerCase();
+    const matches = filterByFragment(
+      orderColumnsForFilter(dataset),
+      frag,
+      (c) => c.name,
+      false
+    );
+    if (matches.length === 1 && matches[0].name.toLowerCase() === frag) {
+      return [];
+    }
+    const head = `<q:${suffix.slice(0, lastOpen + 1 + (semiIdx === -1 ? 0 : semiIdx + 1))}`;
+    return matches.map((c) => ({
+      apply: head + c.name,
+      label: c.name,
+      hint: c.hint
+    }));
+  };
+  var orderColumnsForPrompt = (named) => {
+    const used = /* @__PURE__ */ new Set();
+    const result = [];
+    const push = (col, hint) => {
+      if (!used.has(col.name.toLowerCase())) {
+        used.add(col.name.toLowerCase());
+        result.push({ name: col.name, hint });
+      }
+    };
+    for (const dataset of named) {
+      const col = dataset.promptColumn ? dataset.columns.find(
+        (c) => c.name.toLowerCase() === dataset.promptColumn?.toLowerCase()
+      ) : void 0;
+      if (col) {
+        push(col, "default prompt column");
+      }
+    }
+    for (const dataset of named) {
+      for (const col of dataset.columns) {
+        push(col, col.kind === "list" ? "list column" : "column");
+      }
+    }
+    return result;
+  };
+  var completePromptColumn = (suffix, colonIdx, list) => {
+    const head = suffix.slice(0, colonIdx);
+    const bracketIdx = head.indexOf("[");
+    const namesPart = bracketIdx === -1 ? head : head.slice(0, bracketIdx);
+    const named = namesPart.split(",").map((s) => s.trim()).filter((s) => s.length > 0).map((n) => findDataset(list, n)).filter((d) => d !== null);
+    if (named.length === 0) {
+      return [];
+    }
+    const frag = suffix.slice(colonIdx + 1).trim().toLowerCase();
+    const matches = filterByFragment(
+      orderColumnsForPrompt(named),
+      frag,
+      (c) => c.name,
+      false
+    );
+    if (matches.length === 1 && matches[0].name.toLowerCase() === frag) {
+      return [];
+    }
+    const applyHead = `<q:${suffix.slice(0, colonIdx + 1)}`;
+    return matches.map((c) => ({
+      apply: applyHead + c.name,
+      label: c.name,
+      hint: c.hint
+    }));
+  };
+  var computeQuarryCompletions = (suffix, list = datasets) => {
+    const lastOpen = suffix.lastIndexOf("[");
+    const lastClose = suffix.lastIndexOf("]");
+    if (lastOpen > lastClose) {
+      return completeFilterColumn(suffix, lastOpen, list);
+    }
+    const colonIdx = suffix.indexOf(":", lastClose + 1);
+    if (colonIdx !== -1) {
+      return completePromptColumn(suffix, colonIdx, list);
+    }
+    if (lastClose !== -1) {
+      return [];
+    }
+    return completeDatasetName(suffix, list);
+  };
+  var registered = false;
+  var registerQuarryCompletion = () => {
+    if (registered) {
+      return;
+    }
+    if (typeof promptTabComplete === "undefined" || !promptTabComplete || typeof promptTabComplete.registerPrefix !== "function") {
+      return;
+    }
+    promptTabComplete.registerPrefix(
+      "q",
+      "Quarry: a random entry from a dataset (a filterable wildcard) — lists your datasets",
+      (suffix) => computeQuarryCompletions(suffix).map((c) => ({
+        raw: true,
+        name: c.apply,
+        clean_html: escapeHtml(c.label),
+        desc: c.hint
+      }))
+    );
+    registered = true;
+  };
+
   // frontend/prompt.ts
   var HIGHLIGHT_DEBOUNCE_MS = 250;
   var PROMPT_BOX_IDS = ["alt_prompt_textbox", "alt_negativeprompt_textbox"];
@@ -174,27 +393,6 @@
     promptBox.focus();
     triggerChangeFor(promptBox);
     recomputeReferences();
-  };
-
-  // frontend/util.ts
-  var escapeHtml = (text) => {
-    const div = document.createElement("div");
-    div.textContent = text;
-    return div.innerHTML;
-  };
-  var formatBytes = (bytes) => {
-    if (bytes == null || bytes < 0) {
-      return "—";
-    }
-    const units = ["B", "KB", "MB", "GB", "TB"];
-    let value = bytes;
-    let unit = 0;
-    while (value >= 1e3 && unit < units.length - 1) {
-      value /= 1e3;
-      unit++;
-    }
-    const decimals = unit === 0 || value >= 100 ? 0 : 1;
-    return `${value.toFixed(decimals)} ${units[unit]}`;
   };
 
   // frontend/download.ts
@@ -643,15 +841,15 @@
         <td><button type="button" class="basic-button quarry-preview-button" data-dataset="${name}" title="Preview this dataset's rows (load more in the dialog)">Preview</button></td>
     </tr>`;
   };
-  var renderDatasets = (datasets) => {
-    if (!datasets || datasets.length === 0) {
+  var renderDatasets = (datasets2) => {
+    if (!datasets2 || datasets2.length === 0) {
       return `<div class="quarry-datasets-empty">No datasets found. Set a folder containing CSV / JSON / JSONL / Parquet / Lance files, then Refresh.</div>`;
     }
     return `<table class="quarry-datasets-table">
         <thead>
             <tr><th>Dataset</th><th>Prompt column</th><th>Tag columns</th><th>Rows</th><th>Preview</th></tr>
         </thead>
-        <tbody>${datasets.map(renderDatasetRow).join("")}</tbody>
+        <tbody>${datasets2.map(renderDatasetRow).join("")}</tbody>
     </table>`;
   };
   var renderPreviewTable = (columns, rows) => {
@@ -775,6 +973,7 @@
       addToExistingEl.checked = addToExisting;
     }
     setAddToExistingTag(addToExisting);
+    setCompletionDatasets(data.datasets);
     const datasetsEl = document.getElementById("quarry-datasets");
     if (datasetsEl) {
       datasetsEl.innerHTML = renderDatasets(data.datasets ?? []);
@@ -1117,6 +1316,7 @@
   var boot = () => {
     quarry.init();
     startPromptWatcher();
+    registerQuarryCompletion();
   };
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", boot);
