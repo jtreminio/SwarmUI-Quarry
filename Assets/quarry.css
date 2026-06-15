@@ -71,6 +71,26 @@
     overflow-wrap: anywhere;
 }
 
+/* The dataset name doubles as a button: click to drop a <q:NAME> reference into the prompt. */
+.quarry-dataset-name-link {
+    display: inline;
+    margin: 0;
+    padding: 0;
+    border: none;
+    background: none;
+    font: inherit;
+    font-family: monospace;
+    font-weight: 600;
+    color: var(--emphasis);
+    cursor: pointer;
+    text-align: left;
+}
+
+.quarry-dataset-name-link:hover,
+.quarry-dataset-name-link:focus-visible {
+    text-decoration: underline;
+}
+
 .quarry-dataset-column {
     min-width: 8rem;
 }
@@ -173,26 +193,9 @@
     padding: 0.25rem 0.5rem 0.5rem;
 }
 
-/* --- Quarry browser tab (cards) --- */
+/* --- Quarry bottom-bar tab --- */
 
-.quarry-card-title {
-    font-weight: 600;
-    overflow-wrap: anywhere;
-}
-
-.quarry-card-meta {
-    color: var(--text-soft);
-    font-size: 0.9em;
-}
-
-.quarry-card-cols {
-    color: var(--text-soft);
-    font-size: 0.85em;
-    overflow-wrap: anywhere;
-}
-
-.quarry-card-error {
-    color: var(--red);
-    font-size: 0.9em;
-    overflow-wrap: anywhere;
+/* Host for the datasets panel inside the Quarry tab pane; the bottom bar's tab-content handles scrolling. */
+.quarry-tab-body {
+    padding: 0.75rem 1rem;
 }

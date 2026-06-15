@@ -1,4 +1,5 @@
-import { onReferences, recomputeReferences } from "./prompt";
+import { insertQuarryTag, onReferences, recomputeReferences } from "./prompt";
+import { QUARRY_TAB_BODY_ID } from "./tab";
 import type { DatasetDto, PreviewResponse, SettingsResponse } from "./types";
 
 const MESSAGE_TIMEOUT_MS = 5000;
@@ -58,16 +59,21 @@ export const applyInPromptHighlights = (
         });
 };
 
+/// The dataset name rendered as a clickable control. Clicking it inserts (or toggles off) a `<q:NAME>`
+/// reference in the prompt — the same behavior the old browser-tab cards had. `name` is already HTML-escaped.
+export const renderDatasetNameButton = (name: string): string =>
+    `<button type="button" class="quarry-dataset-name quarry-dataset-name-link" data-dataset="${name}" title="Add a reference to this dataset to your prompt">${name}</button>`;
+
 export const renderDatasetRow = (dataset: DatasetDto): string => {
     const name = escapeHtml(dataset.name);
     if (dataset.error) {
         return `<tr class="quarry-dataset-row quarry-dataset-error" data-dataset="${name}">
-            <td><code class="quarry-dataset-name">${name}</code></td>
+            <td>${renderDatasetNameButton(name)}</td>
             <td colspan="4"><span class="quarry-dataset-error-msg">⚠️ ${escapeHtml(dataset.error)}</span></td>
         </tr>`;
     }
     return `<tr class="quarry-dataset-row" data-dataset="${name}">
-        <td><code class="quarry-dataset-name">${name}</code></td>
+        <td>${renderDatasetNameButton(name)}</td>
         <td><select class="quarry-dataset-column" data-dataset="${name}">${renderDatasetOptions(dataset)}</select></td>
         <td class="quarry-dataset-tags" title="Columns the 'tags' keyword searches across">${renderTagCheckboxes(dataset)}</td>
         <td class="quarry-dataset-rows" data-dataset="${name}" title="Usable picks (rows with a non-empty prompt) — loads when you preview this dataset">${formatRowCount(dataset.rowCount)}</td>
@@ -198,11 +204,6 @@ const applyTableHighlights = (names: string[]): void => {
     }
 };
 
-// Tells the Quarry browser tab to reload its dataset list after a save/refresh (decoupled via a DOM event).
-const notifyDatasetsChanged = (): void => {
-    document.dispatchEvent(new CustomEvent("quarry:datasets-changed"));
-};
-
 const applyResponse = (data: SettingsResponse): void => {
     const enabledEl = document.getElementById(
         "quarry-enabled",
@@ -277,7 +278,6 @@ const saveSettings = (): void => {
         (data) => {
             if (data.success) {
                 applyResponse(data);
-                notifyDatasetsChanged();
                 showMessage("Settings saved.", "success");
             } else {
                 showMessage(
@@ -302,7 +302,6 @@ const refresh = (): void => {
         }
         if (data.success) {
             applyResponse(data);
-            notifyDatasetsChanged();
             showMessage(data.message ?? "Refreshed.", "success");
         } else {
             showMessage(
@@ -401,8 +400,12 @@ export const openPreview = (dataset: string): void => {
 };
 
 const init = (): void => {
-    const tool = registerNewTool("quarry", "Quarry");
-    tool.innerHTML = renderForm(false, "");
+    // The Quarry datasets panel lives in the bottom-bar Quarry tab (injected by tab.ts before this runs).
+    const host = document.getElementById(QUARRY_TAB_BODY_ID);
+    if (!host) {
+        return;
+    }
+    host.innerHTML = renderForm(false, "");
     loadSettings();
     document
         .getElementById("quarry-form")
@@ -417,12 +420,26 @@ const init = (): void => {
         .getElementById("quarry-datasets")
         ?.addEventListener("click", (event) => {
             const target = event.target as HTMLElement | null;
-            const button = target?.closest<HTMLButtonElement>(
+            const previewButton = target?.closest<HTMLElement>(
                 ".quarry-preview-button",
             );
-            const dataset = button?.getAttribute("data-dataset");
-            if (dataset) {
-                openPreview(dataset);
+            if (previewButton) {
+                const dataset = previewButton.getAttribute("data-dataset");
+                if (dataset) {
+                    openPreview(dataset);
+                }
+                return;
+            }
+            // Clicking a dataset name drops a `<q:NAME>` reference into the prompt (toggles it off if the
+            // cursor is right after one we just inserted); the row's in-prompt highlight follows via onReferences.
+            const nameButton = target?.closest<HTMLElement>(
+                ".quarry-dataset-name-link",
+            );
+            if (nameButton) {
+                const dataset = nameButton.getAttribute("data-dataset");
+                if (dataset) {
+                    insertQuarryTag(dataset);
+                }
             }
         });
     // Keep the table's "in prompt" flags in sync with the shared prompt watcher (started in main.ts). The

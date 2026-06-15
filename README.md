@@ -47,7 +47,7 @@ hf download jtreminio/prompt-dataset --repo-type dataset \
 
 ## How to use it
 
-Drop a supported data file into your datasets folder (see [Setup](#setup)), then reference it anywhere in a prompt with Quarry's own `<q:...>` tag. (Browse and click datasets from the **Quarry** tab in the bottom bar — see [Setup](#setup).)
+Drop a supported data file into your datasets folder (see [Setup](#setup)), then reference it anywhere in a prompt with Quarry's own `<q:...>` tag. (Pick datasets from the **Quarry** tab in the bottom bar — see [Setup](#setup).)
 
 ```
 <q:NAME>                a random entry
@@ -91,12 +91,12 @@ Stack filters with `;` to require all of them at once:
 
 ## Setup
 
-1. Open the **Quarry** panel in SwarmUI's **Tools / Utilities** area.
+1. Open the **Quarry** tab in SwarmUI's bottom bar (next to Wildcards).
 2. Tick **Enable**, set the **Datasets folder** to a folder containing your data files, and click **Save**.
 3. Each dataset shows a **prompt column** dropdown — pick the column that holds the prompt text (Quarry guesses sensibly, e.g. a column named `prompt`, `text`, or `caption`). Click **Save** again.
 4. Use it in any prompt: `<q:prompts[tags=punk]>`.
 
-Your datasets get their own **Quarry** tab in the bottom bar (next to Wildcards): browse them by folder and click one to drop a `<q:NAME>` reference into your prompt. Datasets referenced by the current prompt are highlighted there. Click **Refresh** (in the panel or the tab) whenever you add or change files.
+The **Quarry** tab lists every dataset with its prompt column, tag columns, and row count. Click a dataset's **name** to drop a `<q:NAME>` reference into your prompt (click it again to remove it); datasets referenced by the current prompt are highlighted. Use **Preview** to peek at a dataset's first rows, and **Refresh** whenever you add or change files.
 
 ## Development
 

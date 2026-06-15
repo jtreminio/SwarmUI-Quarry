@@ -89,6 +89,61 @@
     recomputeReferences();
   };
 
+  // frontend/tab.ts
+  var TAB_ID = "Quarry-Tab";
+  var QUARRY_TAB_BODY_ID = "quarry-tab-body";
+  var registerTabWithLayout = (navLink) => {
+    if (typeof genTabLayout === "undefined" || !genTabLayout) {
+      return;
+    }
+    const tab = new MovableGenTab(navLink, genTabLayout);
+    genTabLayout.managedTabs.push(tab);
+    if (genTabLayout.managedTabContainers.length > 0) {
+      tab.contentElem.style.height = "100%";
+      tab.contentElem.style.width = "100%";
+      if (!genTabLayout.managedTabContainers.includes(
+        tab.contentElem.parentElement
+      )) {
+        genTabLayout.managedTabContainers.push(
+          tab.contentElem.parentElement
+        );
+      }
+      tab.update();
+      tab.navElem.addEventListener(
+        "click",
+        () => browserUtil.makeVisible(tab.contentElem)
+      );
+      genTabLayout.reapplyPositions();
+    }
+  };
+  var injectQuarryTab = () => {
+    const nav = document.getElementById("bottombartabcollection");
+    const content = document.getElementById("t2i_bottom_bar_content");
+    if (!nav || !content || document.getElementById(TAB_ID)) {
+      return;
+    }
+    const li = document.createElement("li");
+    li.className = "nav-item";
+    li.setAttribute("role", "presentation");
+    li.innerHTML = `<a class="nav-link translate" data-bs-toggle="tab" href="#${TAB_ID}" aria-selected="false" tabindex="-1" role="tab">Quarry</a>`;
+    const toolsNav = nav.querySelector('a[href="#Tools-Tab"]');
+    if (toolsNav?.parentElement) {
+      nav.insertBefore(li, toolsNav.parentElement);
+    } else {
+      nav.appendChild(li);
+    }
+    const pane = document.createElement("div");
+    pane.className = "tab-pane genpage-bottom-tab";
+    pane.id = TAB_ID;
+    pane.setAttribute("role", "tabpanel");
+    pane.innerHTML = `<div class="quarry-tab-body" id="${QUARRY_TAB_BODY_ID}"></div>`;
+    content.appendChild(pane);
+    const navLink = li.querySelector("a");
+    if (navLink) {
+      registerTabWithLayout(navLink);
+    }
+  };
+
   // frontend/settings.ts
   var MESSAGE_TIMEOUT_MS = 5e3;
   var PREVIEW_ROW_LIMIT = 100;
@@ -121,31 +176,32 @@
       row.classList.toggle("quarry-dataset-in-prompt", wanted.has(name));
     });
   };
+  var renderDatasetNameButton = (name) => `<button type="button" class="quarry-dataset-name quarry-dataset-name-link" data-dataset="${name}" title="Add a reference to this dataset to your prompt">${name}</button>`;
   var renderDatasetRow = (dataset) => {
     const name = escapeHtml(dataset.name);
     if (dataset.error) {
       return `<tr class="quarry-dataset-row quarry-dataset-error" data-dataset="${name}">
-            <td><code class="quarry-dataset-name">${name}</code></td>
+            <td>${renderDatasetNameButton(name)}</td>
             <td colspan="4"><span class="quarry-dataset-error-msg">⚠️ ${escapeHtml(dataset.error)}</span></td>
         </tr>`;
     }
     return `<tr class="quarry-dataset-row" data-dataset="${name}">
-        <td><code class="quarry-dataset-name">${name}</code></td>
+        <td>${renderDatasetNameButton(name)}</td>
         <td><select class="quarry-dataset-column" data-dataset="${name}">${renderDatasetOptions(dataset)}</select></td>
         <td class="quarry-dataset-tags" title="Columns the 'tags' keyword searches across">${renderTagCheckboxes(dataset)}</td>
         <td class="quarry-dataset-rows" data-dataset="${name}" title="Usable picks (rows with a non-empty prompt) — loads when you preview this dataset">${formatRowCount(dataset.rowCount)}</td>
         <td><button type="button" class="basic-button quarry-preview-button" data-dataset="${name}" title="Preview the first ${PREVIEW_ROW_LIMIT} rows">👁 Preview</button></td>
     </tr>`;
   };
-  var renderDatasets = (datasets2) => {
-    if (!datasets2 || datasets2.length === 0) {
+  var renderDatasets = (datasets) => {
+    if (!datasets || datasets.length === 0) {
       return `<div class="quarry-datasets-empty">No datasets found. Set a folder containing CSV / JSON / JSONL / Parquet / Lance files, then Refresh.</div>`;
     }
     return `<table class="quarry-datasets-table">
         <thead>
             <tr><th>Dataset</th><th>Prompt column</th><th>Tag columns</th><th>Rows</th><th>Preview</th></tr>
         </thead>
-        <tbody>${datasets2.map(renderDatasetRow).join("")}</tbody>
+        <tbody>${datasets.map(renderDatasetRow).join("")}</tbody>
     </table>`;
   };
   var renderPreviewTable = (columns, rows) => {
@@ -239,9 +295,6 @@
       applyInPromptHighlights(container, names);
     }
   };
-  var notifyDatasetsChanged = () => {
-    document.dispatchEvent(new CustomEvent("quarry:datasets-changed"));
-  };
   var applyResponse = (data) => {
     const enabledEl = document.getElementById(
       "quarry-enabled"
@@ -308,7 +361,6 @@
       (data) => {
         if (data.success) {
           applyResponse(data);
-          notifyDatasetsChanged();
           showMessage("Settings saved.", "success");
         } else {
           showMessage(
@@ -332,7 +384,6 @@
       }
       if (data.success) {
         applyResponse(data);
-        notifyDatasetsChanged();
         showMessage(data.message ?? "Refreshed.", "success");
       } else {
         showMessage(
@@ -416,8 +467,11 @@
     );
   };
   var init = () => {
-    const tool = registerNewTool("quarry", "Quarry");
-    tool.innerHTML = renderForm(false, "");
+    const host = document.getElementById(QUARRY_TAB_BODY_ID);
+    if (!host) {
+      return;
+    }
+    host.innerHTML = renderForm(false, "");
     loadSettings();
     document.getElementById("quarry-form")?.addEventListener("submit", (event) => {
       event.preventDefault();
@@ -426,12 +480,24 @@
     document.getElementById("quarry-refresh")?.addEventListener("click", refresh);
     document.getElementById("quarry-datasets")?.addEventListener("click", (event) => {
       const target = event.target;
-      const button = target?.closest(
+      const previewButton = target?.closest(
         ".quarry-preview-button"
       );
-      const dataset = button?.getAttribute("data-dataset");
-      if (dataset) {
-        openPreview(dataset);
+      if (previewButton) {
+        const dataset = previewButton.getAttribute("data-dataset");
+        if (dataset) {
+          openPreview(dataset);
+        }
+        return;
+      }
+      const nameButton = target?.closest(
+        ".quarry-dataset-name-link"
+      );
+      if (nameButton) {
+        const dataset = nameButton.getAttribute("data-dataset");
+        if (dataset) {
+          insertQuarryTag(dataset);
+        }
       }
     });
     onReferences(applyTableHighlights);
@@ -440,250 +506,8 @@
     init
   };
 
-  // frontend/browser.ts
-  var TAB_ID = "Quarry-Tab";
-  var LIST_ID = "quarry_list";
-  var BROWSER_ID = "quarrybrowser";
-  var PLACEHOLDER_IMAGE = "/imgs/model_placeholder.jpg";
-  var datasets = [];
-  var datasetByName = {};
-  var browser = null;
-  var referencedNames = /* @__PURE__ */ new Set();
-  var setDatasets = (list) => {
-    datasets = list;
-    datasetByName = {};
-    for (const dataset of list) {
-      datasetByName[dataset.name] = dataset;
-    }
-  };
-  var fetchDatasets = (done) => {
-    genericRequest("QuarryGetSettings", {}, (data) => {
-      if (data.success) {
-        setDatasets(data.datasets ?? []);
-      }
-      done();
-    });
-  };
-  var computeFoldersAndFiles = (allNames, path, depth) => {
-    const clampedDepth = Math.max(1, Math.min(20, Math.round(depth)));
-    const prefix = path === "" ? "" : `${path.replace(/\/+$/, "")}/`;
-    const folders = /* @__PURE__ */ new Set();
-    const files = [];
-    const seen = /* @__PURE__ */ new Set();
-    for (const name of allNames) {
-      if (!name.startsWith(prefix) || name.length <= prefix.length) {
-        continue;
-      }
-      const part = name.substring(prefix.length);
-      const slashes = (part.match(/\//g) ?? []).length;
-      if (slashes > 0) {
-        const folderPart = part.substring(0, part.lastIndexOf("/"));
-        const subfolders = folderPart.split("/");
-        for (let i = 1; i <= clampedDepth && i <= subfolders.length; i++) {
-          folders.add(subfolders.slice(0, i).join("/"));
-        }
-      }
-      if (slashes < clampedDepth && !seen.has(name)) {
-        seen.add(name);
-        files.push(name);
-      }
-    }
-    return { folders: [...folders], files };
-  };
-  var listQuarryFoldersAndFiles = (path, _isRefresh, callback, depth) => {
-    const run = () => {
-      const { folders, files } = computeFoldersAndFiles(
-        datasets.map((dataset) => dataset.name),
-        path,
-        depth
-      );
-      const prefix = path === "" ? "" : path.endsWith("/") ? path : `${path}/`;
-      const fileObjs = files.map((name) => ({
-        name,
-        data: {
-          ...datasetByName[name],
-          display: name.substring(prefix.length),
-          image: PLACEHOLDER_IMAGE,
-          src: ""
-        }
-      }));
-      callback(
-        folders.sort((a, b) => a.localeCompare(b)),
-        fileObjs
-      );
-    };
-    if (datasets.length === 0) {
-      fetchDatasets(run);
-    } else {
-      run();
-    }
-  };
-  var describeQuarry = (file) => {
-    const name = file.name;
-    const dataset = datasetByName[name];
-    const display = name.replaceAll("/", " / ");
-    const className = referencedNames.has(name.toLowerCase()) ? "model-selected" : "";
-    if (!dataset) {
-      return {
-        name,
-        description: escapeHtml(name),
-        buttons: [],
-        className,
-        searchable: name,
-        image: PLACEHOLDER_IMAGE,
-        display
-      };
-    }
-    const cols = (dataset.columns ?? []).map((col) => `${col.name}${col.kind === "list" ? " [list]" : ""}`).join(", ");
-    const buttons = [];
-    let description;
-    if (dataset.error) {
-      description = `<span class="quarry-card-title">${escapeHtml(name)}</span><br><span class="quarry-card-error">⚠️ ${escapeHtml(dataset.error)}</span>`;
-    } else {
-      const meta = [];
-      if (dataset.rowCount != null) {
-        meta.push(`${formatRowCount(dataset.rowCount)} rows`);
-      }
-      if (dataset.resolvedPromptColumn) {
-        meta.push(`prompt: ${escapeHtml(dataset.resolvedPromptColumn)}`);
-      }
-      const lines = [
-        `<span class="quarry-card-title">${escapeHtml(name)}</span>`,
-        `<span class="quarry-card-meta">${meta.join(" · ")}</span>`
-      ];
-      if (cols) {
-        lines.push(
-          `<span class="quarry-card-cols">${escapeHtml(cols)}</span>`
-        );
-      }
-      description = lines.join("<br>");
-      buttons.push({ label: "Preview", onclick: () => openPreview(name) });
-    }
-    buttons.push({
-      label: "Copy reference",
-      onclick: () => copyText(`<q:${name}>`)
-    });
-    return {
-      name,
-      description,
-      buttons,
-      className,
-      searchable: `${name}, ${cols}`,
-      image: PLACEHOLDER_IMAGE,
-      display,
-      detail_list: [escapeHtml(display), escapeHtml(cols)]
-    };
-  };
-  var selectQuarry = (file) => {
-    insertQuarryTag(file.name);
-  };
-  var refreshCardHighlights = () => {
-    if (!browser?.contentDiv) {
-      return;
-    }
-    for (const child of Array.from(browser.contentDiv.children)) {
-      const cardName = child.dataset?.name;
-      if (cardName) {
-        child.classList.toggle(
-          "model-selected",
-          referencedNames.has(cardName.toLowerCase())
-        );
-      }
-    }
-  };
-  var createBrowser = () => {
-    browser = new GenPageBrowserClass(
-      LIST_ID,
-      listQuarryFoldersAndFiles,
-      BROWSER_ID,
-      "Small Cards",
-      describeQuarry,
-      selectQuarry,
-      ""
-    );
-    browser.refreshHandler = (callback) => {
-      genericRequest("QuarryRefresh", {}, (data) => {
-        if (data.success) {
-          setDatasets(data.datasets ?? []);
-          callback();
-        } else {
-          fetchDatasets(callback);
-        }
-      });
-    };
-    browser.builtEvent = () => recomputeReferences();
-    onReferences((names) => {
-      referencedNames = new Set(names.map((name) => name.toLowerCase()));
-      refreshCardHighlights();
-    });
-    document.addEventListener(
-      "quarry:datasets-changed",
-      () => browser?.refresh()
-    );
-    if (typeof swarmHasLoaded !== "undefined" && swarmHasLoaded) {
-      browser.navigate("");
-    } else {
-      sessionReadyCallbacks.push(() => browser?.navigate(""));
-    }
-  };
-  var registerTabWithLayout = (navLink) => {
-    if (typeof genTabLayout === "undefined" || !genTabLayout) {
-      return;
-    }
-    const tab = new MovableGenTab(navLink, genTabLayout);
-    genTabLayout.managedTabs.push(tab);
-    if (genTabLayout.managedTabContainers.length > 0) {
-      tab.contentElem.style.height = "100%";
-      tab.contentElem.style.width = "100%";
-      if (!genTabLayout.managedTabContainers.includes(
-        tab.contentElem.parentElement
-      )) {
-        genTabLayout.managedTabContainers.push(
-          tab.contentElem.parentElement
-        );
-      }
-      tab.update();
-      tab.navElem.addEventListener(
-        "click",
-        () => browserUtil.makeVisible(tab.contentElem)
-      );
-      genTabLayout.reapplyPositions();
-    }
-  };
-  var injectTab = () => {
-    const nav = document.getElementById("bottombartabcollection");
-    const content = document.getElementById("t2i_bottom_bar_content");
-    if (!nav || !content || document.getElementById(TAB_ID)) {
-      return;
-    }
-    const li = document.createElement("li");
-    li.className = "nav-item";
-    li.setAttribute("role", "presentation");
-    li.innerHTML = `<a class="nav-link translate" data-bs-toggle="tab" href="#${TAB_ID}" aria-selected="false" tabindex="-1" role="tab">Quarry</a>`;
-    const toolsNav = nav.querySelector('a[href="#Tools-Tab"]');
-    if (toolsNav?.parentElement) {
-      nav.insertBefore(li, toolsNav.parentElement);
-    } else {
-      nav.appendChild(li);
-    }
-    const pane = document.createElement("div");
-    pane.className = "tab-pane genpage-bottom-tab";
-    pane.id = TAB_ID;
-    pane.setAttribute("role", "tabpanel");
-    pane.innerHTML = `<div class="browser_container" id="${LIST_ID}"></div>`;
-    content.appendChild(pane);
-    const navLink = li.querySelector("a");
-    if (navLink) {
-      registerTabWithLayout(navLink);
-    }
-    createBrowser();
-  };
-  var quarryBrowser = {
-    injectTab
-  };
-
   // frontend/main.ts
-  quarryBrowser.injectTab();
+  injectQuarryTab();
   var boot = () => {
     quarry.init();
     startPromptWatcher();

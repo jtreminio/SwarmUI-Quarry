@@ -142,6 +142,35 @@ describe("renderDatasetRow", () => {
         });
         expect(html).not.toContain("quarry-preview-button");
     });
+
+    it("renders the dataset name as a clickable insert button", () => {
+        const html = renderDatasetRow({
+            name: "prompts/1girl",
+            columns: [{ name: "prompt", kind: "scalar" }],
+            resolvedPromptColumn: "prompt",
+            configuredPromptColumn: null,
+            configuredTagColumns: [],
+            rowCount: 1,
+            error: null,
+        });
+        expect(html).toContain(
+            '<button type="button" class="quarry-dataset-name quarry-dataset-name-link" data-dataset="prompts/1girl"',
+        );
+    });
+
+    it("keeps the name clickable even on error rows", () => {
+        const html = renderDatasetRow({
+            name: "bad",
+            columns: [],
+            resolvedPromptColumn: null,
+            configuredPromptColumn: null,
+            configuredTagColumns: [],
+            rowCount: null,
+            error: "boom",
+        });
+        expect(html).toContain("quarry-dataset-name-link");
+        expect(html).toContain('data-dataset="bad"');
+    });
 });
 
 describe("renderDatasets", () => {
