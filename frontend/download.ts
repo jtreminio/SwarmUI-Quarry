@@ -1,6 +1,7 @@
 // The "Download Datasets" modal: browse the ready-made datasets on the official HuggingFace collection and
-// pull them straight into the Quarry datasets folder. Lists each dataset with its size, marks the ones already
-// installed (green highlight + ✓, with a "Redownload" button to refresh them), and shows a live progress bar
+// pull them straight into the Quarry datasets folder. Lists each dataset (its name linked to the source
+// HuggingFace repo it was built from) with its size, marks the ones already installed (green highlight + ✓,
+// with a "Redownload" button to refresh them), and shows a live progress bar
 // while one downloads. The heavy lifting is on the backend (DatasetDownloader.cs); this module fetches the
 // list, kicks off a download, and polls QuarryDownloadStatus for progress. One download runs at a time.
 
@@ -20,7 +21,31 @@ const POLL_MS = 800;
 
 // --- Pure render helpers (exported for unit tests) ---
 
-/// Renders one dataset row: name (with an installed ✓), size + file count, and a Download/Redownload button.
+/// The source HuggingFace dataset a collection entry was built from. The collection names each `.lance` folder
+/// after its source repo id with the `/` replaced by a `.` (so `Gustavosta.Stable-Diffusion-Prompts` was built
+/// from `Gustavosta/Stable-Diffusion-Prompts`), so the first `.` splits the org from the repo name. Returns
+/// null for a name without a usable `.`, which then stays plain text rather than linking somewhere wrong.
+export const sourceRepoUrl = (name: string): string | null => {
+    const dot = name.indexOf(".");
+    if (dot <= 0 || dot >= name.length - 1) {
+        return null;
+    }
+    return `https://huggingface.co/datasets/${name.slice(0, dot)}/${name.slice(dot + 1)}`;
+};
+
+/// The dataset name for the list: a link to its source HuggingFace repo when one can be derived, else plain
+/// (escaped) text. Both the visible text and the href are HTML-escaped.
+export const renderRemoteDatasetName = (name: string): string => {
+    const escaped = escapeHtml(name);
+    const url = sourceRepoUrl(name);
+    if (!url) {
+        return escaped;
+    }
+    return `<a class="quarry-remote-link" href="${escapeHtml(url)}" target="_blank" rel="noreferrer noopener" title="Open ${escaped} on HuggingFace">${escaped}</a>`;
+};
+
+/// Renders one dataset row: name (linked to its source repo, with an installed ✓), size, and a
+/// Download/Redownload button.
 export const renderRemoteDatasetRow = (dataset: RemoteDatasetDto): string => {
     const name = escapeHtml(dataset.name);
     const installed = dataset.installed;
@@ -32,7 +57,7 @@ export const renderRemoteDatasetRow = (dataset: RemoteDatasetDto): string => {
         : "";
     const label = installed ? "Redownload" : "Download";
     return `<tr class="${rowClass}" data-dataset="${name}">
-        <td class="quarry-remote-name">${check}${name}</td>
+        <td class="quarry-remote-name">${check}${renderRemoteDatasetName(dataset.name)}</td>
         <td class="quarry-remote-size">${formatBytes(dataset.sizeBytes)}</td>
         <td class="quarry-remote-action">
             <button type="button" class="basic-button quarry-remote-download" data-dataset="${name}" data-redownload="${installed}">${label}</button>

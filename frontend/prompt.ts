@@ -83,7 +83,7 @@ export const startPromptWatcher = (): void => {
 // Whether clicking a dataset name appends it to the prompt's first existing `<q:...>` tag instead of inserting
 // a separate one. Mirrors the server-persisted setting; settings.ts keeps it in sync (on load and on the
 // checkbox's change), and insertQuarryTag reads it at click time.
-let addToExistingTag = false;
+let addToExistingTag = true;
 
 /// Sets the in-memory "add to existing tag" preference that drives click behavior.
 export const setAddToExistingTag = (value: boolean): void => {

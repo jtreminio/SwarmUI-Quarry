@@ -52,7 +52,7 @@
       document.getElementById(id)?.addEventListener("input", schedule);
     }
   };
-  var addToExistingTag = false;
+  var addToExistingTag = true;
   var setAddToExistingTag = (value) => {
     addToExistingTag = value;
   };
@@ -198,6 +198,21 @@
   var BODY_ID = "quarry-download-body";
   var MESSAGE_ID = "quarry-download-message";
   var POLL_MS = 800;
+  var sourceRepoUrl = (name) => {
+    const dot = name.indexOf(".");
+    if (dot <= 0 || dot >= name.length - 1) {
+      return null;
+    }
+    return `https://huggingface.co/datasets/${name.slice(0, dot)}/${name.slice(dot + 1)}`;
+  };
+  var renderRemoteDatasetName = (name) => {
+    const escaped = escapeHtml(name);
+    const url = sourceRepoUrl(name);
+    if (!url) {
+      return escaped;
+    }
+    return `<a class="quarry-remote-link" href="${escapeHtml(url)}" target="_blank" rel="noreferrer noopener" title="Open ${escaped} on HuggingFace">${escaped}</a>`;
+  };
   var renderRemoteDatasetRow = (dataset) => {
     const name = escapeHtml(dataset.name);
     const installed = dataset.installed;
@@ -205,7 +220,7 @@
     const check = installed ? `<span class="quarry-remote-check" title="Installed">✓</span> ` : "";
     const label = installed ? "Redownload" : "Download";
     return `<tr class="${rowClass}" data-dataset="${name}">
-        <td class="quarry-remote-name">${check}${name}</td>
+        <td class="quarry-remote-name">${check}${renderRemoteDatasetName(dataset.name)}</td>
         <td class="quarry-remote-size">${formatBytes(dataset.sizeBytes)}</td>
         <td class="quarry-remote-action">
             <button type="button" class="basic-button quarry-remote-download" data-dataset="${name}" data-redownload="${installed}">${label}</button>
@@ -676,8 +691,8 @@
                     <div class="quarry-setting-row">
                         <span class="auto-input-qbutton info-popover-button" onclick="doPopover('${ADD_TO_EXISTING_TAG_ID}', arguments[0])">?</span>
                         <label for="${ADD_TO_EXISTING_TAG_ID}">Add to existing <code>&lt;q:&gt;</code> tag</label>
-                        <input type="checkbox" id="${ADD_TO_EXISTING_TAG_ID}">
-                        <div class="sui-popover sui-info-popover" id="popover_${ADD_TO_EXISTING_TAG_ID}"><b>Add to existing &lt;q:&gt; tag</b><br>When on, clicking a dataset name adds it to the first existing <code>&lt;q:…&gt;</code> tag (e.g. <code>&lt;q:A,B&gt;</code>) instead of inserting a separate one.</div>
+                        <input type="checkbox" id="${ADD_TO_EXISTING_TAG_ID}" checked>
+                        <div class="sui-popover sui-info-popover" id="popover_${ADD_TO_EXISTING_TAG_ID}"><b>Add to existing &lt;q:&gt; tag</b><br>On by default. When on, clicking a dataset name adds it to the first existing <code>&lt;q:…&gt;</code> tag (e.g. <code>&lt;q:A,B&gt;</code>) instead of inserting a separate one.</div>
                     </div>
                 </div>
             </div>
@@ -748,7 +763,7 @@
     if (folderEl) {
       folderEl.value = data.datasetsFolder ?? "";
     }
-    const addToExisting = data.addToExistingTag ?? false;
+    const addToExisting = data.addToExistingTag ?? true;
     const addToExistingEl = document.getElementById(
       ADD_TO_EXISTING_TAG_ID
     );
@@ -805,7 +820,7 @@
         datasetsFolder: folder,
         promptColumnsJson: JSON.stringify(promptColumns),
         tagColumnsJson: JSON.stringify(tagColumns),
-        addToExistingTag: addToExistingEl?.checked ?? false
+        addToExistingTag: addToExistingEl?.checked ?? true
       },
       (data) => {
         if (data.success) {

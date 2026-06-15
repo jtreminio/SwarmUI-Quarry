@@ -158,8 +158,8 @@ export const renderForm = (folder: string): string => `
                     <div class="quarry-setting-row">
                         <span class="auto-input-qbutton info-popover-button" onclick="doPopover('${ADD_TO_EXISTING_TAG_ID}', arguments[0])">?</span>
                         <label for="${ADD_TO_EXISTING_TAG_ID}">Add to existing <code>&lt;q:&gt;</code> tag</label>
-                        <input type="checkbox" id="${ADD_TO_EXISTING_TAG_ID}">
-                        <div class="sui-popover sui-info-popover" id="popover_${ADD_TO_EXISTING_TAG_ID}"><b>Add to existing &lt;q:&gt; tag</b><br>When on, clicking a dataset name adds it to the first existing <code>&lt;q:…&gt;</code> tag (e.g. <code>&lt;q:A,B&gt;</code>) instead of inserting a separate one.</div>
+                        <input type="checkbox" id="${ADD_TO_EXISTING_TAG_ID}" checked>
+                        <div class="sui-popover sui-info-popover" id="popover_${ADD_TO_EXISTING_TAG_ID}"><b>Add to existing &lt;q:&gt; tag</b><br>On by default. When on, clicking a dataset name adds it to the first existing <code>&lt;q:…&gt;</code> tag (e.g. <code>&lt;q:A,B&gt;</code>) instead of inserting a separate one.</div>
                     </div>
                 </div>
             </div>
@@ -245,7 +245,7 @@ const applyResponse = (data: SettingsResponse): void => {
     if (folderEl) {
         folderEl.value = data.datasetsFolder ?? "";
     }
-    const addToExisting = data.addToExistingTag ?? false;
+    const addToExisting = data.addToExistingTag ?? true;
     const addToExistingEl = document.getElementById(
         ADD_TO_EXISTING_TAG_ID,
     ) as HTMLInputElement | null;
@@ -310,7 +310,7 @@ const saveSettings = (): void => {
             datasetsFolder: folder,
             promptColumnsJson: JSON.stringify(promptColumns),
             tagColumnsJson: JSON.stringify(tagColumns),
-            addToExistingTag: addToExistingEl?.checked ?? false,
+            addToExistingTag: addToExistingEl?.checked ?? true,
         },
         (data) => {
             if (data.success) {

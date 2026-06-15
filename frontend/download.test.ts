@@ -2,8 +2,10 @@ import { describe, expect, it } from "@jest/globals";
 import {
     progressPercent,
     renderProgressInfo,
+    renderRemoteDatasetName,
     renderRemoteDatasetRow,
     renderRemoteDatasets,
+    sourceRepoUrl,
 } from "./download";
 import { formatBytes } from "./util";
 
@@ -18,6 +20,10 @@ describe("renderRemoteDatasetRow", () => {
         });
         expect(html).toContain(
             'data-dataset="Gustavosta.Stable-Diffusion-Prompts"',
+        );
+        // The name links to the source HuggingFace repo it was built from.
+        expect(html).toContain(
+            'href="https://huggingface.co/datasets/Gustavosta/Stable-Diffusion-Prompts"',
         );
         expect(html).toContain(">Download<");
         expect(html).toContain('data-redownload="false"');
@@ -81,6 +87,49 @@ describe("renderRemoteDatasets", () => {
         expect(html).toContain("quarry-remote-table");
         expect(html).toContain('data-dataset="a"');
         expect(html).toContain('data-dataset="b"');
+    });
+});
+
+describe("sourceRepoUrl", () => {
+    it("maps a dataset name to its source repo by replacing the first dot with a slash", () => {
+        expect(sourceRepoUrl("Gustavosta.Stable-Diffusion-Prompts")).toBe(
+            "https://huggingface.co/datasets/Gustavosta/Stable-Diffusion-Prompts",
+        );
+        expect(sourceRepoUrl("succinctly.midjourney-prompts")).toBe(
+            "https://huggingface.co/datasets/succinctly/midjourney-prompts",
+        );
+    });
+
+    it("splits on the first dot only, leaving later dots in the repo name", () => {
+        // HuggingFace org/user names never contain a dot, so the first dot is always the `/` separator;
+        // any further dots belong to the repo name and are preserved.
+        expect(sourceRepoUrl("org.repo.v2")).toBe(
+            "https://huggingface.co/datasets/org/repo.v2",
+        );
+    });
+
+    it("returns null when there is no usable separator dot", () => {
+        expect(sourceRepoUrl("noseparator")).toBeNull();
+        expect(sourceRepoUrl(".leading")).toBeNull();
+        expect(sourceRepoUrl("trailing.")).toBeNull();
+    });
+});
+
+describe("renderRemoteDatasetName", () => {
+    it("links the name to its source HuggingFace repo, opening in a new tab", () => {
+        const html = renderRemoteDatasetName("succinctly.midjourney-prompts");
+        expect(html).toContain(
+            'href="https://huggingface.co/datasets/succinctly/midjourney-prompts"',
+        );
+        expect(html).toContain('target="_blank"');
+        expect(html).toContain(">succinctly.midjourney-prompts</a>");
+    });
+
+    it("falls back to plain escaped text when no source repo can be derived", () => {
+        expect(renderRemoteDatasetName("plainname")).toBe("plainname");
+        const evil = renderRemoteDatasetName("<evil>");
+        expect(evil).toBe("&lt;evil&gt;");
+        expect(evil).not.toContain("<a");
     });
 });
 

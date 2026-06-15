@@ -163,11 +163,11 @@ describe("computePromptEdit — add to existing tag", () => {
 
 describe("add-to-existing-tag preference", () => {
     afterEach(() => {
-        setAddToExistingTag(false);
+        setAddToExistingTag(true);
     });
 
-    it("defaults to off", () => {
-        expect(getAddToExistingTag()).toBe(false);
+    it("defaults to on", () => {
+        expect(getAddToExistingTag()).toBe(true);
     });
 
     it("reflects the last set value", () => {

@@ -338,6 +338,18 @@
     overflow-wrap: anywhere;
 }
 
+/* The dataset name links to its source HuggingFace repo. Keep the cell's text color, with an underline so it
+   reads as a link regardless of theme; brighten the underline on hover. */
+.quarry-remote-link {
+    color: inherit;
+    text-decoration: underline;
+    text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+}
+
+.quarry-remote-link:hover {
+    text-decoration-color: currentColor;
+}
+
 .quarry-remote-size {
     white-space: nowrap;
     text-align: right;

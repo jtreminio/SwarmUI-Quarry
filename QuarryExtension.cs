@@ -11,7 +11,7 @@ public class QuarryExtension : Extension
 {
     private string SettingsFilePath => $"{Program.DataDir}/Quarry.json";
     private static readonly SemaphoreSlim InstallLock = new(1, 1);
-    private static bool AddToExistingTag;
+    private static bool AddToExistingTag = true;
 
     public override void OnPreInit()
     {
@@ -91,7 +91,7 @@ public class QuarryExtension : Extension
             }
             JObject settings = JObject.Parse(File.ReadAllText(SettingsFilePath));
             DatasetManager.DatasetsFolder = settings.Value<string>("datasetsFolder") ?? "";
-            AddToExistingTag = settings.Value<bool?>("addToExistingTag") ?? false;
+            AddToExistingTag = settings.Value<bool?>("addToExistingTag") ?? true;
             DatasetManager.SetPromptColumns(ReadPromptColumns(settings["promptColumns"] as JObject));
             DatasetManager.SetTagColumns(ReadTagColumns(settings["tagColumns"] as JObject));
         }
@@ -207,7 +207,7 @@ public class QuarryExtension : Extension
         return Task.FromResult(BuildSettingsResponse());
     }
 
-    public Task<JObject> QuarrySaveSettings(Session session, string datasetsFolder, string promptColumnsJson, string tagColumnsJson, bool addToExistingTag = false)
+    public Task<JObject> QuarrySaveSettings(Session session, string datasetsFolder, string promptColumnsJson, string tagColumnsJson, bool addToExistingTag = true)
     {
         try
         {
