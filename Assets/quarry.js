@@ -58,30 +58,34 @@
   };
   var Q_TAG_PATTERN = "<(q(?:\\[\\d+(?:-\\d+)?\\])?):([^>]*)>";
   var splitTagInner = (inner) => {
-    const bracket = inner.indexOf("[");
-    const namesPart = bracket < 0 ? inner : inner.slice(0, bracket);
-    const filter = bracket < 0 ? "" : inner.slice(bracket);
+    const colon = inner.indexOf(":", inner.lastIndexOf("]") + 1);
+    const head = colon < 0 ? inner : inner.slice(0, colon);
+    const column = colon < 0 ? "" : inner.slice(colon);
+    const bracket = head.indexOf("[");
+    const namesPart = bracket < 0 ? head : head.slice(0, bracket);
+    const filter = bracket < 0 ? "" : head.slice(bracket);
     const names = namesPart.split(",").map((part) => part.trim()).filter((part) => part.length > 0);
-    return { names, filter };
+    return { names, filter, column };
   };
   var findQuarryTags = (value) => {
     const regex = new RegExp(Q_TAG_PATTERN, "gi");
     const tags = [];
     let match = regex.exec(value);
     while (match !== null) {
-      const { names, filter } = splitTagInner(match[2]);
+      const { names, filter, column } = splitTagInner(match[2]);
       tags.push({
         start: match.index,
         end: match.index + match[0].length,
         keyword: match[1],
         names,
-        filter
+        filter,
+        column
       });
       match = regex.exec(value);
     }
     return tags;
   };
-  var buildTag = (tag, names) => `<${tag.keyword}:${names.join(",")}${tag.filter}>`;
+  var buildTag = (tag, names) => `<${tag.keyword}:${names.join(",")}${tag.filter}${tag.column}>`;
   var trimSpacesOnly = (text) => text.replace(/^ +| +$/g, "");
   var removeDatasetFromValue = (value, name) => {
     const lower = name.toLowerCase();

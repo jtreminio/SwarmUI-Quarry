@@ -12,33 +12,54 @@ public static class QueryParser
         {
             throw new QueryParseException("Query is null.");
         }
-        int open = data.IndexOf('[');
+        (string head, string promptColumn) = SplitPromptColumn(data);
+        int open = head.IndexOf('[');
         if (open < 0)
         {
-            string bareName = data.Trim();
+            string bareName = head.Trim();
             if (bareName.Length == 0)
             {
                 throw new QueryParseException("Dataset name is empty.");
             }
-            return new Query(bareName, []);
+            return new Query(bareName, [], promptColumn);
         }
-        if (data.Length == 0 || data[^1] != ']')
+        if (head.Length == 0 || head[^1] != ']')
         {
             throw new QueryParseException($"Query '{data}' is missing a closing ']'.");
         }
-        string name = data[..open].Trim();
+        string name = head[..open].Trim();
         if (name.Length == 0)
         {
             throw new QueryParseException($"Query '{data}' has an empty name.");
         }
-        string body = data[(open + 1)..^1];
+        string body = head[(open + 1)..^1];
         List<QueryClause> clauses = ParseClauses(body, data);
         if (clauses.Count == 0)
         {
             throw new QueryParseException(
                 $"Query '{data}' has an empty '[]' filter; remove the brackets or add a clause.");
         }
-        return new Query(name, clauses);
+        return new Query(name, clauses, promptColumn);
+    }
+
+    /// Peels off the optional ":column" prompt-column override that trails the name and any "[filter]".
+    /// The separator is searched for only AFTER the filter's closing ']' so a ':' inside a filter value
+    /// (e.g. a url) is never mistaken for it. Returns the remaining head (name + filter) and the column,
+    /// or the original data and null when no override is present.
+    private static (string head, string promptColumn) SplitPromptColumn(string data)
+    {
+        int searchFrom = data.LastIndexOf(']') + 1;
+        int colon = data.IndexOf(':', searchFrom);
+        if (colon < 0)
+        {
+            return (data, null);
+        }
+        string column = data[(colon + 1)..].Trim();
+        if (column.Length == 0)
+        {
+            throw new QueryParseException($"Query '{data}' has an empty prompt column after ':'.");
+        }
+        return (data[..colon], column);
     }
 
     private static List<QueryClause> ParseClauses(string body, string original)

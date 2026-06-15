@@ -94,7 +94,7 @@ export const setAddToExistingTag = (value: boolean): void => {
 export const getAddToExistingTag = (): boolean => addToExistingTag;
 
 // Mirrors the backend reference matcher (PromptTagHandler.ReferenceTagRegex): an optional `[count]` / `[n-m]`
-// after `q`, then the inner `NAME-list[filter]`. Reserved chars `< >` can't appear inside, so `[^>]*` is safe.
+// after `q`, then the inner `NAME-list[filter]:column`. Reserved chars `< >` can't appear inside, so `[^>]*` is safe.
 const Q_TAG_PATTERN = "<(q(?:\\[\\d+(?:-\\d+)?\\])?):([^>]*)>";
 
 interface QuarryTag {
@@ -103,6 +103,7 @@ interface QuarryTag {
     keyword: string; // `q`, `q[3]`, `q[1-4]`, … — preserved when the tag is rewritten
     names: string[]; // the comma-separated dataset names, before any `[filter]`
     filter: string; // the `[...]` suffix, or "" when the tag has none
+    column: string; // the `:column` prompt-column suffix (leading `:` included), or "" when absent
 }
 
 /// The result of a dataset-name click: the new prompt text and where to put the caret.
@@ -111,16 +112,23 @@ export interface PromptEdit {
     cursor: number;
 }
 
-// Splits a tag's inner content into its dataset-name list and its (optional) `[filter]` suffix.
-const splitTagInner = (inner: string): { names: string[]; filter: string } => {
-    const bracket = inner.indexOf("[");
-    const namesPart = bracket < 0 ? inner : inner.slice(0, bracket);
-    const filter = bracket < 0 ? "" : inner.slice(bracket);
+// Splits a tag's inner content into its dataset-name list, its optional `[filter]` suffix, and its optional
+// `:column` prompt-column suffix. The `:column` is split off first, looking only past the filter's closing `]`
+// so a `:` inside a filter value is left untouched (mirrors QueryParser.SplitPromptColumn on the backend).
+const splitTagInner = (
+    inner: string,
+): { names: string[]; filter: string; column: string } => {
+    const colon = inner.indexOf(":", inner.lastIndexOf("]") + 1);
+    const head = colon < 0 ? inner : inner.slice(0, colon);
+    const column = colon < 0 ? "" : inner.slice(colon); // keeps the leading `:`
+    const bracket = head.indexOf("[");
+    const namesPart = bracket < 0 ? head : head.slice(0, bracket);
+    const filter = bracket < 0 ? "" : head.slice(bracket);
     const names = namesPart
         .split(",")
         .map((part) => part.trim())
         .filter((part) => part.length > 0);
-    return { names, filter };
+    return { names, filter, column };
 };
 
 // Every `<q:...>` tag in `value`, in order of appearance.
@@ -129,22 +137,23 @@ const findQuarryTags = (value: string): QuarryTag[] => {
     const tags: QuarryTag[] = [];
     let match: RegExpExecArray | null = regex.exec(value);
     while (match !== null) {
-        const { names, filter } = splitTagInner(match[2]);
+        const { names, filter, column } = splitTagInner(match[2]);
         tags.push({
             start: match.index,
             end: match.index + match[0].length,
             keyword: match[1],
             names,
             filter,
+            column,
         });
         match = regex.exec(value);
     }
     return tags;
 };
 
-// Rebuilds a tag with a new name list, preserving its keyword (count) and filter.
+// Rebuilds a tag with a new name list, preserving its keyword (count), filter, and prompt-column suffix.
 const buildTag = (tag: QuarryTag, names: string[]): string =>
-    `<${tag.keyword}:${names.join(",")}${tag.filter}>`;
+    `<${tag.keyword}:${names.join(",")}${tag.filter}${tag.column}>`;
 
 // Trims only ASCII spaces (matching core's trimSpaces), so tabs/newlines in multi-line prompts survive.
 const trimSpacesOnly = (text: string): string => text.replace(/^ +| +$/g, "");

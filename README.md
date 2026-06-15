@@ -72,6 +72,7 @@ This is the fun part. A Quarry tag always begins with `<q:` followed by the name
 <q:characters[tags=girl]>            a random entry tagged "girl"
 <q:characters,creatures[tags=girl]>  the same filter, across both sets
 <q:*[tags=girl]>                     the same filter, across every set
+<q:characters:caption>               read the prompt from the "caption" column
 ```
 
 Let's unpack that line by line.
@@ -120,6 +121,20 @@ Want more than one condition? Stack filters with a semicolon and Quarry requires
 
 That reads as "(punk or goth) and from civitai."
 
+### Picking the prompt column: `<q:FOO:BAR>`
+
+Every dataset has a **prompt column** — the column whose text actually lands in your prompt (Quarry guesses a sensible default, see [The prompt column](#the-prompt-column) below). Add `:column` to the **end** of a tag to read from a different column just for that tag:
+
+```
+<q:characters:caption>             read each entry's "caption" column instead of the default
+<q:characters[tags=girl]:caption>  same, but only "girl"-tagged entries — the column goes after the filter
+<q:characters,creatures:caption>   read the "caption" column across both sets
+```
+
+The column always comes **last**, after the name list and after any `[ ... ]` filter.
+
+If a dataset does not have the column you asked for, Quarry quietly falls back to that dataset's own default prompt column — and it decides **per dataset**. So with `<q:FOO,BAZ:caption>`, if `FOO` has a `caption` column but `BAZ` does not, Quarry reads `FOO`'s `caption` and `BAZ`'s default. A column override never breaks a multi-dataset tag.
+
 ### A few examples
 
 | Tag | What you get |
@@ -131,6 +146,8 @@ That reads as "(punk or goth) and from civitai."
 | `<q:midjourney[prompt=girl]>` | prompts containing "girl" |
 | `<q:*[tags=cyberpunk]>` | a cyberpunk entry from anywhere |
 | `<q:portraits-*[tags=girl]>` | a "girl" from any of your `portraits-*` sets |
+| `<q:midjourney:caption>` | any prompt, read from the `caption` column |
+| `<q:midjourney[tags=girl]:caption>` | a "girl" entry, read from the `caption` column |
 | `<q[3]:prompts[tags=punk]>` | 3 different punk prompts |
 
 ## Build tags by clicking
@@ -148,6 +165,8 @@ Each dataset row in the tab has two column settings, and Quarry fills both in wi
 ### The prompt column
 
 This is the column whose text actually lands in your prompt. Quarry guesses it by looking for an obvious name like `prompt`, `text`, `caption`, `description`, or `value`, and if none of those exist it just uses the first column in the file. Guessed wrong? Pick the right one from the dropdown and click **Save Settings**.
+
+This setting is the default for every tag. Want a different column for one tag only? Append `:column` to the tag itself — see [Picking the prompt column](#picking-the-prompt-column-qfoobar) above.
 
 ### The tag columns
 

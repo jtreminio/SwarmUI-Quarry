@@ -161,6 +161,37 @@ describe("computePromptEdit — add to existing tag", () => {
     });
 });
 
+describe("computePromptEdit — prompt-column suffix is preserved", () => {
+    it("appends to a column tag, keeping the :column at the end (<q:A:c> + B -> <q:A,B:c>)", () => {
+        expect(computePromptEdit("<q:A:c>", 7, "B", true).value).toBe(
+            "<q:A,B:c>",
+        );
+    });
+
+    it("appends into a filtered column tag (<q:A[tags=x]:c> + B -> <q:A,B[tags=x]:c>)", () => {
+        expect(computePromptEdit("<q:A[tags=x]:c>", 15, "B", true).value).toBe(
+            "<q:A,B[tags=x]:c>",
+        );
+    });
+
+    it("drops one name from a column tag, keeping the :column (<q:A,B:c> - A -> <q:B:c>)", () => {
+        expect(computePromptEdit("<q:A,B:c>", 0, "A", false).value).toBe(
+            "<q:B:c>",
+        );
+    });
+
+    it("removes a whole column tag when its only dataset is clicked", () => {
+        expect(computePromptEdit("<q:A:c>", 0, "A", false).value).toBe("");
+    });
+
+    it("does not treat a `:` inside a filter value as a column suffix", () => {
+        // <q:A[url=http://x]> + B must still merge as a plain filtered tag, leaving the value's `:` alone.
+        expect(
+            computePromptEdit("<q:A[url=http://x]>", 19, "B", true).value,
+        ).toBe("<q:A,B[url=http://x]>");
+    });
+});
+
 describe("add-to-existing-tag preference", () => {
     afterEach(() => {
         setAddToExistingTag(true);

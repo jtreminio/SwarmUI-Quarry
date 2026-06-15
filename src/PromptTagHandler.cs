@@ -230,7 +230,8 @@ public static class PromptTagHandler
     private static PlanDraft DraftPlan(Query query, DatasetEntry entry, T2IPromptHandling.PromptTagContext context)
     {
         ColumnSchema schema = DatasetManager.GetSchema(entry);
-        string promptColumn = PromptColumnResolver.Resolve(DatasetManager.GetConfiguredPromptColumn(entry.Name), schema);
+        string promptColumn = PromptColumnResolver.Resolve(
+            query.PromptColumn, DatasetManager.GetConfiguredPromptColumn(entry.Name), schema);
         if (promptColumn is null)
         {
             context.TrackWarning($"Quarry dataset '{entry.Name}' has no columns to read.");
