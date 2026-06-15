@@ -175,7 +175,10 @@ public static class WildcardHandler
         {
             return null;
         }
-        List<string> usedWildcards = context.Input.ExtraMeta.GetOrCreate("used_wildcards", () => new List<string>()) as List<string>;
+        // Quarry tracks its own contributions in `used_quarry` (kept separate from core's `used_wildcards`),
+        // so a <q:...> datafile is reported distinctly from a real wildcard. Core serializes every ExtraMeta
+        // key into the saved image metadata, so this surfaces there automatically.
+        List<string> usedQuarry = context.Input.ExtraMeta.GetOrCreate("used_quarry", () => new List<string>()) as List<string>;
 
         bool indexBehavior = context.Input.Get(T2IParamTypes.WildcardSeedBehavior, "Random") == "Index";
         Func<long> nextIndex = indexBehavior
@@ -192,8 +195,8 @@ public static class WildcardHandler
             total += matched[i].Count;
         }
 
-        // Record a file in the used-wildcard metadata only when a pick actually lands on it — not every
-        // candidate of a comma/glob fan-out — so SwarmUI reports what truly contributed. First-hit order.
+        // Record a file in the used_quarry metadata only when a pick actually lands on it — not every
+        // candidate of a comma/glob fan-out — so the saved metadata reports what truly contributed. First-hit order.
         List<string> hitOrdered = [];
         HashSet<string> hit = [];
 
@@ -222,9 +225,9 @@ public static class WildcardHandler
 
         foreach (string name in hitOrdered)
         {
-            if (!usedWildcards.Contains(name))
+            if (!usedQuarry.Contains(name))
             {
-                usedWildcards.Add(name);
+                usedQuarry.Add(name);
             }
         }
         return result;

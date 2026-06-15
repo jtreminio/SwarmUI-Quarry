@@ -197,12 +197,31 @@ public static class DatasetManager
         return count;
     }
 
+    /// <summary>Reads a dataset's usable-pick row count from the cache only, never scanning. Returns false when
+    /// the cache holds no count for this file's current hash and the given prompt column (never warmed/previewed,
+    /// file changed, or the resolved column changed). Lets counts computed in a prior session — loaded from disk
+    /// on startup — show on first load without a Refresh.</summary>
+    public static bool TryGetCachedRowCount(DatasetEntry entry, string promptColumn, out long count)
+    {
+        count = 0;
+        string column = promptColumn ?? "";
+        if (Cache.TryGetValue(entry.WildcardName.ToLowerFast(), out CacheEntry cached) && cached.Hash == entry.FileHash
+            && cached.HasRowCount && cached.RowCountColumn == column)
+        {
+            count = cached.RowCount;
+            return true;
+        }
+        return false;
+    }
+
     /// <summary>Per-dataset info for the settings UI: columns (name + list-ness) and the resolved prompt column.
     /// Reading the schema is cheap (DuckDB samples it, bounded regardless of file size), so it is always
-    /// included. The row count is a full-scan count that scales with file size, so by default it is left null
-    /// (<c>includeRowCounts: false</c>) and loaded lazily, one dataset at a time, when the user previews it —
-    /// see <see cref="GetUsableRowCount"/>. Eagerly counting every dataset here is what made an initial load
-    /// hang, and made large datasets appear to never load.</summary>
+    /// included. A row count is a full-scan that scales with file size, so it is surfaced from the cache
+    /// whenever one exists (e.g. warmed in a prior session and loaded from disk on startup) — letting counts
+    /// show on first load without a Refresh. Only when <paramref name="includeRowCounts"/> is set (the Refresh
+    /// path, after a warm) is an uncached count computed by a fresh scan; otherwise it is left null and loaded
+    /// lazily when the user previews that dataset (see <see cref="GetUsableRowCount"/>). Eagerly counting every
+    /// dataset here is what made an initial load hang, and made large datasets appear to never load.</summary>
     public static List<DatasetInfo> GetDatasetsInfo(bool includeRowCounts = false)
     {
         List<DatasetInfo> result = [];
@@ -212,8 +231,10 @@ public static class DatasetManager
             {
                 ColumnSchema schema = GetSchema(entry);
                 string resolved = PromptColumnResolver.Resolve(GetConfiguredPromptColumn(entry.WildcardName), schema);
-                long? rowCount = null;
-                if (includeRowCounts)
+                // Always show a cached count if we have one (so prior-session counts appear without a Refresh);
+                // only scan for a missing one when explicitly asked (the Refresh path, which warms first).
+                long? rowCount = TryGetCachedRowCount(entry, resolved, out long cachedCount) ? cachedCount : null;
+                if (rowCount is null && includeRowCounts)
                 {
                     try
                     {
