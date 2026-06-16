@@ -4,7 +4,7 @@
   var escapeHtml = (text) => {
     const div = document.createElement("div");
     div.textContent = text;
-    return div.innerHTML;
+    return div.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   };
   var formatBytes = (bytes) => {
     if (bytes == null || bytes < 0) {
@@ -400,11 +400,707 @@
     recomputeReferences();
   };
 
+  // frontend/searchtab.ts
+  var TAB_ID = "ImageSearch-Tab";
+  var IMAGE_SEARCH_BODY_ID = "imagesearch-tab-body";
+  var registerTabWithLayout = (navLink) => {
+    if (typeof genTabLayout === "undefined" || !genTabLayout) {
+      return;
+    }
+    const tab = new MovableGenTab(navLink, genTabLayout);
+    genTabLayout.managedTabs.push(tab);
+    if (genTabLayout.managedTabContainers.length > 0) {
+      tab.contentElem.style.height = "100%";
+      tab.contentElem.style.width = "100%";
+      if (!genTabLayout.managedTabContainers.includes(
+        tab.contentElem.parentElement
+      )) {
+        genTabLayout.managedTabContainers.push(
+          tab.contentElem.parentElement
+        );
+      }
+      tab.update();
+      tab.navElem.addEventListener(
+        "click",
+        () => browserUtil.makeVisible(tab.contentElem)
+      );
+      genTabLayout.reapplyPositions();
+    }
+  };
+  var injectImageSearchTab = (onFirstShow) => {
+    const nav = document.getElementById("bottombartabcollection");
+    const content = document.getElementById("t2i_bottom_bar_content");
+    if (!nav || !content || document.getElementById(TAB_ID)) {
+      return;
+    }
+    const li = document.createElement("li");
+    li.className = "nav-item";
+    li.setAttribute("role", "presentation");
+    li.innerHTML = `<a class="nav-link translate" data-bs-toggle="tab" href="#${TAB_ID}" id="imagesearchtabbutton" aria-selected="false" tabindex="-1" role="tab">Image Search</a>`;
+    const historyNav = nav.querySelector("#imagehistorytabclickable");
+    if (historyNav?.parentElement) {
+      historyNav.parentElement.insertAdjacentElement("afterend", li);
+    } else {
+      nav.appendChild(li);
+    }
+    const pane = document.createElement("div");
+    pane.className = "tab-pane genpage-bottom-tab";
+    pane.id = TAB_ID;
+    pane.setAttribute("role", "tabpanel");
+    pane.innerHTML = `<div class="imagesearch-body" id="${IMAGE_SEARCH_BODY_ID}"></div>`;
+    content.appendChild(pane);
+    const navLink = li.querySelector("a");
+    if (navLink) {
+      registerTabWithLayout(navLink);
+      let initialized = false;
+      navLink.addEventListener("click", () => {
+        if (!initialized) {
+          initialized = true;
+          onFirstShow();
+        }
+      });
+    }
+  };
+
+  // frontend/search.ts
+  var POLL_MS = 800;
+  var SEARCH_LIMIT = 2e3;
+  var LOAD_MORE_SIZE = 1e3;
+  var operatorsForType = (catalog, type) => catalog[type] ?? [];
+  var opNeedsValue = (op) => op !== "is_true" && op !== "is_false";
+  var buildSearchRequest = (rows) => rows.filter(
+    (row) => row.field && row.op && (!opNeedsValue(row.op) || row.value.trim() !== "")
+  ).map((row) => ({
+    field: row.field,
+    op: row.op,
+    value: opNeedsValue(row.op) ? row.value : ""
+  }));
+  var rowToObject = (columns, row) => {
+    const obj = {};
+    for (let i = 0; i < columns.length; i++) {
+      obj[columns[i]] = row[i] ?? "";
+    }
+    return obj;
+  };
+  var resultsInfoText = (hasIndex2, shown, total2) => {
+    if (!hasIndex2) {
+      return "";
+    }
+    if (total2 === 0) {
+      return "No matching images.";
+    }
+    if (shown < total2) {
+      return `Showing ${shown} of ${total2} matches.`;
+    }
+    return `${total2} match${total2 === 1 ? "" : "es"}.`;
+  };
+  var loadMoreState = (available2, hasIndex2, shown, total2, pageSize, busy) => {
+    const remaining = total2 - shown;
+    if (!available2 || !hasIndex2 || remaining <= 0) {
+      return { visible: false, disabled: true, label: "" };
+    }
+    const next = Math.min(pageSize, remaining);
+    return {
+      visible: true,
+      disabled: busy,
+      label: busy ? "Loading…" : `Load ${next} more (${remaining} remaining)`
+    };
+  };
+  var coreFields = [];
+  var discoveredFields = [];
+  var operatorCatalog = {};
+  var available = true;
+  var hasIndex = false;
+  var total = 0;
+  var scanPollTimer = null;
+  var browser = null;
+  var loadedFiles = [];
+  var loadMoreBusy = false;
+  var searchPending = false;
+  var searchGeneration = 0;
+  var body = () => document.getElementById(IMAGE_SEARCH_BODY_ID);
+  var el = (id) => document.getElementById(id);
+  var request = (url, data, onOk, onErr) => {
+    genericRequest(
+      url,
+      data,
+      onOk,
+      0,
+      onErr ? (e) => onErr(typeof e === "string" ? e : "Request failed.") : null
+    );
+  };
+  var fieldOptionsHtml = () => {
+    const core = coreFields.map(
+      (field) => `<option value="${escapeHtml(field.name)}" data-type="${field.type}">${escapeHtml(field.label)}</option>`
+    ).join("");
+    const discovered = discoveredFields.map(
+      (name) => `<option value="${escapeHtml(name)}" data-type="discovered">${escapeHtml(name)}</option>`
+    ).join("");
+    const discoveredGroup = discovered ? `<optgroup label="Discovered fields">${discovered}</optgroup>` : "";
+    return `<optgroup label="Fields">${core}</optgroup>${discoveredGroup}`;
+  };
+  var opOptionsHtml = (type) => operatorsForType(operatorCatalog, type).map(
+    (op) => `<option value="${escapeHtml(op.value)}">${escapeHtml(op.label)}</option>`
+  ).join("");
+  var filterRowHtml = () => `<div class="imagesearch-filter-row">
+        <select class="imagesearch-field auto-dropdown">${fieldOptionsHtml()}</select>
+        <select class="imagesearch-op auto-dropdown">${opOptionsHtml(firstFieldType())}</select>
+        <input type="text" class="imagesearch-value auto-text" placeholder="value" autocomplete="off">
+        <button type="button" class="basic-button imagesearch-remove" title="Remove this filter">✕</button>
+    </div>`;
+  var firstFieldType = () => coreFields[0]?.type ?? "text";
+  var skeletonHtml = () => `<div class="imagesearch-top">
+        <div class="imagesearch-header">
+            <div class="imagesearch-title-row">
+                <span class="imagesearch-title">Search your image history</span>
+                <span class="imagesearch-scan-controls">
+                    <button type="button" class="basic-button" id="imagesearch-rescan">Rescan history</button>
+                    <button type="button" class="basic-button" id="imagesearch-cancel-scan" style="display:none">Cancel</button>
+                </span>
+            </div>
+            <div class="imagesearch-progress quarry-dl-progress" id="imagesearch-progress" style="display:none">
+                <div class="quarry-dl-bar" id="imagesearch-progress-bar"></div>
+            </div>
+            <div class="imagesearch-status" id="imagesearch-status"></div>
+            <div class="imagesearch-notice" id="imagesearch-notice"></div>
+        </div>
+        <div class="imagesearch-controls" id="imagesearch-controls">
+            <div class="imagesearch-filters" id="imagesearch-filters"></div>
+            <div class="imagesearch-actions">
+                <button type="button" class="basic-button" id="imagesearch-add-filter">+ Add filter</button>
+                <span class="imagesearch-spacer"></span>
+                <label for="imagesearch-sort">Sort:</label>
+                <select id="imagesearch-sort" class="auto-dropdown">
+                    <option value="date-desc">Newest first</option>
+                    <option value="date-asc">Oldest first</option>
+                    <option value="name-asc">Name A–Z</option>
+                    <option value="name-desc">Name Z–A</option>
+                </select>
+                <button type="button" class="basic-button imagesearch-search-button" id="imagesearch-search">Search</button>
+            </div>
+        </div>
+        <div class="imagesearch-results-info" id="imagesearch-results-info"></div>
+    </div>
+    <div class="browser_container imagesearch-results-browser" id="imagesearch-results-browser"></div>
+    <div class="imagesearch-loadmore" id="imagesearch-loadmore" style="display:none">
+        <button type="button" class="basic-button imagesearch-loadmore-button" id="imagesearch-loadmore-btn">Load more</button>
+    </div>`;
+  var readFilters = () => {
+    const rows = [];
+    for (const row of Array.from(
+      document.querySelectorAll(".imagesearch-filter-row")
+    )) {
+      const field = row.querySelector(".imagesearch-field")?.value ?? "";
+      const op = row.querySelector(".imagesearch-op")?.value ?? "";
+      const value = row.querySelector(".imagesearch-value")?.value ?? "";
+      rows.push({ field, op, value });
+    }
+    return rows;
+  };
+  var sortParams = () => {
+    const value = el("imagesearch-sort")?.value ?? "date-desc";
+    const [sortBy, dir] = value.split("-");
+    return { sortBy, sortDescending: dir !== "asc" };
+  };
+  var basename = (path) => {
+    const slash = path.lastIndexOf("/");
+    return slash >= 0 ? path.slice(slash + 1) : path;
+  };
+  var toBrowserFile = (obj) => {
+    const path = obj.path ?? "";
+    return {
+      name: path,
+      data: {
+        src: `${getImageOutPrefix()}/${path}`,
+        fullsrc: path,
+        name: basename(path),
+        metadata: obj.full_metadata ?? ""
+      }
+    };
+  };
+  var listResults = (_folder, _isRefresh, callback, _depth) => {
+    searchGeneration++;
+    searchPending = true;
+    loadMoreBusy = false;
+    if (!available) {
+      loadedFiles = [];
+      searchPending = false;
+      updateResultsUI();
+      callback([], []);
+      return;
+    }
+    const { sortBy, sortDescending } = sortParams();
+    const filters = buildSearchRequest(readFilters());
+    request(
+      "QuarrySearchImageHistory",
+      {
+        filtersJson: JSON.stringify(filters),
+        sortBy,
+        sortDescending,
+        limit: SEARCH_LIMIT,
+        offset: 0
+      },
+      (data) => {
+        searchPending = false;
+        available = data.available ?? true;
+        hasIndex = data.hasIndex ?? false;
+        total = data.total ?? 0;
+        const columns = data.columns ?? [];
+        loadedFiles = (data.rows ?? []).map(
+          (row) => toBrowserFile(rowToObject(columns, row))
+        );
+        updateResultsUI();
+        reflectAvailability();
+        callback([], loadedFiles);
+      },
+      (message) => {
+        searchPending = false;
+        setNotice(message, "error");
+        loadedFiles = [];
+        updateResultsUI();
+        callback([], []);
+      }
+    );
+  };
+  var selectResult = (file, div) => {
+    selectOutputInHistory(file, div);
+    const results = el("imagesearch-results-browser");
+    if (!results) {
+      return;
+    }
+    for (const block of Array.from(
+      results.getElementsByClassName("image-block")
+    )) {
+      block.classList.toggle("image-block-current", block === div);
+    }
+  };
+  var ensureBrowser = () => {
+    if (browser) {
+      return;
+    }
+    browser = new GenPageBrowserClass(
+      "imagesearch-results-browser",
+      listResults,
+      "quarryimagesearch",
+      "Thumbnails",
+      describeOutputFile,
+      selectResult
+    );
+    browser.showDepth = false;
+    browser.showUpFolder = false;
+    browser.showFilter = false;
+    browser.allowMultiSelect = true;
+    body()?.addEventListener("scroll", () => {
+      const scroller = body();
+      if (scroller) {
+        browserUtil.makeVisible(scroller);
+      }
+    });
+  };
+  var runSearch = () => {
+    if (!available) {
+      return;
+    }
+    ensureBrowser();
+    browser?.lightRefresh();
+    updateLoadMore();
+  };
+  var appendResults = (newFiles) => {
+    const startId = loadedFiles.length;
+    loadedFiles = loadedFiles.concat(newFiles);
+    if (!browser?.contentDiv || newFiles.length === 0) {
+      return;
+    }
+    browser.lastFiles = loadedFiles;
+    if (browser.lastListCache) {
+      browser.lastListCache.files = loadedFiles;
+    }
+    browser.buildContentList(browser.contentDiv, newFiles, null, startId);
+    if (browser.headerCount) {
+      browser.headerCount.textContent = String(loadedFiles.length);
+    }
+  };
+  var loadMore = () => {
+    if (!available || searchPending || loadMoreBusy || loadedFiles.length >= total || !browser?.contentDiv) {
+      return;
+    }
+    const gen = searchGeneration;
+    loadMoreBusy = true;
+    updateLoadMore();
+    const { sortBy, sortDescending } = sortParams();
+    const filters = buildSearchRequest(readFilters());
+    request(
+      "QuarrySearchImageHistory",
+      {
+        filtersJson: JSON.stringify(filters),
+        sortBy,
+        sortDescending,
+        limit: LOAD_MORE_SIZE,
+        offset: loadedFiles.length
+      },
+      (data) => {
+        if (gen !== searchGeneration) {
+          return;
+        }
+        loadMoreBusy = false;
+        total = data.total ?? total;
+        const columns = data.columns ?? [];
+        appendResults(
+          (data.rows ?? []).map(
+            (row) => toBrowserFile(rowToObject(columns, row))
+          )
+        );
+        updateResultsUI();
+      },
+      (message) => {
+        if (gen !== searchGeneration) {
+          return;
+        }
+        loadMoreBusy = false;
+        setNotice(message || "Could not load more results.", "error");
+        updateLoadMore();
+      }
+    );
+  };
+  var setNotice = (text, type = "info") => {
+    const notice = el("imagesearch-notice");
+    if (notice) {
+      notice.textContent = text;
+      notice.className = text ? `imagesearch-notice imagesearch-notice-${type}` : "imagesearch-notice";
+    }
+  };
+  var updateResultsInfo = () => {
+    const info = el("imagesearch-results-info");
+    if (info) {
+      info.textContent = resultsInfoText(hasIndex, loadedFiles.length, total);
+    }
+  };
+  var updateLoadMore = () => {
+    const wrap = el("imagesearch-loadmore");
+    const button = el("imagesearch-loadmore-btn");
+    if (!wrap || !button) {
+      return;
+    }
+    const state = loadMoreState(
+      available,
+      hasIndex,
+      loadedFiles.length,
+      total,
+      LOAD_MORE_SIZE,
+      loadMoreBusy || searchPending
+    );
+    wrap.style.display = state.visible ? "" : "none";
+    button.disabled = state.disabled;
+    if (state.visible) {
+      button.textContent = state.label;
+    }
+  };
+  var updateResultsUI = () => {
+    updateResultsInfo();
+    updateLoadMore();
+  };
+  var reflectAvailability = () => {
+    const controls = el("imagesearch-controls");
+    const rescan = el("imagesearch-rescan");
+    const results = el("imagesearch-results-browser");
+    const loadmore = el("imagesearch-loadmore");
+    if (!available) {
+      if (controls) {
+        controls.style.display = "none";
+      }
+      if (results) {
+        results.style.display = "none";
+      }
+      if (loadmore) {
+        loadmore.style.display = "none";
+      }
+      if (rescan) {
+        rescan.disabled = true;
+      }
+      setNotice(
+        "Image Search needs Quarry's Lance reader. Open the Quarry tab and install requirements, then come back.",
+        "error"
+      );
+      return;
+    }
+    if (rescan) {
+      rescan.disabled = false;
+    }
+    if (controls) {
+      controls.style.display = "";
+    }
+    if (results) {
+      results.style.display = "";
+    }
+    if (!hasIndex) {
+      setNotice(
+        "Your image history hasn't been indexed yet. Click “Rescan history” to build the search index.",
+        "info"
+      );
+    } else if ((el("imagesearch-notice")?.className ?? "").includes(
+      "imagesearch-notice-info"
+    )) {
+      setNotice("");
+    }
+  };
+  var loadFields = (then) => {
+    request(
+      "QuarryImageHistoryFields",
+      {},
+      (data) => {
+        if (data.success) {
+          coreFields = data.coreFields ?? [];
+          discoveredFields = data.discoveredFields ?? [];
+          operatorCatalog = data.operators ?? {};
+          available = data.available ?? true;
+          hasIndex = data.hasIndex ?? false;
+          refreshFieldDropdowns();
+          reflectAvailability();
+        }
+        then?.();
+      },
+      (message) => {
+        setNotice(message, "error");
+        then?.();
+      }
+    );
+  };
+  var refreshFieldDropdowns = () => {
+    for (const fieldSelect of Array.from(
+      document.querySelectorAll(".imagesearch-field")
+    )) {
+      const previous = fieldSelect.value;
+      fieldSelect.innerHTML = fieldOptionsHtml();
+      if (Array.from(fieldSelect.options).some((o) => o.value === previous)) {
+        fieldSelect.value = previous;
+      }
+    }
+  };
+  var addFilterRow = () => {
+    const container = el("imagesearch-filters");
+    if (!container) {
+      return;
+    }
+    container.insertAdjacentHTML("beforeend", filterRowHtml());
+  };
+  var ensureOneFilterRow = () => {
+    if (!document.querySelector(".imagesearch-filter-row")) {
+      addFilterRow();
+    }
+  };
+  var onFieldChanged = (row) => {
+    const fieldSelect = row.querySelector(".imagesearch-field");
+    const opSelect = row.querySelector(".imagesearch-op");
+    const value = row.querySelector(".imagesearch-value");
+    if (!fieldSelect || !opSelect) {
+      return;
+    }
+    const selected = fieldSelect.options[fieldSelect.selectedIndex];
+    const type = selected?.getAttribute("data-type") ?? "text";
+    opSelect.innerHTML = opOptionsHtml(type);
+    if (value) {
+      value.style.display = opNeedsValue(opSelect.value) ? "" : "none";
+    }
+  };
+  var onOpChanged = (row) => {
+    const opSelect = row.querySelector(".imagesearch-op");
+    const value = row.querySelector(".imagesearch-value");
+    if (opSelect && value) {
+      value.style.display = opNeedsValue(opSelect.value) ? "" : "none";
+    }
+  };
+  var setScanUI = (scanning) => {
+    const rescan = el("imagesearch-rescan");
+    const cancel = el("imagesearch-cancel-scan");
+    const progress = el("imagesearch-progress");
+    if (rescan) {
+      rescan.disabled = scanning;
+    }
+    if (cancel) {
+      cancel.style.display = scanning ? "" : "none";
+    }
+    if (progress) {
+      progress.style.display = scanning ? "" : "none";
+    }
+  };
+  var renderScanStatus = (status) => {
+    const bar = el("imagesearch-progress-bar");
+    const statusEl = el("imagesearch-status");
+    const totalFiles = status.filesTotal ?? 0;
+    const done = status.filesDone ?? 0;
+    const percent = totalFiles > 0 ? Math.min(100, Math.round(done / totalFiles * 100)) : 0;
+    if (bar) {
+      bar.style.width = `${percent}%`;
+    }
+    if (statusEl) {
+      if (status.state === "scanning") {
+        statusEl.textContent = `Scanning… ${done} / ${totalFiles} files (${status.filesIndexed ?? 0} indexed)`;
+      } else if (status.state === "finalizing") {
+        statusEl.textContent = "Writing index…";
+      } else if (status.state === "starting") {
+        statusEl.textContent = "Starting…";
+      } else {
+        statusEl.textContent = "";
+      }
+    }
+  };
+  var stopScanPolling = () => {
+    if (scanPollTimer) {
+      clearTimeout(scanPollTimer);
+      scanPollTimer = null;
+    }
+  };
+  var pollScanOnce = () => {
+    scanPollTimer = null;
+    request(
+      "QuarryImageHistoryStatus",
+      {},
+      (status) => {
+        if (!status.success) {
+          scanPollTimer = setTimeout(pollScanOnce, POLL_MS);
+          return;
+        }
+        renderScanStatus(status);
+        if (status.active) {
+          scanPollTimer = setTimeout(pollScanOnce, POLL_MS);
+          return;
+        }
+        finishScan(status);
+      },
+      () => {
+        scanPollTimer = setTimeout(pollScanOnce, POLL_MS);
+      }
+    );
+  };
+  var finishScan = (status) => {
+    stopScanPolling();
+    setScanUI(false);
+    available = status.available ?? available;
+    hasIndex = status.hasIndex ?? hasIndex;
+    const statusEl = el("imagesearch-status");
+    if (status.state === "error") {
+      setNotice(
+        `Scan failed: ${status.scanError ?? "unknown error"}`,
+        "error"
+      );
+    } else if (status.state === "cancelled") {
+      if (statusEl) {
+        statusEl.textContent = "Scan cancelled.";
+      }
+    } else if (status.state === "done") {
+      if (statusEl) {
+        statusEl.textContent = `Done — indexed ${status.filesIndexed ?? 0}, pruned ${status.filesPruned ?? 0}.`;
+      }
+      loadFields(() => runSearch());
+    }
+  };
+  var startRescan = () => {
+    setScanUI(true);
+    setNotice("");
+    const statusEl = el("imagesearch-status");
+    if (statusEl) {
+      statusEl.textContent = "Starting…";
+    }
+    request(
+      "QuarryRescanImageHistory",
+      {},
+      () => {
+        if (!scanPollTimer) {
+          pollScanOnce();
+        }
+      },
+      (message) => {
+        setScanUI(false);
+        setNotice(message || "Could not start the scan.", "error");
+      }
+    );
+  };
+  var cancelRescan = () => {
+    request(
+      "QuarryCancelImageHistoryScan",
+      {},
+      () => {
+      },
+      () => {
+      }
+    );
+  };
+  var resumeScanIfActive = () => {
+    request(
+      "QuarryImageHistoryStatus",
+      {},
+      (status) => {
+        if (status.success && status.active) {
+          setScanUI(true);
+          renderScanStatus(status);
+          if (!scanPollTimer) {
+            pollScanOnce();
+          }
+        }
+      },
+      () => {
+      }
+      // best-effort resume; ignore a status hiccup on first open
+    );
+  };
+  var wireEvents = () => {
+    if (!body()) {
+      return;
+    }
+    el("imagesearch-add-filter")?.addEventListener("click", addFilterRow);
+    el("imagesearch-search")?.addEventListener("click", runSearch);
+    el("imagesearch-loadmore-btn")?.addEventListener("click", loadMore);
+    el("imagesearch-rescan")?.addEventListener("click", startRescan);
+    el("imagesearch-cancel-scan")?.addEventListener("click", cancelRescan);
+    el("imagesearch-sort")?.addEventListener("change", runSearch);
+    el("imagesearch-filters")?.addEventListener("change", (event) => {
+      const target = event.target;
+      const row = target?.closest(".imagesearch-filter-row");
+      if (!row) {
+        return;
+      }
+      if (target?.classList.contains("imagesearch-field")) {
+        onFieldChanged(row);
+      } else if (target?.classList.contains("imagesearch-op")) {
+        onOpChanged(row);
+      }
+    });
+    el("imagesearch-filters")?.addEventListener("click", (event) => {
+      const target = event.target;
+      if (target?.closest(".imagesearch-remove")) {
+        target.closest(".imagesearch-filter-row")?.remove();
+        ensureOneFilterRow();
+      }
+    });
+    el("imagesearch-filters")?.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        runSearch();
+      }
+    });
+  };
+  var initImageSearch = () => {
+    const container = body();
+    if (!container || container.dataset.built === "true") {
+      return;
+    }
+    container.dataset.built = "true";
+    container.innerHTML = skeletonHtml();
+    wireEvents();
+    loadFields(() => {
+      ensureOneFilterRow();
+      if (available && hasIndex) {
+        runSearch();
+      }
+      resumeScanIfActive();
+    });
+  };
+
   // frontend/download.ts
   var MODAL_ID = "quarry-download-modal";
   var BODY_ID = "quarry-download-body";
   var MESSAGE_ID = "quarry-download-message";
-  var POLL_MS = 800;
+  var POLL_MS2 = 800;
   var sourceRepoUrl = (name) => {
     const dot = name.indexOf(".");
     if (dot <= 0 || dot >= name.length - 1) {
@@ -444,12 +1140,12 @@
     </table>`;
   };
   var progressPercent = (status) => {
-    const total = status.bytesTotal ?? 0;
+    const total2 = status.bytesTotal ?? 0;
     const done = status.bytesDone ?? 0;
-    if (total <= 0) {
+    if (total2 <= 0) {
       return 0;
     }
-    return Math.min(100, Math.max(0, Math.round(done / total * 100)));
+    return Math.min(100, Math.max(0, Math.round(done / total2 * 100)));
   };
   var renderProgressInfo = (status) => {
     if (status.state === "starting") {
@@ -483,29 +1179,29 @@
     return `<div class="quarry-download-note">${currentList.length} dataset(s) from ${repo}.${tokenHint}</div>`;
   };
   var renderList = () => {
-    const body = document.getElementById(BODY_ID);
-    if (body) {
-      body.innerHTML = renderNote() + renderRemoteDatasets(currentList);
+    const body2 = document.getElementById(BODY_ID);
+    if (body2) {
+      body2.innerHTML = renderNote() + renderRemoteDatasets(currentList);
     }
   };
   var showMessage = (text, type = "info") => {
-    const el = document.getElementById(MESSAGE_ID);
-    if (!el) {
+    const el2 = document.getElementById(MESSAGE_ID);
+    if (!el2) {
       return;
     }
-    el.textContent = text;
-    el.className = text ? `quarry-download-message quarry-download-message-${type}` : "quarry-download-message";
+    el2.textContent = text;
+    el2.className = text ? `quarry-download-message quarry-download-message-${type}` : "quarry-download-message";
   };
   var renderActionProgress = (status) => `<div class="quarry-dl-progress"><div class="quarry-dl-bar" style="width: ${progressPercent(status)}%"></div></div>
      <div class="quarry-dl-info">${escapeHtml(renderProgressInfo(status))}</div>
      <button type="button" class="basic-button quarry-remote-cancel">Cancel</button>`;
   var rowFor = (name) => {
-    const body = document.getElementById(BODY_ID);
-    if (!body) {
+    const body2 = document.getElementById(BODY_ID);
+    if (!body2) {
       return null;
     }
     for (const row of Array.from(
-      body.querySelectorAll("tr.quarry-remote-row")
+      body2.querySelectorAll("tr.quarry-remote-row")
     )) {
       if (row.getAttribute("data-dataset") === name) {
         return row;
@@ -514,12 +1210,12 @@
     return null;
   };
   var markDownloadingUI = (name) => {
-    const body = document.getElementById(BODY_ID);
-    if (!body) {
+    const body2 = document.getElementById(BODY_ID);
+    if (!body2) {
       return;
     }
     for (const button of Array.from(
-      body.querySelectorAll(".quarry-remote-download")
+      body2.querySelectorAll(".quarry-remote-download")
     )) {
       button.disabled = true;
     }
@@ -557,7 +1253,7 @@
     }
   };
   var scheduleNextPoll = () => {
-    pollTimer = setTimeout(pollOnce, POLL_MS);
+    pollTimer = setTimeout(pollOnce, POLL_MS2);
   };
   var finishDownload = (status) => {
     stopPolling();
@@ -659,17 +1355,17 @@
     });
   };
   var loadAvailable = () => {
-    const body = document.getElementById(BODY_ID);
-    if (body) {
-      body.innerHTML = `<div class="quarry-download-loading">Loading…</div>`;
+    const body2 = document.getElementById(BODY_ID);
+    if (body2) {
+      body2.innerHTML = `<div class="quarry-download-loading">Loading…</div>`;
     }
     genericRequest(
       "QuarryListAvailableDatasets",
       {},
       (data) => {
         if (!data.success) {
-          if (body) {
-            body.innerHTML = `<div class="quarry-download-error">${escapeHtml(data.error ?? "Failed to load the dataset list.")}</div>`;
+          if (body2) {
+            body2.innerHTML = `<div class="quarry-download-error">${escapeHtml(data.error ?? "Failed to load the dataset list.")}</div>`;
           }
           return;
         }
@@ -744,9 +1440,9 @@
   };
 
   // frontend/tab.ts
-  var TAB_ID = "Quarry-Tab";
+  var TAB_ID2 = "Quarry-Tab";
   var QUARRY_TAB_BODY_ID = "quarry-tab-body";
-  var registerTabWithLayout = (navLink) => {
+  var registerTabWithLayout2 = (navLink) => {
     if (typeof genTabLayout === "undefined" || !genTabLayout) {
       return;
     }
@@ -773,13 +1469,13 @@
   var injectQuarryTab = () => {
     const nav = document.getElementById("bottombartabcollection");
     const content = document.getElementById("t2i_bottom_bar_content");
-    if (!nav || !content || document.getElementById(TAB_ID)) {
+    if (!nav || !content || document.getElementById(TAB_ID2)) {
       return;
     }
     const li = document.createElement("li");
     li.className = "nav-item";
     li.setAttribute("role", "presentation");
-    li.innerHTML = `<a class="nav-link translate" data-bs-toggle="tab" href="#${TAB_ID}" aria-selected="false" tabindex="-1" role="tab">Quarry</a>`;
+    li.innerHTML = `<a class="nav-link translate" data-bs-toggle="tab" href="#${TAB_ID2}" aria-selected="false" tabindex="-1" role="tab">Quarry</a>`;
     const toolsNav = nav.querySelector('a[href="#Tools-Tab"]');
     if (toolsNav?.parentElement) {
       nav.insertBefore(li, toolsNav.parentElement);
@@ -788,13 +1484,13 @@
     }
     const pane = document.createElement("div");
     pane.className = "tab-pane genpage-bottom-tab";
-    pane.id = TAB_ID;
+    pane.id = TAB_ID2;
     pane.setAttribute("role", "tabpanel");
     pane.innerHTML = `<div class="quarry-tab-body" id="${QUARRY_TAB_BODY_ID}"></div>`;
     content.appendChild(pane);
     const navLink = li.querySelector("a");
     if (navLink) {
-      registerTabWithLayout(navLink);
+      registerTabWithLayout2(navLink);
     }
   };
 
@@ -868,16 +1564,16 @@
             <tbody><tr><td class="quarry-preview-empty" colspan="${columns.length}">No rows.</td></tr></tbody>
         </table>`;
     }
-    const body = rows.map((row) => {
+    const body2 = rows.map((row) => {
       const cells = columns.map((_, i) => `<td>${escapeHtml(row[i] ?? "")}</td>`).join("");
       return `<tr>${cells}</tr>`;
     }).join("");
     return `<table class="quarry-preview-table simple-table">
         <thead><tr>${head}</tr></thead>
-        <tbody>${body}</tbody>
+        <tbody>${body2}</tbody>
     </table>`;
   };
-  var renderPreviewStatus = (shown, total) => total == null ? `Showing ${shown.toLocaleString()} row(s).` : `Showing ${shown.toLocaleString()} of ${total.toLocaleString()} row(s).`;
+  var renderPreviewStatus = (shown, total2) => total2 == null ? `Showing ${shown.toLocaleString()} row(s).` : `Showing ${shown.toLocaleString()} of ${total2.toLocaleString()} row(s).`;
   var renderForm = (folder) => `
     <div class="quarry-settings">
         <form id="quarry-form">
@@ -987,18 +1683,18 @@
     }
   };
   var showMessage2 = (message, type) => {
-    const el = document.getElementById("quarry-message");
-    if (!el) {
+    const el2 = document.getElementById("quarry-message");
+    if (!el2) {
       return;
     }
-    el.textContent = message;
-    el.className = `quarry-message quarry-message-${type}`;
+    el2.textContent = message;
+    el2.className = `quarry-message quarry-message-${type}`;
     if (messageTimer) {
       clearTimeout(messageTimer);
     }
     messageTimer = setTimeout(() => {
-      el.textContent = "";
-      el.className = "quarry-message";
+      el2.textContent = "";
+      el2.className = "quarry-message";
       messageTimer = null;
     }, MESSAGE_TIMEOUT_MS);
   };
@@ -1148,15 +1844,15 @@
     }
   };
   var updatePreviewControls = () => {
-    const loadMore = document.getElementById(
+    const loadMore2 = document.getElementById(
       PREVIEW_LOAD_MORE_ID
     );
     const clear = document.getElementById(
       PREVIEW_CLEAR_ID
     );
     const status = document.getElementById(PREVIEW_STATUS_ID);
-    if (loadMore) {
-      loadMore.disabled = previewBusy || previewExhausted || !previewDataset;
+    if (loadMore2) {
+      loadMore2.disabled = previewBusy || previewExhausted || !previewDataset;
     }
     if (clear) {
       clear.disabled = previewBusy || !previewDataset;
@@ -1345,6 +2041,7 @@
 
   // frontend/main.ts
   injectQuarryTab();
+  injectImageSearchTab(initImageSearch);
   var boot = () => {
     quarry.init();
     startPromptWatcher();

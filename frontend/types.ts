@@ -1,5 +1,3 @@
-// Shared DTOs mirroring the JObject shapes returned by the Quarry API endpoints (QuarryExtension.cs).
-
 export type ColumnKind = "scalar" | "list";
 
 export interface ColumnDto {
@@ -20,12 +18,8 @@ export interface DatasetDto {
 export interface SettingsResponse {
     success: boolean;
     datasetsFolder?: string;
-    // When true, clicking a dataset name appends it to the prompt's first existing `<q:...>` tag instead of
-    // inserting a separate one. Persisted server-side (Quarry.json) and saved via the Save Settings button.
     addToExistingTag?: boolean;
     active?: boolean;
-    // False when Quarry's runtime requirement (the DuckDB lance extension) isn't installed yet; the UI then
-    // shows only the install gate. Omitted/true once it's available.
     requirementsInstalled?: boolean;
     count?: number;
     datasets?: DatasetDto[];
@@ -33,13 +27,11 @@ export interface SettingsResponse {
     error?: string;
 }
 
-// Result of the QuarryInstallRequirements endpoint (installs the DuckDB lance extension).
 export interface InstallResponse {
     success: boolean;
     error?: string;
 }
 
-// Result of QuarryCleanTempFiles: how many leftover placeholder .txt files were deleted from the Wildcards folder.
 export interface CleanTempResponse {
     success: boolean;
     removed?: number;
@@ -51,7 +43,6 @@ export interface PreviewResponse {
     dataset?: string;
     columns?: string[];
     rows?: string[][];
-    // Row count, loaded lazily alongside the preview rows (null when it couldn't be counted).
     rowCount?: number | null;
     error?: string;
 }
@@ -61,7 +52,6 @@ export interface ReferencesResponse {
     names?: string[];
 }
 
-// One ready-made dataset on the official HuggingFace collection (QuarryListAvailableDatasets).
 export interface RemoteDatasetDto {
     name: string;
     repoPath: string;
@@ -74,26 +64,22 @@ export interface AvailableDatasetsResponse {
     success: boolean;
     repo?: string;
     repoUrl?: string;
-    // Whether the user has a HuggingFace token set (downloads work without one — the repo is public).
     tokenSet?: boolean;
     datasets?: RemoteDatasetDto[];
     error?: string;
 }
 
-// Result of kicking off a download (QuarryDownloadDataset); `id` identifies the run for status polling.
 export interface StartDownloadResponse {
     success: boolean;
     id?: number;
     error?: string;
 }
 
-// Live progress of the single in-flight dataset download (QuarryDownloadStatus).
 export interface DownloadStatusResponse {
     success: boolean;
     active?: boolean;
     id?: number;
     dataset?: string;
-    // idle | starting | downloading | finalizing | done | error | cancelled
     state?: string;
     bytesDone?: number;
     bytesTotal?: number;
@@ -101,4 +87,60 @@ export interface DownloadStatusResponse {
     filesTotal?: number;
     perSecond?: number;
     error?: string;
+}
+
+export type ImageFieldType = "text" | "number" | "list" | "bool";
+
+export interface ImageFieldDto {
+    name: string;
+    label: string;
+    type: ImageFieldType;
+}
+
+export interface OperatorDto {
+    value: string;
+    label: string;
+}
+
+export interface ImageFieldsResponse {
+    success: boolean;
+    available?: boolean;
+    hasIndex?: boolean;
+    coreFields?: ImageFieldDto[];
+    discoveredFields?: string[];
+    operators?: Record<string, OperatorDto[]>;
+    error?: string;
+}
+
+export interface ImageSearchResponse {
+    success: boolean;
+    available?: boolean;
+    hasIndex?: boolean;
+    columns?: string[];
+    rows?: string[][];
+    total?: number;
+    returned?: number;
+    offset?: number;
+    error?: string;
+}
+
+export interface ScanStartResponse {
+    success: boolean;
+    id?: number;
+    error?: string;
+}
+
+export interface ScanStatusResponse {
+    success: boolean;
+    available?: boolean;
+    hasIndex?: boolean;
+    active?: boolean;
+    id?: number;
+    state?: string;
+    filesTotal?: number;
+    filesDone?: number;
+    filesIndexed?: number;
+    filesPruned?: number;
+    error?: string;
+    scanError?: string;
 }

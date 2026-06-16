@@ -39,6 +39,11 @@ public class QuarryExtension : Extension
         API.RegisterAPICall(QuarryDownloadDataset, true, Permissions.InstallFeatures);
         API.RegisterAPICall(QuarryDownloadStatus, false, Permissions.FundamentalGenerateTabAccess);
         API.RegisterAPICall(QuarryCancelDownload, true, Permissions.InstallFeatures);
+        API.RegisterAPICall(QuarryRescanImageHistory, true, Permissions.ViewImageHistory);
+        API.RegisterAPICall(QuarryImageHistoryStatus, false, Permissions.ViewImageHistory);
+        API.RegisterAPICall(QuarryCancelImageHistoryScan, true, Permissions.ViewImageHistory);
+        API.RegisterAPICall(QuarrySearchImageHistory, false, Permissions.ViewImageHistory);
+        API.RegisterAPICall(QuarryImageHistoryFields, false, Permissions.ViewImageHistory);
 
         string status = DatasetManager.IsActive ? $"enabled, folder: {DatasetManager.DatasetsFolder}" : "disabled";
         Logs.Info($"Quarry extension initialized ({status}).");
@@ -68,6 +73,7 @@ public class QuarryExtension : Extension
 
     public override void OnShutdown()
     {
+        ImageHistoryScanner.CancelAndWait(TimeSpan.FromSeconds(10));
         DatasetManager.Shutdown();
     }
 
@@ -382,6 +388,105 @@ public class QuarryExtension : Extension
     {
         DatasetDownloader.Cancel();
         return Task.FromResult(new JObject { ["success"] = true });
+    }
+    #endregion
+
+    #region Image Search API endpoints
+    public Task<JObject> QuarryRescanImageHistory(Session session)
+    {
+        (bool ok, string error, int id) = ImageHistoryScanner.Start(session);
+        return Task.FromResult(ok
+            ? new JObject { ["success"] = true, ["id"] = id }
+            : new JObject { ["success"] = false, ["error"] = error });
+    }
+
+    public Task<JObject> QuarryImageHistoryStatus(Session session)
+    {
+        ImageHistoryScanner.ScanStatus status = ImageHistoryScanner.GetStatus(session.User.UserID);
+        JObject response = new()
+        {
+            ["success"] = true,
+            ["available"] = DatasetManager.RequirementsInstalled,
+            ["hasIndex"] = ImageHistoryIndex.Exists(session.User.UserID),
+            ["active"] = status.Active,
+            ["id"] = status.Id,
+            ["state"] = status.State,
+            ["filesTotal"] = status.FilesTotal,
+            ["filesDone"] = status.FilesDone,
+            ["filesIndexed"] = status.FilesIndexed,
+            ["filesPruned"] = status.FilesPruned,
+        };
+        if (!string.IsNullOrEmpty(status.Error))
+        {
+            response["scanError"] = status.Error;
+        }
+        return Task.FromResult(response);
+    }
+
+    public Task<JObject> QuarryCancelImageHistoryScan(Session session)
+    {
+        ImageHistoryScanner.Cancel(session.User.UserID);
+        return Task.FromResult(new JObject { ["success"] = true });
+    }
+
+    public Task<JObject> QuarrySearchImageHistory(Session session, string filtersJson = "", string sortBy = "date", bool sortDescending = true, int limit = 100, int offset = 0)
+    {
+        try
+        {
+            JArray filters = string.IsNullOrWhiteSpace(filtersJson) ? [] : JArray.Parse(filtersJson);
+            int clampedLimit = Math.Clamp(limit <= 0 ? 100 : limit, 1, 10000);
+            int clampedOffset = Math.Max(0, offset);
+            ImageSearchResult result = ImageHistorySearch.Search(session.User.UserID, filters, sortBy, sortDescending, clampedLimit, clampedOffset);
+            return Task.FromResult(new JObject
+            {
+                ["success"] = true,
+                ["available"] = DatasetManager.RequirementsInstalled,
+                ["hasIndex"] = result.HasIndex,
+                ["columns"] = ToJArray(result.Columns),
+                ["rows"] = new JArray(result.Rows.Select(ToJArray)),
+                ["total"] = result.Total,
+                ["returned"] = result.Rows.Count,
+                ["offset"] = clampedOffset,
+            });
+        }
+        catch (Exception ex)
+        {
+            return Task.FromResult(new JObject { ["success"] = false, ["error"] = ex.Message });
+        }
+    }
+
+    public Task<JObject> QuarryImageHistoryFields(Session session)
+    {
+        (IReadOnlyList<ImageSearchField> core, IReadOnlyList<string> discovered) = ImageHistorySearch.Fields(session.User.UserID);
+        JArray coreArr = [];
+        foreach (ImageSearchField field in core)
+        {
+            coreArr.Add(new JObject
+            {
+                ["name"] = field.Column,
+                ["label"] = field.Label,
+                ["type"] = field.Type.ToString().ToLowerInvariant(),
+            });
+        }
+        JObject operators = [];
+        foreach ((string type, IReadOnlyList<ImageSearchOperator> ops) in ImageSearchFilterBuilder.OperatorsByType)
+        {
+            JArray opArr = [];
+            foreach (ImageSearchOperator op in ops)
+            {
+                opArr.Add(new JObject { ["value"] = op.Value, ["label"] = op.Label });
+            }
+            operators[type] = opArr;
+        }
+        return Task.FromResult(new JObject
+        {
+            ["success"] = true,
+            ["available"] = DatasetManager.RequirementsInstalled,
+            ["hasIndex"] = ImageHistoryIndex.Exists(session.User.UserID),
+            ["coreFields"] = coreArr,
+            ["discoveredFields"] = ToJArray(discovered),
+            ["operators"] = operators,
+        });
     }
     #endregion
 }

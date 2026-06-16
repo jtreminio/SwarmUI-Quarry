@@ -15,14 +15,23 @@ public sealed class DuckDbQueryBackend : IQueryBackend, IDisposable
 
         private void Open()
         {
-            _connection = new DuckDBConnection("DataSource=:memory:");
-            _connection.Open();
-            Execute("SET preserve_insertion_order = true;");
-            string extensionDirectory = ResolveExtensionDirectory();
-            if (extensionDirectory is not null)
+            DuckDBConnection conn = new("DataSource=:memory:");
+            try
             {
-                Execute($"SET extension_directory = '{extensionDirectory.Replace("'", "''")}';");
+                conn.Open();
+                ExecuteOn(conn, "SET preserve_insertion_order = true;");
+                string extensionDirectory = ResolveExtensionDirectory();
+                if (extensionDirectory is not null)
+                {
+                    ExecuteOn(conn, $"SET extension_directory = {SqlText.QuoteLiteral(extensionDirectory)};");
+                }
             }
+            catch
+            {
+                conn.Dispose();
+                throw;
+            }
+            _connection = conn;
             _lanceLoaded = false;
         }
 
@@ -43,8 +52,9 @@ public sealed class DuckDbQueryBackend : IQueryBackend, IDisposable
 
         public void Reset()
         {
-            _connection.Dispose();
+            DuckDBConnection old = _connection;
             Open();
+            old?.Dispose();
         }
 
         public ColumnSchema GetSchema(string datasetPath)
@@ -109,22 +119,122 @@ public sealed class DuckDbQueryBackend : IQueryBackend, IDisposable
             using DuckDBCommand cmd = _connection.CreateCommand();
             cmd.CommandText = $"SELECT * FROM {source.FromExpression} LIMIT {Math.Max(0, limit)};";
             using DuckDBDataReader reader = cmd.ExecuteReader();
-            List<string> columns = [];
-            for (int i = 0; i < reader.FieldCount; i++)
+            return Drain(reader);
+        }
+
+        public void WriteImageHistory(string indexDir, string lancePath, string stagingJsonPath, string livePathsJsonPath)
+        {
+            EnsureLanceLoaded();
+            Execute($"ATTACH {SqlText.QuoteLiteral(indexDir)} AS qidx (TYPE lance);");
+            try
             {
-                columns.Add(reader.GetName(i));
+                string tableRef = $"qidx.main.{ImageHistoryIndex.TableName}";
+                if (!Directory.Exists(lancePath))
+                {
+                    Execute(ImageHistoryIndex.CreateTableSql(tableRef));
+                }
+                if (stagingJsonPath is not null)
+                {
+                    Execute(ImageHistoryIndex.MergeUpsertSql(tableRef, SqlText.QuoteLiteral(stagingJsonPath)));
+                }
+                if (livePathsJsonPath is not null)
+                {
+                    Execute(ImageHistoryIndex.MergePruneSql(tableRef, SqlText.QuoteLiteral(livePathsJsonPath)));
+                }
             }
-            List<List<string>> rows = [];
+            finally
+            {
+                try
+                {
+                    Execute("DETACH qidx;");
+                }
+                catch (Exception ex)
+                {
+                    Logs.Warning($"Quarry: failed to detach image-history index: {ex.Message}");
+                }
+            }
+            MaybeCompact(lancePath);
+        }
+
+        private static int _writeCount;
+        private static bool _maintenanceDisabled;
+
+        private void MaybeCompact(string lancePath)
+        {
+            if (_maintenanceDisabled || !Directory.Exists(lancePath))
+            {
+                return;
+            }
+            int n = Interlocked.Increment(ref _writeCount);
+            try
+            {
+                string target = SqlText.QuoteLiteral(lancePath);
+                Execute($"VACUUM LANCE {target} WITH (retain_n_versions = 5, older_than_seconds = 0);");
+                if (n % 5 == 0)
+                {
+                    Execute($"OPTIMIZE {target} WITH (target_rows_per_fragment = 1048576);");
+                }
+            }
+            catch (Exception ex)
+            {
+                _maintenanceDisabled = true;
+                Logs.Warning($"Quarry: Lance index maintenance is unavailable ({ex.Message}); skipping compaction/vacuum for the rest of this session.");
+            }
+        }
+
+        public Dictionary<string, string> GetPathHashes(string lancePath)
+        {
+            DatasetSource source = PrepareSource(lancePath);
+            using DuckDBCommand cmd = _connection.CreateCommand();
+            cmd.CommandText = $"SELECT {SqlText.QuoteIdentifier(ImageHistoryIndex.PathColumn)}, \"file_hash\" FROM {source.FromExpression};";
+            using DuckDBDataReader reader = cmd.ExecuteReader();
+            Dictionary<string, string> result = new(StringComparer.Ordinal);
             while (reader.Read())
             {
-                List<string> row = new(columns.Count);
-                for (int i = 0; i < columns.Count; i++)
+                if (!reader.IsDBNull(0))
                 {
-                    row.Add(Stringify(reader.GetValue(i)));
+                    result[reader.GetString(0)] = reader.IsDBNull(1) ? "" : reader.GetValue(1)?.ToString() ?? "";
                 }
-                rows.Add(row);
             }
-            return (columns, rows);
+            return result;
+        }
+
+        public (List<string> Columns, List<List<string>> Rows) GetFilteredRows(string lancePath, IReadOnlyList<string> selectColumns, SqlFilter filter, string sortColumn, bool sortDescending, int limit, int offset)
+        {
+            DatasetSource source = PrepareSource(lancePath);
+            string projection = selectColumns is { Count: > 0 }
+                ? string.Join(", ", selectColumns.Select(SqlText.QuoteIdentifier))
+                : "*";
+            string tiebreak = selectColumns is { Count: > 0 }
+                && !string.Equals(selectColumns[0], sortColumn, StringComparison.OrdinalIgnoreCase)
+                    ? $", {SqlText.QuoteIdentifier(selectColumns[0])} ASC"
+                    : "";
+            string order = string.IsNullOrEmpty(sortColumn)
+                ? ""
+                : $" ORDER BY {SqlText.QuoteIdentifier(sortColumn)} {(sortDescending ? "DESC" : "ASC")}{tiebreak}";
+            using DuckDBCommand cmd = _connection.CreateCommand();
+            cmd.CommandText = $"SELECT {projection} FROM {source.FromExpression}{Where(filter)}{order} LIMIT {Math.Max(0, limit)} OFFSET {Math.Max(0, offset)};";
+            Bind(cmd, filter);
+            using DuckDBDataReader reader = cmd.ExecuteReader();
+            return Drain(reader);
+        }
+
+        public List<string> ListDiscoveredFields(string lancePath, string jsonColumn)
+        {
+            DatasetSource source = PrepareSource(lancePath);
+            string quoted = SqlText.QuoteIdentifier(jsonColumn);
+            using DuckDBCommand cmd = _connection.CreateCommand();
+            cmd.CommandText = $"SELECT DISTINCT unnest(json_keys({quoted})) AS k FROM {source.FromExpression} WHERE {quoted} IS NOT NULL AND {quoted} != '{{}}' ORDER BY k;";
+            using DuckDBDataReader reader = cmd.ExecuteReader();
+            List<string> result = [];
+            while (reader.Read())
+            {
+                if (!reader.IsDBNull(0))
+                {
+                    result.Add(reader.GetString(0));
+                }
+            }
+            return result;
         }
 
         private DatasetSource PrepareSource(string datasetPath)
@@ -161,9 +271,11 @@ public sealed class DuckDbQueryBackend : IQueryBackend, IDisposable
             return result is bool installed && installed;
         }
 
-        private void Execute(string sql)
+        private void Execute(string sql) => ExecuteOn(_connection, sql);
+
+        private static void ExecuteOn(DuckDBConnection connection, string sql)
         {
-            using DuckDBCommand cmd = _connection.CreateCommand();
+            using DuckDBCommand cmd = connection.CreateCommand();
             cmd.CommandText = sql;
             cmd.ExecuteNonQuery();
         }
@@ -173,6 +285,7 @@ public sealed class DuckDbQueryBackend : IQueryBackend, IDisposable
 
     private readonly Conn _shared = new();
     private readonly object _lock = new();
+    private readonly object _writeLock = new();
 
     public ColumnSchema GetSchema(string datasetPath)
     {
@@ -211,6 +324,43 @@ public sealed class DuckDbQueryBackend : IQueryBackend, IDisposable
         lock (_lock)
         {
             return _shared.GetSampleRows(datasetPath, limit);
+        }
+    }
+
+    public void WriteImageHistory(string indexDir, string lancePath, string stagingJsonPath, string livePathsJsonPath)
+    {
+        lock (_writeLock)
+        {
+            using Conn writer = new();
+            writer.WriteImageHistory(indexDir, lancePath, stagingJsonPath, livePathsJsonPath);
+        }
+        lock (_lock)
+        {
+            _shared.Reset();
+        }
+    }
+
+    public Dictionary<string, string> GetPathHashes(string lancePath)
+    {
+        lock (_lock)
+        {
+            return _shared.GetPathHashes(lancePath);
+        }
+    }
+
+    public (List<string> Columns, List<List<string>> Rows) GetFilteredRows(string lancePath, IReadOnlyList<string> selectColumns, SqlFilter filter, string sortColumn, bool sortDescending, int limit, int offset)
+    {
+        lock (_lock)
+        {
+            return _shared.GetFilteredRows(lancePath, selectColumns, filter, sortColumn, sortDescending, limit, offset);
+        }
+    }
+
+    public List<string> ListDiscoveredFields(string lancePath, string jsonColumn)
+    {
+        lock (_lock)
+        {
+            return _shared.ListDiscoveredFields(lancePath, jsonColumn);
         }
     }
 
@@ -257,6 +407,26 @@ public sealed class DuckDbQueryBackend : IQueryBackend, IDisposable
             });
         }
         Task.WaitAll(tasks);
+    }
+
+    private static (List<string> Columns, List<List<string>> Rows) Drain(DuckDBDataReader reader)
+    {
+        List<string> columns = [];
+        for (int i = 0; i < reader.FieldCount; i++)
+        {
+            columns.Add(reader.GetName(i));
+        }
+        List<List<string>> rows = [];
+        while (reader.Read())
+        {
+            List<string> row = new(columns.Count);
+            for (int i = 0; i < columns.Count; i++)
+            {
+                row.Add(Stringify(reader.GetValue(i)));
+            }
+            rows.Add(row);
+        }
+        return (columns, rows);
     }
 
     private static string Stringify(object value)

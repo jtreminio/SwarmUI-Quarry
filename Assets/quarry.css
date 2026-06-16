@@ -47,7 +47,6 @@
     background: var(--background-gray);
 }
 
-/* Flagged when the dataset is referenced by a <q:...> tag in the current prompt. */
 .quarry-dataset-row.quarry-dataset-in-prompt {
     background: color-mix(in srgb, var(--green) 16%, transparent);
     box-shadow: inset 3px 0 0 var(--green);
@@ -58,7 +57,6 @@
     overflow-wrap: anywhere;
 }
 
-/* The dataset name doubles as a button: click to drop a <q:NAME> reference into the prompt. */
 .quarry-dataset-name-link {
     display: inline;
     margin: 0;
@@ -130,9 +128,6 @@
     color: var(--red);
 }
 
-/* "Add to existing <q:> tag" setting at the bottom of the panel: a core-style info-popover button, then the
-   label, then the checkbox. The content area is a wrapping flexbox, so claim a full row (like .quarry-datasets)
-   to sit on its own line below the folder input. */
 .quarry-setting-row {
     margin-top: 0.6rem;
     flex-basis: 100%;
@@ -201,7 +196,6 @@
     padding: 0.5rem;
 }
 
-/* Preview modal footer: row count on the left, Clear cache / Load more / Close on the right. */
 .modal-footer.quarry-preview-footer {
     display: flex;
     align-items: center;
@@ -221,14 +215,9 @@
     gap: 0.5rem;
 }
 
-/* --- Quarry bottom-bar tab --- */
-
-/* Host for the datasets panel inside the Quarry tab pane; the bottom bar's tab-content handles scrolling. */
 .quarry-tab-body {
     padding: 0.75rem 1rem;
 }
-
-/* --- Install-requirements gate + loading placeholder --- */
 
 .quarry-loading {
     color: var(--text-soft);
@@ -248,8 +237,6 @@
     font-size: 0.95em;
     color: var(--text-soft);
 }
-
-/* --- Download Datasets modal --- */
 
 .quarry-download-dialog {
     max-width: 60rem;
@@ -321,7 +308,6 @@
     vertical-align: middle;
 }
 
-/* Installed datasets are highlighted green — the same cue the settings table uses for in-prompt datasets. */
 .quarry-remote-installed {
     background: color-mix(in srgb, var(--green) 16%, transparent);
     box-shadow: inset 3px 0 0 var(--green);
@@ -338,8 +324,6 @@
     overflow-wrap: anywhere;
 }
 
-/* The dataset name links to its source HuggingFace repo. Keep the cell's text color, with an underline so it
-   reads as a link regardless of theme; brighten the underline on hover. */
 .quarry-remote-link {
     color: inherit;
     text-decoration: underline;
@@ -362,7 +346,6 @@
     min-width: 11rem;
 }
 
-/* Progress bar shown in the action cell while a dataset downloads. */
 .quarry-dl-progress {
     height: 0.5rem;
     border-radius: 0.25rem;
@@ -382,4 +365,143 @@
     color: var(--text-soft);
     margin: 0.2rem 0;
     font-variant-numeric: tabular-nums;
+}
+
+.imagesearch-body {
+    height: 100%;
+    overflow-y: auto;
+}
+
+.imagesearch-top {
+    padding: 0.75rem 1rem 0.5rem;
+}
+
+.imagesearch-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.imagesearch-title {
+    font-weight: 600;
+    font-size: 1.05em;
+}
+
+.imagesearch-scan-controls {
+    display: flex;
+    gap: 0.4rem;
+    align-items: center;
+}
+
+.imagesearch-progress {
+    margin: 0.4rem 0;
+}
+
+.imagesearch-status {
+    font-size: 0.85em;
+    color: var(--text-soft);
+    min-height: 1.1em;
+    font-variant-numeric: tabular-nums;
+}
+
+.imagesearch-notice {
+    font-size: 0.9em;
+    margin: 0.3rem 0;
+}
+
+.imagesearch-notice-error {
+    color: var(--red);
+}
+
+.imagesearch-notice-info {
+    color: var(--text-soft);
+}
+
+.imagesearch-notice-success {
+    color: var(--green);
+}
+
+.imagesearch-controls {
+    margin: 0.6rem 0;
+    padding: 0.5rem;
+    border: 1px solid var(--light-border);
+    border-radius: 0.5rem;
+    background: var(--background-gray);
+}
+
+.imagesearch-filter-row {
+    display: flex;
+    gap: 0.4rem;
+    align-items: center;
+    margin-bottom: 0.4rem;
+    flex-wrap: wrap;
+}
+
+.imagesearch-filter-row .imagesearch-field {
+    min-width: 11rem;
+}
+
+.imagesearch-filter-row .imagesearch-op {
+    min-width: 8rem;
+}
+
+.imagesearch-filter-row .imagesearch-value {
+    flex: 1 1 12rem;
+    min-width: 8rem;
+}
+
+.imagesearch-remove {
+    padding: 0.15rem 0.5rem;
+    line-height: 1;
+}
+
+.imagesearch-actions {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    margin-top: 0.3rem;
+}
+
+.imagesearch-spacer {
+    flex: 1 1 auto;
+}
+
+.imagesearch-search-button {
+    font-weight: 600;
+}
+
+.imagesearch-results-info {
+    font-size: 0.85em;
+    color: var(--text-soft);
+    margin: 0.5rem 0 0.3rem;
+}
+
+.imagesearch-results-browser,
+.imagesearch-results-browser .browser-fullcontent-container,
+.imagesearch-results-browser .browser-content-container {
+    height: auto;
+    overflow: visible;
+}
+
+.imagesearch-results-browser .browser-folder-tree-container,
+.imagesearch-results-browser .browser-folder-tree-splitter {
+    display: none !important;
+}
+
+.imagesearch-results-browser .browser-fullcontent-container {
+    width: 100% !important;
+    margin-left: 0;
+}
+
+.imagesearch-loadmore {
+    display: flex;
+    justify-content: center;
+    padding: 0.75rem 1rem 1.25rem;
+}
+
+.imagesearch-loadmore-button {
+    min-width: 16rem;
+    font-weight: 600;
 }
