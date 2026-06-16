@@ -8,6 +8,7 @@ import {
 } from "./prompt";
 import { QUARRY_TAB_BODY_ID } from "./tab";
 import type {
+    CleanTempResponse,
     DatasetDto,
     InstallResponse,
     PreviewResponse,
@@ -167,6 +168,7 @@ export const renderForm = (folder: string): string => `
             <div id="quarry-message" class="quarry-message"></div>
             <div class="quarry-actions">
                 <button type="submit" class="basic-button">Save Settings</button>
+                <button type="button" id="quarry-clean-temp" class="basic-button" title="Delete leftover placeholder .txt files an older Quarry version wrote into SwarmUI's Wildcards folder">Clean temp files</button>
             </div>
         </form>
     </div>`;
@@ -349,6 +351,36 @@ const refresh = (): void => {
                 "error",
             );
         }
+    });
+};
+
+/// Deletes the leftover placeholder `.txt` files an older Quarry version mirrored into SwarmUI's Wildcards
+/// folder. Safe to run anytime: the backend only removes its own tiny sentinel files, never real wildcards.
+const cleanTempFiles = (): void => {
+    const button = document.getElementById(
+        "quarry-clean-temp",
+    ) as HTMLButtonElement | null;
+    if (button) {
+        button.disabled = true;
+    }
+    genericRequest<CleanTempResponse>("QuarryCleanTempFiles", {}, (data) => {
+        if (button) {
+            button.disabled = false;
+        }
+        if (!data.success) {
+            showMessage(
+                `Clean failed: ${data.error ?? "unknown error"}`,
+                "error",
+            );
+            return;
+        }
+        const removed = data.removed ?? 0;
+        showMessage(
+            removed > 0
+                ? `Removed ${removed.toLocaleString()} leftover placeholder file(s).`
+                : "No leftover placeholder files found.",
+            "success",
+        );
     });
 };
 
@@ -593,6 +625,9 @@ const ensureFormRendered = (): void => {
     document
         .getElementById("quarry-refresh")
         ?.addEventListener("click", refresh);
+    document
+        .getElementById("quarry-clean-temp")
+        ?.addEventListener("click", cleanTempFiles);
     document
         .getElementById("quarry-download-datasets")
         // Reload settings after the modal closes so freshly-downloaded datasets appear in the table.

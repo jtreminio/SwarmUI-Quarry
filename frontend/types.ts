@@ -39,6 +39,13 @@ export interface InstallResponse {
     error?: string;
 }
 
+// Result of QuarryCleanTempFiles: how many leftover placeholder .txt files were deleted from the Wildcards folder.
+export interface CleanTempResponse {
+    success: boolean;
+    removed?: number;
+    error?: string;
+}
+
 export interface PreviewResponse {
     success: boolean;
     dataset?: string;

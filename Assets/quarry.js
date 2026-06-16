@@ -906,6 +906,7 @@
             <div id="quarry-message" class="quarry-message"></div>
             <div class="quarry-actions">
                 <button type="submit" class="basic-button">Save Settings</button>
+                <button type="button" id="quarry-clean-temp" class="basic-button" title="Delete leftover placeholder .txt files an older Quarry version wrote into SwarmUI's Wildcards folder">Clean temp files</button>
             </div>
         </form>
     </div>`;
@@ -1063,6 +1064,31 @@
           "error"
         );
       }
+    });
+  };
+  var cleanTempFiles = () => {
+    const button = document.getElementById(
+      "quarry-clean-temp"
+    );
+    if (button) {
+      button.disabled = true;
+    }
+    genericRequest("QuarryCleanTempFiles", {}, (data) => {
+      if (button) {
+        button.disabled = false;
+      }
+      if (!data.success) {
+        showMessage2(
+          `Clean failed: ${data.error ?? "unknown error"}`,
+          "error"
+        );
+        return;
+      }
+      const removed = data.removed ?? 0;
+      showMessage2(
+        removed > 0 ? `Removed ${removed.toLocaleString()} leftover placeholder file(s).` : "No leftover placeholder files found.",
+        "success"
+      );
     });
   };
   var previewDataset = null;
@@ -1259,6 +1285,7 @@
       saveSettings();
     });
     document.getElementById("quarry-refresh")?.addEventListener("click", refresh);
+    document.getElementById("quarry-clean-temp")?.addEventListener("click", cleanTempFiles);
     document.getElementById("quarry-download-datasets")?.addEventListener("click", () => openDownloadModal(loadSettings));
     document.getElementById("quarry-datasets")?.addEventListener("click", datasetsClickHandler);
     document.getElementById(ADD_TO_EXISTING_TAG_ID)?.addEventListener("change", (event) => {

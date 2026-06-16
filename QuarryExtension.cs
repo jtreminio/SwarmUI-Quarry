@@ -32,6 +32,7 @@ public class QuarryExtension : Extension
         API.RegisterAPICall(QuarryRefresh, true, Permissions.FundamentalGenerateTabAccess);
         API.RegisterAPICall(QuarryPreviewDataset, false, Permissions.FundamentalGenerateTabAccess);
         API.RegisterAPICall(QuarryClearPreviewCache, true, Permissions.FundamentalGenerateTabAccess);
+        API.RegisterAPICall(QuarryCleanTempFiles, true, Permissions.FundamentalGenerateTabAccess);
         API.RegisterAPICall(QuarryResolveReferences, false, Permissions.FundamentalGenerateTabAccess);
         API.RegisterAPICall(QuarryInstallRequirements, true, Permissions.InstallFeatures);
         API.RegisterAPICall(QuarryListAvailableDatasets, false, Permissions.FundamentalGenerateTabAccess);
@@ -269,6 +270,14 @@ public class QuarryExtension : Extension
         return Task.FromResult(DatasetManager.ClearPreviewCache(dataset)
             ? new JObject { ["success"] = true }
             : new JObject { ["success"] = false, ["error"] = $"Unknown dataset '{dataset}'." });
+    }
+
+    public Task<JObject> QuarryCleanTempFiles(Session session)
+    {
+        (int removed, string error) = DatasetManager.CleanTempFiles();
+        return Task.FromResult(string.IsNullOrEmpty(error)
+            ? new JObject { ["success"] = true, ["removed"] = removed }
+            : new JObject { ["success"] = false, ["error"] = error });
     }
 
     public Task<JObject> QuarryResolveReferences(Session session, string prompt)

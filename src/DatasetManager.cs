@@ -300,6 +300,57 @@ public static class DatasetManager
         }
     }
 
+    private const long MaxPlaceholderBytes = 256;
+
+    public static (int Removed, string Error) CleanTempFiles()
+    {
+        try
+        {
+            string wildcardDir = WildcardsHelper.Folder;
+            if (string.IsNullOrWhiteSpace(wildcardDir) || !Directory.Exists(wildcardDir))
+            {
+                return (0, "");
+            }
+            int removed = 0;
+            foreach (string file in Directory.EnumerateFiles(wildcardDir, "*.txt", SearchOption.AllDirectories))
+            {
+                try
+                {
+                    if (new FileInfo(file).Length > MaxPlaceholderBytes || !IsLegacyPlaceholder(File.ReadAllText(file)))
+                    {
+                        continue;
+                    }
+                    File.Delete(file);
+                    removed++;
+                }
+                catch
+                {
+                }
+            }
+            if (removed > 0)
+            {
+                Logs.Info($"Quarry: removed {removed} legacy placeholder wildcard file(s) from '{wildcardDir}'.");
+            }
+            return (removed, "");
+        }
+        catch (Exception ex)
+        {
+            Logs.Warning($"Quarry: failed to clean temp files: {ex.Message}");
+            return (0, ex.Message);
+        }
+    }
+
+    public static bool IsLegacyPlaceholder(string content)
+    {
+        string trimmed = content.Trim();
+        return trimmed.Length > 0
+            && !trimmed.Contains('\n')
+            && trimmed.StartsWith('#')
+            && trimmed.Contains("placeholder", StringComparison.OrdinalIgnoreCase)
+            && trimmed.Contains("do not edit", StringComparison.OrdinalIgnoreCase)
+            && !trimmed.Contains("whattheduck", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string ComputeHash(string path)
     {
         try
