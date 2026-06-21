@@ -266,7 +266,7 @@ wheels = [
 ]
 
 [[package]]
-name = "swarmui-quarryextension"
+name = "swarmui-quarry"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

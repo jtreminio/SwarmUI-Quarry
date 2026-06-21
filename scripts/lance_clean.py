@@ -3,7 +3,8 @@
 # requires-python = ">=3.10"
 # dependencies = ["pylance", "pyarrow"]
 # ///
-"""Delete empty rows from every Lance dataset under a directory (recursive).
+"""Clean every Lance dataset under a directory (recursive): drop empty rows and,
+by default, normalized-duplicate rows.
 
 An *empty row* is one whose prompt column is NULL or, for a text column, blank
 once stripped of surrounding spaces -- exactly the rows ``to_lancedb.py`` drops
@@ -13,6 +14,15 @@ non-empty ``WHERE`` filter, which would defeat that pushdown and force a full
 scan on every prompt. (Like DuckDB's ``trim``, Lance's only strips spaces, so a
 tab/newline-only value is considered non-empty -- the same call the extension's
 keep-test uses, so this stays consistent with what it sees as present.)
+
+A *duplicate row* is one whose prompt, once normalized, was already seen earlier
+in the same dataset. Normalization lowercases and drops every non-alphanumeric
+character (so ``"Hello, World!"``, ``"hello world"`` and ``"HELLO  WORLD"`` all
+collapse to ``helloworld``), so prompts differing only in case, punctuation or
+spacing dedupe together. The first row of each normalized group is kept and the
+rest deleted. Empty/whitespace-only prompts normalize to ``""`` and are left to
+the empty-row pass instead of being deduped among themselves; dedup only applies
+to a text prompt column. This is on by default; pass ``--no-dedup`` to skip it.
 
 The prompt column is resolved per dataset the way the extension's
 PromptColumnResolver does: an explicit ``--prompt-column`` if given, else the
@@ -41,17 +51,18 @@ or empty-schema dataset) is reported while the rest still run. Pass
 anything.
 
 Usage:
-    python delete_empty_rows.py <dir-or-dataset> [--dry-run] [--no-compact] [-w N]
-    python delete_empty_rows.py ./datasets
-    python delete_empty_rows.py ./datasets --dry-run
-    python delete_empty_rows.py ./datasets --no-compact
-    python delete_empty_rows.py ./prompts.lance --prompt-column caption
+    python lance_clean.py <dir-or-dataset> [--dry-run] [--no-dedup] [--no-compact] [-w N]
+    python lance_clean.py ./datasets
+    python lance_clean.py ./datasets --dry-run
+    python lance_clean.py ./datasets --no-dedup
+    python lance_clean.py ./datasets --no-compact
+    python lance_clean.py ./prompts.lance --prompt-column caption
 
 Run it with the project venv:
-    .venv/bin/python scripts/delete_empty_rows.py ./datasets
+    .venv/bin/python scripts/lance_clean.py ./datasets
 
 or standalone with uv (deps are declared inline above):
-    uv run scripts/delete_empty_rows.py ./datasets
+    uv run scripts/lance_clean.py ./datasets
 """
 
 from __future__ import annotations
@@ -112,6 +123,42 @@ def is_text_type(dtype: pa.DataType) -> bool:
     )
 
 
+def normalize_prompt(value: str) -> str:
+    """Collapse a prompt to its dedup key: lowercased with every non-alphanumeric character dropped.
+
+    ``"Hello, World!"``, ``"hello world"`` and ``"HELLO  WORLD"`` all map to ``"helloworld"``, so prompts
+    differing only in case, punctuation or spacing share a key. ``str.isalnum`` keeps Unicode letters/digits,
+    so accented or non-Latin prompts dedupe sensibly too. An empty/whitespace-only prompt maps to ``""``.
+    """
+    return "".join(ch for ch in value.lower() if ch.isalnum())
+
+
+def find_duplicate_rowids(ds: "lance.LanceDataset", col: str) -> list[int]:
+    """Return the Lance ``_rowid``s of duplicate rows of ``col`` -- every row past the first in its normalized
+    group. The first row of each group is kept. NULL prompts and prompts that normalize to ``""`` (empty or
+    all-punctuation) are skipped so they fall to the empty-row pass instead of being deduped here.
+
+    Streams the prompt column in batches so only the seen-key set (one normalized string per distinct prompt),
+    not the whole column, is held at once.
+    """
+    seen: set[str] = set()
+    dup_rowids: list[int] = []
+    for batch in ds.scanner(columns=[col], with_row_id=True).to_batches():
+        values = batch.column(col).to_pylist()
+        rowids = batch.column("_rowid").to_pylist()
+        for value, rowid in zip(values, rowids):
+            if value is None:
+                continue
+            key = normalize_prompt(value)
+            if not key:
+                continue  # empty/whitespace-only/all-punctuation: left to the empty-row pass
+            if key in seen:
+                dup_rowids.append(rowid)
+            else:
+                seen.add(key)
+    return dup_rowids
+
+
 def empty_row_predicate(col: str, dtype: pa.DataType) -> str:
     """Lance filter matching empty rows of ``col``: NULL always, plus space-only for a text column.
 
@@ -150,11 +197,19 @@ def find_lance_datasets(root: Path) -> list[Path]:
     return sorted(found)
 
 
-def process_dataset(path: Path, override: str | None, dry_run: bool, compact: bool) -> dict:
-    """Delete (or, with ``dry_run``, just count) the empty rows of one dataset.
+# A single ``_rowid IN (...)`` delete predicate per this many rowids; large delete batches keep the expression
+# (and the number of delete calls) bounded without materializing one giant IN list for a duplicate-heavy set.
+_DELETE_BATCH = 4096
+
+
+def process_dataset(
+    path: Path, override: str | None, dry_run: bool, compact: bool, dedup: bool
+) -> dict:
+    """Delete (or, with ``dry_run``, just count) the empty and normalized-duplicate rows of one dataset.
 
     Returns a result dict with the column used and row counts. Opens its own ``lance.dataset`` so it is safe
-    to run from a worker thread.
+    to run from a worker thread. Empties are removed first; duplicates are then found over what remains so an
+    emptied row is never also counted as the survivor of a duplicate group.
     """
     try:
         ds = lance.dataset(str(path))
@@ -166,22 +221,43 @@ def process_dataset(path: Path, override: str | None, dry_run: bool, compact: bo
     if col is None:
         raise DatasetError("dataset has no columns")
 
-    pred = empty_row_predicate(col, ds.schema.field(col).type)
+    dtype = ds.schema.field(col).type
+    pred = empty_row_predicate(col, dtype)
     total = ds.count_rows()
     # count_rows() over a scanner reading only the prompt column -- doesn't materialize row data.
     empty = ds.scanner(columns=[col], filter=pred).count_rows()
 
-    result = {"column": col, "total": total, "empty": empty, "removed": 0}
-    if empty == 0 or dry_run:
-        return result
+    result = {
+        "column": col,
+        "total": total,
+        "empty": empty,
+        "empty_removed": 0,
+        "duplicate": 0,
+        "duplicate_removed": 0,
+    }
 
-    ds.delete(pred)
-    result["removed"] = total - ds.count_rows()
-    if compact:
+    # Empty-row pass. In --dry-run we don't delete, so dedup below scans the un-emptied dataset -- but its
+    # normalize step skips the very rows this pass would remove (they normalize to ""), so the duplicate count
+    # is the same either way and the two figures never double-count the same row.
+    if empty and not dry_run:
+        ds.delete(pred)
+        result["empty_removed"] = total - ds.count_rows()
+
+    # Duplicate-row pass. Normalization is a text operation, so it only applies to a text prompt column.
+    if dedup and is_text_type(dtype):
+        dup_rowids = find_duplicate_rowids(ds, col)
+        result["duplicate"] = len(dup_rowids)
+        if dup_rowids and not dry_run:
+            for start in range(0, len(dup_rowids), _DELETE_BATCH):
+                chunk = dup_rowids[start : start + _DELETE_BATCH]
+                ds.delete("_rowid IN (" + ",".join(str(r) for r in chunk) + ")")
+            result["duplicate_removed"] = len(dup_rowids)
+
+    if compact and not dry_run and (result["empty_removed"] or result["duplicate_removed"]):
         # Rewrite fragments to drop the tombstoned rows, then purge the now-stale versions so the space is
         # actually reclaimed. cleanup_old_versions() defaults to an age threshold (~weeks) that protects
         # freshly written versions, so a no-arg call would be a no-op here; older_than=0 purges everything but
-        # the latest version -- this is what makes --compact irreversible (the pre-delete version is gone).
+        # the latest version -- this is what makes --compact irreversible (the pre-delete versions are gone).
         ds.optimize.compact_files()
         ds.cleanup_old_versions(older_than=timedelta(0))
     return result
@@ -189,7 +265,10 @@ def process_dataset(path: Path, override: str | None, dry_run: bool, compact: bo
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Delete empty (NULL/blank prompt) rows from every Lance dataset under a directory.",
+        description=(
+            "Clean every Lance dataset under a directory: delete empty (NULL/blank prompt) rows and, by "
+            "default, normalized-duplicate prompt rows."
+        ),
     )
     parser.add_argument(
         "directory",
@@ -208,6 +287,16 @@ def main(argv: list[str] | None = None) -> int:
         "--dry-run",
         action="store_true",
         help="report how many rows would be deleted from each dataset without changing anything",
+    )
+    parser.add_argument(
+        "--dedup",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "also delete normalized-duplicate rows -- every prompt past the first whose lowercased, "
+            "alphanumeric-only form was already seen in the dataset (on by default; --no-dedup removes "
+            "only empty rows). Only applies to a text prompt column"
+        ),
     )
     parser.add_argument(
         "--compact",
@@ -237,13 +326,16 @@ def main(argv: list[str] | None = None) -> int:
     action = "would delete" if args.dry_run else "deleted"
 
     ok = 0
-    total_removed = 0
+    total_empty = 0
+    total_dup = 0
     failures: list[tuple[Path, str]] = []
     # Each dataset is opened in its own worker (process_dataset), so the work is thread-safe; we only print
     # from this (the main) thread to keep output lines from interleaving.
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {
-            pool.submit(process_dataset, path, args.prompt_column, args.dry_run, args.compact): path
+            pool.submit(
+                process_dataset, path, args.prompt_column, args.dry_run, args.compact, args.dedup
+            ): path
             for path in datasets
         }
         for future in as_completed(futures):
@@ -255,15 +347,22 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  SKIP {path}: {exc}", file=sys.stderr)
                 continue
             ok += 1
-            n = r["empty"] if args.dry_run else r["removed"]
-            total_removed += n
+            # In --dry-run report what each pass found; otherwise what it actually removed.
+            empties = r["empty"] if args.dry_run else r["empty_removed"]
+            dups = r["duplicate"] if args.dry_run else r["duplicate_removed"]
+            removed = empties + dups
+            total_empty += empties
+            total_dup += dups
             print(
-                f"  {path} [{r['column']}]: {action} {n} empty row(s) "
-                f"of {r['total']} ({r['total'] - n} remain)"
+                f"  {path} [{r['column']}]: {action} {empties} empty + {dups} duplicate row(s) "
+                f"of {r['total']} ({r['total'] - removed} remain)"
             )
 
     verb = "would delete" if args.dry_run else "deleted"
-    summary = f"Done: {ok}/{len(datasets)} dataset(s) processed, {verb} {total_removed} empty row(s)"
+    summary = (
+        f"Done: {ok}/{len(datasets)} dataset(s) processed, "
+        f"{verb} {total_empty} empty + {total_dup} duplicate row(s)"
+    )
     if failures:
         summary += f"; {len(failures)} skipped"
     print(summary, file=sys.stderr)
