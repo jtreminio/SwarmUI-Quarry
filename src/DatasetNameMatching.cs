@@ -31,14 +31,28 @@ public static class DatasetNameMatching
             return false;
         }
         StringBuilder regex = new("^");
-        foreach (char c in pattern)
+        for (int i = 0; i < pattern.Length; i++)
         {
-            regex.Append(c switch
+            char c = pattern[i];
+            if (c == '*')
             {
-                '*' => ".*",
-                '?' => ".",
-                _ => Regex.Escape(c.ToString()),
-            });
+                if (i + 1 < pattern.Length && pattern[i + 1] == '*')
+                {
+                    while (i + 1 < pattern.Length && pattern[i + 1] == '*')
+                    {
+                        i++;
+                    }
+                    regex.Append(".*");
+                }
+                else
+                {
+                    regex.Append("[^/]*");
+                }
+            }
+            else
+            {
+                regex.Append(c == '?' ? "[^/]" : Regex.Escape(c.ToString()));
+            }
         }
         regex.Append('$');
         return Regex.IsMatch(candidate, regex.ToString(), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);

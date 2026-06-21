@@ -67,11 +67,12 @@ This is the fun part. A Quarry tag always begins with `<q:` followed by the name
 ```
 <q:characters>                       one random entry from "characters"
 <q:characters,creatures>             one random entry from either set
-<q:*>                                one random entry from ALL your datasets
+<q:*>                                one random entry from your top-level datasets
+<q:**>                               like <q:*>, but reaches into subfolders too
 <q:portraits-*>                      one random entry from any "portraits-..." set
 <q:characters[tags=girl]>            a random entry tagged "girl"
 <q:characters,creatures[tags=girl]>  the same filter, across both sets
-<q:*[tags=girl]>                     the same filter, across every set
+<q:*[tags=girl]>                     the same filter, across your top-level sets
 <q:characters:caption>               read the prompt from the "caption" column
 ```
 
@@ -85,9 +86,11 @@ The basics. `<q:characters>` rolls the dice and drops one random entry from the 
 
 List more than one name, separated by commas, and Quarry treats them as a single combined pool, then picks one random entry from the whole thing. `<q:characters,creatures>` might hand you a character or a creature. (The bigger a dataset, the more of that pool it makes up, so it gets picked proportionally more often.)
 
-### Everything, or part of it: `<q:*>` and `<q:name*>`
+### Everything, or part of it: `<q:*>`, `<q:**>`, and `<q:name*>`
 
-The `*` is a wildcard for your wildcards. On its own, `<q:*>` stands for **all** your datasets at once and picks a random entry from your whole collection.
+The `*` is a wildcard for your wildcards. On its own, `<q:*>` stands for **all your top-level datasets** at once and picks a random entry from them.
+
+If you keep some datasets in subfolders, a single `*` stays at **one level**: `<q:*>` covers the datasets sitting loose in your datasets folder, and `<q:anime/*>` covers the ones directly inside `anime`. Use a **double** star to **recurse** — `<q:**>` reaches every dataset no matter how deeply nested, and `<q:anime/**>` reaches everything under `anime`. (No subfolders? Then `*` and `**` mean the same thing: everything.)
 
 It also matches **partial names**, which is perfect when you keep a family of related sets. Say you have `portraits-photo`, `portraits-anime`, and `portraits-vintage`: then `<q:portraits-*>` pulls from all three at once. The `*` can stand in for as much of the name as you like, so even `<q:por*>` would catch the lot. And partial names take filters just like everything else, so `<q:portraits-*[tags=girl]>` grabs a "girl" entry from every one of your portrait sets.
 
@@ -97,7 +100,7 @@ Add `[ ... ]` after the name to filter. `<q:characters[tags=girl]>` keeps only t
 
 ### Filtering across many: `<q:FOO,BAR[tags=girl]>` and `<q:*[tags=girl]>`
 
-A filter applies to **every** dataset in the tag. `<q:characters,creatures[tags=girl]>` keeps the "girl"-tagged entries from both sets, combines them, and picks one. And `<q:*[tags=girl]>` does the same thing across your whole collection: every dataset, filtered, pooled together, one pick.
+A filter applies to **every** dataset in the tag. `<q:characters,creatures[tags=girl]>` keeps the "girl"-tagged entries from both sets, combines them, and picks one. And `<q:*[tags=girl]>` does the same thing across your top-level datasets — each one, filtered, pooled together, one pick — while `<q:**[tags=girl]>` widens that to every dataset in every subfolder.
 
 > Heads up on `<q:*[ ... ]>`: the very first time you use a particular filter across all datasets, Quarry has to look through each one to see what matches, so it can take a moment to warm up. It remembers the answer for each dataset, though, so the next time you use that same filter it is quick. (And if some datasets do not have the column you asked for, Quarry simply skips those and uses the ones that do, so a wildcard query never breaks.)
 
@@ -144,7 +147,8 @@ If a dataset does not have the column you asked for, Quarry quietly falls back t
 | `<q:prompts[tags==brunette,punk]>` | tagged brunette and punk |
 | `<q:prompts[tags!=nsfw]>` | not tagged nsfw |
 | `<q:midjourney[prompt=girl]>` | prompts containing "girl" |
-| `<q:*[tags=cyberpunk]>` | a cyberpunk entry from anywhere |
+| `<q:*[tags=cyberpunk]>` | a cyberpunk entry from any top-level set |
+| `<q:**[tags=cyberpunk]>` | …the same, reaching into subfolders too |
 | `<q:portraits-*[tags=girl]>` | a "girl" from any of your `portraits-*` sets |
 | `<q:midjourney:caption>` | any prompt, read from the `caption` column |
 | `<q:midjourney[tags=girl]:caption>` | a "girl" entry, read from the `caption` column |
