@@ -540,6 +540,10 @@
     color: var(--text-soft);
 }
 
+.imagesearch-notice-warning {
+    color: var(--yellow);
+}
+
 .imagesearch-notice-success {
     color: var(--green);
 }

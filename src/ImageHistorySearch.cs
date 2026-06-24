@@ -3,7 +3,7 @@ using SwarmUI.Utils;
 
 namespace Quarry;
 
-public sealed record ImageSearchResult(bool HasIndex, List<string> Columns, List<List<string>> Rows, long Total);
+public sealed record ImageSearchResult(bool HasIndex, List<string> Columns, List<List<string>> Rows, long Total, List<string> Warnings);
 
 public static class ImageHistorySearch
 {
@@ -17,19 +17,19 @@ public static class ImageHistorySearch
     {
         if (!ImageHistoryIndex.Exists(userId))
         {
-            return new ImageSearchResult(false, [], [], 0);
+            return new ImageSearchResult(false, [], [], 0, []);
         }
         string lancePath = ImageHistoryIndex.LancePathFor(userId);
         ColumnSchema schema = SchemaCache.GetOrAdd(
             ImageHistoryIndex.SafeUserSegment(userId), _ => DatasetManager.Backend.GetSchema(lancePath));
-        SqlFilter filter = ImageSearchFilterBuilder.Build(filters, schema);
+        SqlFilter filter = ImageSearchFilterBuilder.Build(filters, schema, out List<string> warnings);
         string sortColumn = ResolveSort(sortBy);
         (List<string> columns, List<List<string>> rows) =
             DatasetManager.Backend.GetFilteredRows(lancePath, ImageHistoryIndex.ResultColumns, filter, sortColumn, sortDescending, limit, offset);
         long total = offset == 0 && rows.Count < limit
             ? rows.Count
             : DatasetManager.Backend.CountRows(lancePath, filter);
-        return new ImageSearchResult(true, columns, rows, total);
+        return new ImageSearchResult(true, columns, rows, total, warnings);
     }
 
     public static (IReadOnlyList<ImageSearchField> Core, IReadOnlyList<string> Discovered) Fields(string userId)

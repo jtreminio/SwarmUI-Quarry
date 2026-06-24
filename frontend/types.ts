@@ -122,6 +122,7 @@ export interface ImageSearchResponse {
     total?: number;
     returned?: number;
     offset?: number;
+    warnings?: string[];
     error?: string;
 }
 

@@ -12,18 +12,19 @@ describe("operatorsForType", () => {
     // The catalog is now served by the backend (single source of truth); the client just looks types up in it.
     const catalog = {
         text: [
-            { value: "contains", label: "contains" },
-            { value: "equals", label: "is" },
+            { value: "=", label: "=" },
+            { value: "==", label: "==" },
+            { value: "!=", label: "!=" },
         ],
         number: [
-            { value: "eq", label: "=" },
-            { value: "ne", label: "≠" },
-            { value: "gt", label: ">" },
+            { value: "=", label: "=" },
+            { value: "+=", label: "+=" },
+            { value: "-=", label: "-=" },
         ],
     };
     it("returns the server-provided operators for a known type", () => {
         expect(operatorsForType(catalog, "number").map((o) => o.value)).toEqual(
-            ["eq", "ne", "gt"],
+            ["=", "+=", "-="],
         );
     });
     it("returns an empty list for a type missing from the catalog", () => {
@@ -40,17 +41,15 @@ describe("opNeedsValue", () => {
         expect(opNeedsValue("is_false")).toBe(false);
     });
     it("every other operator needs a value", () => {
-        expect(opNeedsValue("contains")).toBe(true);
-        expect(opNeedsValue("ge")).toBe(true);
+        expect(opNeedsValue("=")).toBe(true);
+        expect(opNeedsValue("+=")).toBe(true);
     });
 });
 
 describe("buildSearchRequest", () => {
     it("drops rows with a blank value on a value-needing operator", () => {
         expect(
-            buildSearchRequest([
-                { field: "prompt", op: "contains", value: "" },
-            ]),
+            buildSearchRequest([{ field: "prompt", op: "=", value: "" }]),
         ).toEqual([]);
     });
     it("keeps value-less bool rows and clears their value", () => {
@@ -62,15 +61,13 @@ describe("buildSearchRequest", () => {
     });
     it("keeps complete rows verbatim", () => {
         expect(
-            buildSearchRequest([
-                { field: "model", op: "contains", value: "sdxl" },
-            ]),
-        ).toEqual([{ field: "model", op: "contains", value: "sdxl" }]);
+            buildSearchRequest([{ field: "model", op: "=", value: "sdxl" }]),
+        ).toEqual([{ field: "model", op: "=", value: "sdxl" }]);
     });
     it("drops rows missing a field or operator", () => {
         expect(
             buildSearchRequest([
-                { field: "", op: "contains", value: "x" },
+                { field: "", op: "=", value: "x" },
                 { field: "model", op: "", value: "x" },
             ]),
         ).toEqual([]);

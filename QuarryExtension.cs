@@ -450,6 +450,7 @@ public class QuarryExtension : Extension
                 ["total"] = result.Total,
                 ["returned"] = result.Rows.Count,
                 ["offset"] = clampedOffset,
+                ["warnings"] = ToJArray(result.Warnings),
             });
         }
         catch (Exception ex)

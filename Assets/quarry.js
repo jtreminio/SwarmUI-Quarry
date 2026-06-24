@@ -725,6 +725,7 @@
         );
         updateResultsUI();
         reflectAvailability();
+        applyWarnings(data.warnings ?? []);
         callback([], loadedFiles);
       },
       (message) => {
@@ -841,6 +842,15 @@
     if (notice) {
       notice.textContent = text;
       notice.className = text ? `imagesearch-notice imagesearch-notice-${type}` : "imagesearch-notice";
+    }
+  };
+  var applyWarnings = (warnings) => {
+    if (warnings.length) {
+      setNotice(warnings.join(" "), "warning");
+    } else if ((el("imagesearch-notice")?.className ?? "").includes(
+      "imagesearch-notice-warning"
+    )) {
+      setNotice("");
     }
   };
   var updateResultsInfo = () => {

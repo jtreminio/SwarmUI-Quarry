@@ -10,21 +10,20 @@ public static class ImageSearchFilterBuilder
     public static readonly IReadOnlyDictionary<string, IReadOnlyList<ImageSearchOperator>> OperatorsByType =
         new Dictionary<string, IReadOnlyList<ImageSearchOperator>>(StringComparer.OrdinalIgnoreCase)
         {
-            ["text"] = [new("contains", "contains"), new("equals", "is"), new("not_contains", "doesn't contain"), new("ne", "≠")],
-            ["number"] = [new("eq", "="), new("ne", "≠"), new("gt", ">"), new("lt", "<"), new("ge", "≥"), new("le", "≤")],
-            ["list"] = [new("contains", "contains"), new("not_contains", "doesn't contain")],
+            ["text"] = [new("=", "="), new("==", "=="), new("!=", "!=")],
+            ["number"] = [new("=", "="), new("==", "=="), new("!=", "!="), new("+=", "+="), new("-=", "-=")],
+            ["list"] = [new("=", "="), new("==", "=="), new("!=", "!=")],
             ["bool"] = [new("is_true", "is set"), new("is_false", "is not set")],
-            ["discovered"] =
-            [
-                new("contains", "contains"), new("equals", "is"), new("not_contains", "doesn't contain"),
-                new("eq", "="), new("ne", "≠"), new("gt", ">"), new("lt", "<"), new("le", "≤"), new("ge", "≥"),
-            ],
+            ["discovered"] = [new("=", "="), new("==", "=="), new("!=", "!="), new("+=", "+="), new("-=", "-=")],
         };
 
-    public static SqlFilter Build(JArray filters) => Build(filters, null);
+    public static SqlFilter Build(JArray filters) => Build(filters, null, out _);
 
-    public static SqlFilter Build(JArray filters, ColumnSchema schema)
+    public static SqlFilter Build(JArray filters, ColumnSchema schema) => Build(filters, schema, out _);
+
+    public static SqlFilter Build(JArray filters, ColumnSchema schema, out List<string> warnings)
     {
+        warnings = [];
         if (filters is null || filters.Count == 0)
         {
             return SqlFilter.None;
@@ -44,7 +43,7 @@ public static class ImageSearchFilterBuilder
             {
                 continue;
             }
-            string term = BuildTerm(field.Trim(), op.Trim(), value, parameters, schema);
+            string term = BuildTerm(field.Trim(), op.Trim(), value, parameters, schema, warnings);
             if (term is not null)
             {
                 terms.Add(term);
@@ -53,15 +52,20 @@ public static class ImageSearchFilterBuilder
         return terms.Count == 0 ? SqlFilter.None : new SqlFilter(string.Join(" AND ", terms), parameters);
     }
 
-    private static string BuildTerm(string field, string op, string value, List<QueryParameter> parameters, ColumnSchema schema)
+    private static string BuildTerm(string field, string op, string value, List<QueryParameter> parameters, ColumnSchema schema, List<string> warnings)
     {
         if (ImageHistoryIndex.CoreFieldTypes.TryGetValue(field, out ImageFieldType type))
         {
+            if (op is "+=" or "-=" && type != ImageFieldType.Number)
+            {
+                warnings.Add($"The “{op}” filter only works on number fields, so it was skipped for “{FieldLabel(field)}”.");
+                return null;
+            }
             string column = SqlText.QuoteIdentifier(field);
             return type switch
             {
-                ImageFieldType.Text => TextTerm(TextMatchColumn(field, value, schema), op, value, parameters),
-                ImageFieldType.Number => NumberTerm(column, op, value, parameters),
+                ImageFieldType.Text => TextTerm(v => TextMatchColumn(field, v, schema), op, value, parameters),
+                ImageFieldType.Number => NumberFieldTerm(column, op, value, parameters),
                 ImageFieldType.List => ListTerm(column, op, value, parameters),
                 ImageFieldType.Bool => BoolTerm(column, op),
                 _ => null,
@@ -75,7 +79,7 @@ public static class ImageSearchFilterBuilder
         string textExpr = $"json_extract_string({SqlText.QuoteIdentifier(ImageHistoryIndex.MetaJsonColumn)}, {path})";
         return IsNumericOp(op)
             ? NumberTerm($"TRY_CAST({textExpr} AS DOUBLE)", op, value, parameters)
-            : TextTerm($"lower({textExpr})", op, value, parameters);
+            : TextTerm(_ => $"lower({textExpr})", op, value, parameters);
     }
 
     private static string TextMatchColumn(string field, string value, ColumnSchema schema)
@@ -90,33 +94,37 @@ public static class ImageSearchFilterBuilder
             : scan;
     }
 
-    private static string TextTerm(string matchColumn, string op, string value, List<QueryParameter> parameters)
+    private static string TextTerm(Func<string, string> matchColumnFor, string op, string value, List<QueryParameter> parameters)
     {
-        if (op is not ("contains" or "equals" or "eq" or "ne" or "not_contains"))
+        if (op is not ("=" or "==" or "!="))
         {
             return null;
         }
-        string p = AddParam(parameters, value.ToLowerInvariant());
-        return op switch
+        List<string> values = SplitValues(value);
+        if (values.Count == 0)
         {
-            "contains" => $"contains({matchColumn}, {p})",
-            "equals" or "eq" => $"{matchColumn} = {p}",
-            "ne" => $"{matchColumn} != {p}",
-            "not_contains" => $"NOT contains({matchColumn}, {p})",
-            _ => null,
-        };
+            return null;
+        }
+        string[] checks = new string[values.Count];
+        for (int i = 0; i < values.Count; i++)
+        {
+            string p = AddParam(parameters, values[i].ToLowerInvariant());
+            checks[i] = $"contains({matchColumnFor(values[i])}, {p})";
+        }
+        return Combine(op, checks);
     }
+
+    private static string NumberFieldTerm(string column, string op, string value, List<QueryParameter> parameters)
+        => op is "+=" or "-="
+            ? NumberTerm(column, op, value, parameters)
+            : TextTerm(_ => $"lower(CAST({column} AS VARCHAR))", op, value, parameters);
 
     private static string NumberTerm(string expr, string op, string value, List<QueryParameter> parameters)
     {
         string comparison = op switch
         {
-            "eq" => "=",
-            "ne" => "!=",
-            "gt" => ">",
-            "lt" => "<",
-            "ge" => ">=",
-            "le" => "<=",
+            "+=" => ">=",
+            "-=" => "<=",
             _ => null,
         };
         if (comparison is null)
@@ -132,22 +140,64 @@ public static class ImageSearchFilterBuilder
 
     private static string ListTerm(string column, string op, string value, List<QueryParameter> parameters)
     {
-        if (op is not ("contains" or "not_contains"))
+        if (op is not ("=" or "==" or "!="))
         {
             return null;
         }
-        string contains = $"len(list_filter({column}, x -> contains(lower(x), {AddParam(parameters, value.ToLowerInvariant())}))) > 0";
-        return op == "contains" ? contains : $"NOT ({contains})";
+        List<string> values = SplitValues(value);
+        if (values.Count == 0)
+        {
+            return null;
+        }
+        string[] checks = new string[values.Count];
+        for (int i = 0; i < values.Count; i++)
+        {
+            string p = AddParam(parameters, values[i].ToLowerInvariant());
+            checks[i] = $"len(list_filter({column}, x -> contains(lower(x), {p}))) > 0";
+        }
+        return Combine(op, checks);
+    }
+
+    private static string Combine(string op, string[] checks)
+    {
+        if (op == "!=")
+        {
+            return checks.Length == 1 ? $"NOT {checks[0]}" : $"NOT ({string.Join(" OR ", checks)})";
+        }
+        if (checks.Length == 1)
+        {
+            return checks[0];
+        }
+        string separator = op == "==" ? " AND " : " OR ";
+        return $"({string.Join(separator, checks)})";
+    }
+
+    private static List<string> SplitValues(string value)
+    {
+        List<string> values = [];
+        foreach (string part in value.Split(','))
+        {
+            string trimmed = part.Trim();
+            if (trimmed.Length > 0)
+            {
+                values.Add(trimmed);
+            }
+        }
+        return values;
     }
 
     private static string BoolTerm(string column, string op) => op switch
     {
-        "is_true" or "true" or "eq" => $"{column} = TRUE",
-        "is_false" or "false" or "ne" => $"{column} IS NOT TRUE",
+        "is_true" => $"{column} = TRUE",
+        "is_false" => $"{column} IS NOT TRUE",
         _ => null,
     };
 
-    private static bool IsNumericOp(string op) => op is "eq" or "ne" or "gt" or "lt" or "ge" or "le";
+    private static bool IsNumericOp(string op) => op is "+=" or "-=";
+
+    private static string FieldLabel(string field)
+        => ImageHistoryIndex.CoreFields
+            .FirstOrDefault(f => string.Equals(f.Column, field, StringComparison.OrdinalIgnoreCase))?.Label ?? field;
 
     private static string JsonPath(string field)
     {

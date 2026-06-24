@@ -292,6 +292,7 @@ const listResults = (
             );
             updateResultsUI();
             reflectAvailability();
+            applyWarnings(data.warnings ?? []);
             callback([], loadedFiles);
         },
         (message) => {
@@ -417,7 +418,7 @@ const loadMore = (): void => {
 
 const setNotice = (
     text: string,
-    type: "info" | "error" | "success" = "info",
+    type: "info" | "error" | "success" | "warning" = "info",
 ): void => {
     const notice = el("imagesearch-notice");
     if (notice) {
@@ -425,6 +426,18 @@ const setNotice = (
         notice.className = text
             ? `imagesearch-notice imagesearch-notice-${type}`
             : "imagesearch-notice";
+    }
+};
+
+const applyWarnings = (warnings: string[]): void => {
+    if (warnings.length) {
+        setNotice(warnings.join(" "), "warning");
+    } else if (
+        (el("imagesearch-notice")?.className ?? "").includes(
+            "imagesearch-notice-warning",
+        )
+    ) {
+        setNotice("");
     }
 };
 
