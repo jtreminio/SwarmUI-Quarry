@@ -264,7 +264,12 @@ public static class DatasetManager
             {
                 if (DatasetCache.TryGetPreview(key, entry.FileHash, limit, out DatasetCache.PreviewData settled))
                 {
-                    return StripInternalPreviewColumns(settled);
+                    DatasetCache.PreviewData visible = StripInternalPreviewColumns(settled);
+                    if (!ReferenceEquals(visible, settled))
+                    {
+                        DatasetCache.StorePreview(key, entry.FileHash, visible);
+                    }
+                    return visible;
                 }
                 (List<string> columns, List<List<string>> rows) = Backend.GetSampleRows(entry.Path, limit);
                 (columns, rows) = ColumnSchema.StripCompanions(columns, rows);
@@ -273,7 +278,6 @@ public static class DatasetManager
                 return fresh;
             });
             data = StripInternalPreviewColumns(data);
-            DatasetCache.StorePreview(key, entry.FileHash, data);
             DatasetCache.PersistIfDirty();
             return (true, data.Columns, data.Rows, null);
         }
