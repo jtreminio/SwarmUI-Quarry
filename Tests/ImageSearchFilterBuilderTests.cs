@@ -153,18 +153,20 @@ public class ImageSearchFilterBuilderTests
     }
 
     [Fact]
-    public void ListAny_BuildsListFilter()
+    public void MultiValueField_MatchesAsText()
     {
+        // loras/embeddings are flat comma-separated text columns now, so `=` is a plain substring match -- no
+        // list_filter, no list column (which would overflow Lance's mini-block rep/def buffer on a large history).
         SqlFilter f = Build("""[{"field":"loras","op":"=","value":"foo"}]""");
-        Assert.Equal("len(list_filter(\"loras\", x -> contains(lower(x), $p0))) > 0", f.WhereClause);
+        Assert.Equal("contains(lower(\"loras\"), $p0)", f.WhereClause);
     }
 
     [Fact]
-    public void ListAll_MultipleValues_AndsListFilters()
+    public void MultiValueField_All_MultipleValues_AndsContains()
     {
         SqlFilter f = Build("""[{"field":"loras","op":"==","value":"foo, bar"}]""");
         Assert.Equal(
-            "(len(list_filter(\"loras\", x -> contains(lower(x), $p0))) > 0 AND len(list_filter(\"loras\", x -> contains(lower(x), $p1))) > 0)",
+            "(contains(lower(\"loras\"), $p0) AND contains(lower(\"loras\"), $p1))",
             f.WhereClause);
     }
 
@@ -252,13 +254,13 @@ public class ImageSearchFilterBuilderTests
     }
 
     [Fact]
-    public void AtMostOnListField_CastsElementsNumericallyWithAWarning()
+    public void AtMostOnMultiValueField_CastsNumericallyWithAWarning()
     {
-        // On a list column the comparison runs per element, keeping rows where any element parses to a number that
-        // satisfies the bound.
+        // loras/embeddings are flat text columns now, so a numeric bound casts the whole value (matching only rows
+        // whose text parses to a number) and warns -- the same contract as any other non-numeric field.
         SqlFilter f = ImageSearchFilterBuilder.Build(
             JArray.Parse("""[{"field":"loras","op":"-=","value":"5"}]"""), null, out List<string> warnings);
-        Assert.Equal("len(list_filter(\"loras\", x -> TRY_CAST(x AS DOUBLE) <= CAST($p0 AS DOUBLE))) > 0", f.WhereClause);
+        Assert.Equal("TRY_CAST(\"loras\" AS DOUBLE) <= CAST($p0 AS DOUBLE)", f.WhereClause);
         Assert.Single(warnings);
     }
 

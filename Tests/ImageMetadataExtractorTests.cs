@@ -34,8 +34,8 @@ public class ImageMetadataExtractorTests
         Assert.Equal("euler", row.Sampler);
         Assert.Equal(1024L, row.Width!.Value);
         Assert.Equal(768L, row.Height!.Value);
-        Assert.Equal(new[] { "lora1", "lora2" }, row.Loras);
-        Assert.Equal(new[] { "emb1" }, row.Embeddings);
+        Assert.Equal("lora1, lora2", row.Loras); // flat, comma-separated scalar -- never a list column
+        Assert.Equal("emb1", row.Embeddings);
         Assert.Equal("a <q:cats>", row.OriginalPrompt);
         Assert.False(row.IsStarred);
         Assert.Equal(meta, row.FullMetadata);
@@ -45,6 +45,17 @@ public class ImageMetadataExtractorTests
         // promoted keys must not be duplicated into meta_json
         Assert.DoesNotContain("\"prompt\"", row.MetaJson);
         Assert.DoesNotContain("\"loras\"", row.MetaJson);
+    }
+
+    [Fact]
+    public void BuildRow_MultiValueParams_AreCommaSeparatedText_EmptyBecomesNull()
+    {
+        // loras/embeddings are stored flat (comma-separated), and an empty list collapses to NULL -- never a "[]"
+        // list column, which would overflow Lance's mini-block rep/def buffer on a large history.
+        ImageIndexRow row = ImageMetadataExtractor.BuildRow(
+            File("a.png"), """{"sui_image_params":{"loras":["x","y","z"]},"sui_extra_data":{"used_embeddings":[]}}""", 1);
+        Assert.Equal("x, y, z", row.Loras);
+        Assert.Null(row.Embeddings);
     }
 
     [Fact]

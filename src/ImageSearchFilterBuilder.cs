@@ -63,7 +63,6 @@ public static class ImageSearchFilterBuilder
                 {
                     ImageFieldType.Number => NumberTerm(column, op, value, parameters),
                     ImageFieldType.Text => WarnNonNumeric(field, op, NumberTerm($"TRY_CAST({column} AS DOUBLE)", op, value, parameters), warnings),
-                    ImageFieldType.List => WarnNonNumeric(field, op, NumberListTerm(column, op, value, parameters), warnings),
                     _ => WarnUnsupportedNumeric(field, op, warnings),
                 };
             }
@@ -71,7 +70,6 @@ public static class ImageSearchFilterBuilder
             {
                 ImageFieldType.Text => TextTerm(v => TextMatchColumn(field, v, schema), op, value, parameters),
                 ImageFieldType.Number => NumberFieldTerm(column, op, value, parameters),
-                ImageFieldType.List => ListTerm(column, op, value, parameters),
                 ImageFieldType.Bool => BoolTerm(column, op),
                 _ => null,
             };
@@ -143,12 +141,6 @@ public static class ImageSearchFilterBuilder
         return $"{expr} {comparison} CAST({AddParam(parameters, value)} AS DOUBLE)";
     }
 
-    private static string NumberListTerm(string column, string op, string value, List<QueryParameter> parameters)
-    {
-        string inner = NumberTerm("TRY_CAST(x AS DOUBLE)", op, value, parameters);
-        return inner is null ? null : $"len(list_filter({column}, x -> {inner})) > 0";
-    }
-
     private static string WarnNonNumeric(string field, string op, string term, List<string> warnings)
     {
         warnings.Add($"“{FieldLabel(field)}” isn’t a number field, so “{op}” compares it numerically and only matches rows whose value is a number.");
@@ -159,26 +151,6 @@ public static class ImageSearchFilterBuilder
     {
         warnings.Add($"“{op}” can’t be used on “{FieldLabel(field)}”, so it was skipped.");
         return null;
-    }
-
-    private static string ListTerm(string column, string op, string value, List<QueryParameter> parameters)
-    {
-        if (op is not ("=" or "==" or "!="))
-        {
-            return null;
-        }
-        List<string> values = SplitValues(value);
-        if (values.Count == 0)
-        {
-            return null;
-        }
-        string[] checks = new string[values.Count];
-        for (int i = 0; i < values.Count; i++)
-        {
-            string p = AddParam(parameters, values[i].ToLowerInvariant());
-            checks[i] = $"len(list_filter({column}, x -> contains(lower(x), {p}))) > 0";
-        }
-        return Combine(op, checks);
     }
 
     private static string Combine(string op, string[] checks)

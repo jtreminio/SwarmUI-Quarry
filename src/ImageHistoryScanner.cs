@@ -123,23 +123,55 @@ public static class ImageHistoryScanner
         {
             return new Dictionary<string, string>(StringComparer.Ordinal);
         }
+        if (HasObsoleteListSchema(lancePath))
+        {
+            return RebuildFromScratch(userId, $"image-history index at '{lancePath}' uses the obsolete list-column schema");
+        }
         try
         {
             return DatasetManager.Backend.GetPathHashes(lancePath);
         }
         catch (Exception ex)
         {
-            Logs.Warning($"Quarry: image-history index at '{lancePath}' is unreadable ({ex.Message}); rebuilding it from scratch.");
-            try
-            {
-                Directory.Delete(ImageHistoryIndex.IndexDirFor(userId), recursive: true);
-            }
-            catch (Exception delEx)
-            {
-                Logs.Warning($"Quarry: could not remove the corrupt image-history index: {delEx.Message}");
-            }
-            return new Dictionary<string, string>(StringComparer.Ordinal);
+            return RebuildFromScratch(userId, $"image-history index at '{lancePath}' is unreadable ({ex.Message})");
         }
+    }
+
+    private static bool HasObsoleteListSchema(string lancePath)
+    {
+        try
+        {
+            ColumnSchema schema = DatasetManager.Backend.GetSchema(lancePath);
+            return (schema.TryGet("loras", out ColumnInfo loras) && loras.Kind == ColumnKind.List)
+                || (schema.TryGet("embeddings", out ColumnInfo embeddings) && embeddings.Kind == ColumnKind.List);
+        }
+        catch (Exception ex)
+        {
+            Logs.Debug($"Quarry: could not inspect image-history schema at '{lancePath}': {ex.Message}");
+            return false;
+        }
+    }
+
+    private static Dictionary<string, string> RebuildFromScratch(string userId, string reason)
+    {
+        Logs.Warning($"Quarry: {reason}; rebuilding it from scratch.");
+        try
+        {
+            DatasetManager.Backend.Reset();
+        }
+        catch (Exception ex)
+        {
+            Logs.Debug($"Quarry: could not reset the query backend before rebuild: {ex.Message}");
+        }
+        try
+        {
+            Directory.Delete(ImageHistoryIndex.IndexDirFor(userId), recursive: true);
+        }
+        catch (Exception ex)
+        {
+            Logs.Warning($"Quarry: could not remove the obsolete image-history index: {ex.Message}");
+        }
+        return new Dictionary<string, string>(StringComparer.Ordinal);
     }
 
     private const int IndexBatchSize = 5_000;

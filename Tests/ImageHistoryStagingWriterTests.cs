@@ -27,10 +27,11 @@ public class ImageHistoryStagingWriterTests
     }
 
     [Fact]
-    public void WriteRowsJson_EmitsValidArray_WithShapeNullsListsAndEscaping()
+    public void WriteRowsJson_EmitsValidArray_WithShapeNullsScalarsAndEscaping()
     {
         // A prompt full of JSON-hostile characters proves the streamed output is escaped exactly as the old
-        // JArray.ToString() did; a null column and a populated list column pin the rest of the read_json shape.
+        // JArray.ToString() did; a null column and a populated multi-value column (now flat, comma-separated text)
+        // pin the rest of the read_json shape.
         const string trickyPrompt = "a \"quoted\" value, a \\ backslash,\na newline, tab\t, unicode ✓";
         ImageIndexRow row = new()
         {
@@ -44,8 +45,8 @@ public class ImageHistoryStagingWriterTests
             Model = "some-model",
             Seed = 42,
             CfgScale = 7.5,
-            Loras = ["lora_a", "lora_b"],
-            Embeddings = [],
+            Loras = "lora_a, lora_b",
+            Embeddings = null,
         };
 
         using TempFile file = new();
@@ -62,9 +63,8 @@ public class ImageHistoryStagingWriterTests
         Assert.Equal(42, only.GetProperty("seed").GetInt64());
         Assert.Equal(7.5, only.GetProperty("cfgscale").GetDouble());
         Assert.Equal(JsonValueKind.Null, only.GetProperty("negativeprompt").ValueKind);
-        Assert.Equal(new[] { "lora_a", "lora_b" }, only.GetProperty("loras").EnumerateArray().Select(e => e.GetString()));
-        Assert.Equal(JsonValueKind.Array, only.GetProperty("embeddings").ValueKind);
-        Assert.Equal(0, only.GetProperty("embeddings").GetArrayLength());
+        Assert.Equal("lora_a, lora_b", only.GetProperty("loras").GetString()); // flat scalar text, not a JSON array
+        Assert.Equal(JsonValueKind.Null, only.GetProperty("embeddings").ValueKind); // absent multi-value -> JSON null
     }
 
     [Fact]

@@ -38,8 +38,8 @@ public static class ImageHistoryIndex
         ("sampler", "VARCHAR"),
         ("width", "BIGINT"),
         ("height", "BIGINT"),
-        ("loras", "VARCHAR[]"),
-        ("embeddings", "VARCHAR[]"),
+        ("loras", "VARCHAR"),
+        ("embeddings", "VARCHAR"),
         (MetaJsonColumn, "VARCHAR"),
         (FullMetadataColumn, "VARCHAR"),
     ];
@@ -55,8 +55,8 @@ public static class ImageHistoryIndex
         new("negativeprompt", "Negative prompt", ImageFieldType.Text, false),
         new("original_prompt", "Original prompt", ImageFieldType.Text, false),
         new("model", "Model", ImageFieldType.Text, false),
-        new("loras", "LoRAs", ImageFieldType.List, false),
-        new("embeddings", "Embeddings", ImageFieldType.List, false),
+        new("loras", "LoRAs", ImageFieldType.Text, false),
+        new("embeddings", "Embeddings", ImageFieldType.Text, false),
         new("steps", "Steps", ImageFieldType.Number, false),
         new("cfgscale", "CFG scale", ImageFieldType.Number, false),
         new("sampler", "Sampler", ImageFieldType.Text, false),
@@ -78,7 +78,7 @@ public static class ImageHistoryIndex
         [.. Schema.Select(c => c.Name).Where(n => n != MetaJsonColumn)];
 
     public static readonly IReadOnlyList<string> LowercaseSearchColumns =
-        ["prompt", "negativeprompt", "original_prompt", "model", "sampler"];
+        ["prompt", "negativeprompt", "original_prompt", "model", "sampler", "loras", "embeddings"];
 
     public static string LcColumn(string column) => column + ColumnSchema.CompanionSuffix;
 

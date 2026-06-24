@@ -24,8 +24,8 @@ public sealed class ImageIndexRow
     public string Sampler;
     public long? Width;
     public long? Height;
-    public List<string> Loras = [];
-    public List<string> Embeddings = [];
+    public string Loras;
+    public string Embeddings;
     public string MetaJson = "{}";
     public string FullMetadata;
 
@@ -46,8 +46,8 @@ public sealed class ImageIndexRow
         ["sampler"] = Str(Sampler),
         ["width"] = Num(Width),
         ["height"] = Num(Height),
-        ["loras"] = new JArray(Loras),
-        ["embeddings"] = new JArray(Embeddings),
+        ["loras"] = Str(Loras),
+        ["embeddings"] = Str(Embeddings),
         ["meta_json"] = MetaJson ?? "{}",
         ["full_metadata"] = Str(FullMetadata),
     };
@@ -168,12 +168,12 @@ public static class ImageMetadataExtractor
             row.CfgScale = AsDouble(sip["cfgscale"]);
             row.Width = AsLong(sip["width"]);
             row.Height = AsLong(sip["height"]);
-            row.Loras = AsStringList(sip["loras"]);
+            row.Loras = AsCsv(sip["loras"]);
         }
         if (sed is not null)
         {
             row.OriginalPrompt = sed.Value<string>("original_prompt");
-            row.Embeddings = AsStringList(sed["used_embeddings"]);
+            row.Embeddings = AsCsv(sed["used_embeddings"]);
         }
         row.OriginalPrompt ??= row.Prompt;
         row.MetaJson = BuildMetaJson(sip, sed);
@@ -221,16 +221,21 @@ public static class ImageMetadataExtractor
         _ => null,
     };
 
-    private static List<string> AsStringList(JToken token)
+    private static string AsCsv(JToken token)
     {
         List<string> result = [];
         if (token is JArray array)
         {
             foreach (JToken element in array)
             {
-                if (element.Type != JTokenType.Null)
+                if (element.Type == JTokenType.Null)
                 {
-                    result.Add(element.ToString());
+                    continue;
+                }
+                string text = element.ToString();
+                if (text.Length > 0)
+                {
+                    result.Add(text);
                 }
             }
         }
@@ -242,6 +247,6 @@ public static class ImageMetadataExtractor
                 result.Add(value);
             }
         }
-        return result;
+        return result.Count == 0 ? null : string.Join(", ", result);
     }
 }

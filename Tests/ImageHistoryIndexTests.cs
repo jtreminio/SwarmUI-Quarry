@@ -10,17 +10,20 @@ public class ImageHistoryIndexTests
         Assert.Equal(13, ImageHistoryIndex.CoreFields.Count);
         Assert.Equal("prompt", ImageHistoryIndex.CoreFields[0].Column);
         Assert.Equal("is_starred", ImageHistoryIndex.CoreFields[^1].Column);
-        Assert.Contains(ImageHistoryIndex.CoreFields, f => f is { Column: "loras", Type: ImageFieldType.List });
+        Assert.Contains(ImageHistoryIndex.CoreFields, f => f is { Column: "loras", Type: ImageFieldType.Text });
         Assert.Contains(ImageHistoryIndex.CoreFields, f => f is { Column: "cfgscale", Type: ImageFieldType.Number });
     }
 
     [Fact]
-    public void CreateTableSql_HasListAndJsonColumns()
+    public void CreateTableSql_DeclaresFlatScalarColumns_NeverLists()
     {
         string sql = ImageHistoryIndex.CreateTableSql("q.main.idx");
         Assert.StartsWith("CREATE TABLE q.main.idx (", sql);
-        Assert.Contains("loras VARCHAR[]", sql);
-        Assert.Contains("embeddings VARCHAR[]", sql);
+        // loras/embeddings are flat VARCHAR, not list columns -- list columns overflow Lance's mini-block rep/def
+        // buffer when empty across a large, clustered history, breaking every write to the index.
+        Assert.Contains("loras VARCHAR", sql);
+        Assert.Contains("embeddings VARCHAR", sql);
+        Assert.DoesNotContain("VARCHAR[]", sql);
         Assert.Contains("meta_json VARCHAR", sql);
         Assert.Contains("full_metadata VARCHAR", sql);
     }
@@ -69,6 +72,21 @@ public class ImageHistoryIndexTests
         Assert.Contains("lower(prompt) AS prompt__lc", sql); // computed in the staged source
         Assert.Contains("prompt__lc = s.prompt__lc", sql);   // populated on UPDATE
         Assert.Contains("s.prompt__lc", sql);                // populated on INSERT
+    }
+
+    [Fact]
+    public void LowercaseCompanions_CoverTheMultiValueTextColumns()
+    {
+        // loras/embeddings are flat text now, so they get the same lowercased NGRAM companion as the other text
+        // columns -- substring search on them is index-accelerated on a large history, not a full lower() scan.
+        Assert.Contains("loras", ImageHistoryIndex.LowercaseSearchColumns);
+        Assert.Contains("embeddings", ImageHistoryIndex.LowercaseSearchColumns);
+        string create = ImageHistoryIndex.CreateTableSql("q.main.idx");
+        Assert.Contains("loras__lc VARCHAR", create);
+        Assert.Contains("embeddings__lc VARCHAR", create);
+        List<(string Drop, string Create)> ddls = [.. ImageHistoryIndex.NgramIndexDdls("t")];
+        Assert.Contains(ddls, d => d.Create == "CREATE INDEX loras__lc_idx ON t (loras__lc) USING NGRAM;");
+        Assert.Contains(ddls, d => d.Create == "CREATE INDEX embeddings__lc_idx ON t (embeddings__lc) USING NGRAM;");
     }
 
     [Fact]
