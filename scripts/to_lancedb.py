@@ -61,6 +61,7 @@ or standalone with uv (deps declared inline above):
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -98,12 +99,18 @@ def detect_format(path: Path, override: str | None) -> str:
     return fmt
 
 
-def reader_sql(fmt: str) -> str:
-    """DuckDB reader call with a ``?`` placeholder for the file path."""
+def reader_sql(fmt: str, *, parallel: bool = True) -> str:
+    """DuckDB reader call with a ``?`` placeholder for the file path.
+
+    ``parallel`` only affects CSV. DuckDB's multi-threaded CSV reader can't do a
+    full read of some files (e.g. quoted fields containing newlines) and raises
+    "The Parallel CSV Reader currently does not support a full read on this file";
+    passing ``parallel=False`` forces the single-threaded reader, which parses them.
+    """
     if fmt == "parquet":
         return "read_parquet(?)"
     if fmt == "csv":
-        return "read_csv_auto(?)"
+        return "read_csv_auto(?)" if parallel else "read_csv_auto(?, parallel=false)"
     return "read_json(?, format='newline_delimited')"
 
 
@@ -172,19 +179,17 @@ def plan_jobs(path: Path, output: str | None, override_format: str | None) -> li
     raise SystemExit(f"error: no such file or directory: {path}")
 
 
-def convert_one(src: Path, fmt: str, out_path: Path, mode: str, batch_rows: int, prompt_column: str | None):
-    """Stream one file into a Lance dataset; return (rows, column names).
+def _stream_to_lance(
+    src: Path, fmt: str, out_path: Path, mode: str, batch_rows: int, prompt_column: str | None, parallel: bool
+):
+    """Stream one file into a Lance dataset via DuckDB; return (rows, column names).
 
-    Rows whose prompt column is empty/whitespace are dropped here, so the dataset holds only usable wildcard
-    picks. ``length(trim(CAST(col AS VARCHAR))) > 0`` matches the test the extension used to apply at query
-    time (a NULL or all-whitespace value is excluded); doing it at ingest lets the extension select rows with a
-    pushed-down ``LIMIT/OFFSET`` instead. An empty schema (no resolvable column) keeps every row.
-
+    ``parallel`` is forwarded to the CSV reader (ignored for other formats).
     Opens its own DuckDB connection so it is safe to run from a worker thread.
     """
     con = duckdb.connect()
     try:
-        reader_call = reader_sql(fmt)
+        reader_call = reader_sql(fmt, parallel=parallel)
         columns = [
             row[0]
             for row in con.execute(
@@ -207,6 +212,36 @@ def convert_one(src: Path, fmt: str, out_path: Path, mode: str, batch_rows: int,
         return ds.count_rows(), list(ds.schema.names)
     finally:
         con.close()
+
+
+def convert_one(src: Path, fmt: str, out_path: Path, mode: str, batch_rows: int, prompt_column: str | None):
+    """Stream one file into a Lance dataset; return (rows, column names).
+
+    Rows whose prompt column is empty/whitespace are dropped here, so the dataset holds only usable wildcard
+    picks. ``length(trim(CAST(col AS VARCHAR))) > 0`` matches the test the extension used to apply at query
+    time (a NULL or all-whitespace value is excluded); doing it at ingest lets the extension select rows with a
+    pushed-down ``LIMIT/OFFSET`` instead. An empty schema (no resolvable column) keeps every row.
+
+    The DuckDB error that drives the CSV retry below surfaces lazily: ``DESCRIBE`` and ``to_arrow_reader`` set
+    up the scan, but the parallel reader only refuses the full read once ``lance.write_dataset`` drains it, so
+    the failure lands here rather than at query setup.
+    """
+    existed_before = out_path.exists()
+    try:
+        return _stream_to_lance(src, fmt, out_path, mode, batch_rows, prompt_column, parallel=True)
+    except Exception as exc:
+        # DuckDB's multi-threaded CSV reader can't do a full read of some files (quoted fields spanning
+        # newlines, etc.), raising "The Parallel CSV Reader currently does not support a full read on this
+        # file". Retry once single-threaded, which parses them. Other errors -- and other formats -- re-raise.
+        if fmt != "csv" or "Parallel CSV Reader" not in str(exc):
+            raise
+        # A mid-stream failure can leave a half-written dataset directory behind. Overwrite/append are
+        # versioned commits (a failed write never replaces the committed dataset, so leave them be), but a
+        # failed "create" of a fresh path leaves an orphan dir that would make the retry's create trip; drop
+        # it. Only remove what this call created -- never a directory that already existed.
+        if mode == "create" and not existed_before and out_path.exists():
+            shutil.rmtree(out_path, ignore_errors=True)
+        return _stream_to_lance(src, fmt, out_path, mode, batch_rows, prompt_column, parallel=False)
 
 
 def main(argv: list[str] | None = None) -> int:
