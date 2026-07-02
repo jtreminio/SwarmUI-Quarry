@@ -30,6 +30,7 @@ public class QuarryExtension : Extension
 
         API.RegisterAPICall(QuarryGetSettings, false, Permissions.FundamentalGenerateTabAccess);
         API.RegisterAPICall(QuarrySaveSettings, true, Permissions.FundamentalGenerateTabAccess);
+        API.RegisterAPICall(QuarrySetDatasetEnabled, true, Permissions.FundamentalGenerateTabAccess);
         API.RegisterAPICall(QuarryRefresh, true, Permissions.FundamentalGenerateTabAccess);
         API.RegisterAPICall(QuarryPreviewDataset, false, Permissions.FundamentalGenerateTabAccess);
         API.RegisterAPICall(QuarryClearPreviewCache, true, Permissions.FundamentalGenerateTabAccess);
@@ -102,6 +103,7 @@ public class QuarryExtension : Extension
             AddToExistingTag = settings.Value<bool?>("addToExistingTag") ?? true;
             DatasetManager.SetPromptColumns(ReadPromptColumns(settings["promptColumns"] as JObject));
             DatasetManager.SetTagColumns(ReadTagColumns(settings["tagColumns"] as JObject));
+            DatasetManager.SetDisabledDatasets(ReadDisabledDatasets(settings["disabledDatasets"] as JArray));
         }
         catch (Exception ex)
         {
@@ -129,6 +131,7 @@ public class QuarryExtension : Extension
                 ["addToExistingTag"] = AddToExistingTag,
                 ["promptColumns"] = promptColumns,
                 ["tagColumns"] = tagColumns,
+                ["disabledDatasets"] = new JArray(DatasetManager.GetDisabledDatasetsSnapshot()),
             };
             File.WriteAllText(SettingsFilePath, settings.ToString());
         }
@@ -166,6 +169,23 @@ public class QuarryExtension : Extension
         }
         return result;
     }
+
+    private static List<string> ReadDisabledDatasets(JArray source)
+    {
+        List<string> result = [];
+        if (source is not null)
+        {
+            foreach (JToken token in source)
+            {
+                string name = token?.ToString();
+                if (!string.IsNullOrWhiteSpace(name))
+                {
+                    result.Add(name);
+                }
+            }
+        }
+        return result;
+    }
     #endregion
 
     #region API endpoints
@@ -195,6 +215,7 @@ public class QuarryExtension : Extension
                     ["configuredPromptColumn"] = info.ConfiguredPromptColumn,
                     ["configuredTagColumns"] = ToJArray(info.ConfiguredTagColumns),
                     ["rowCount"] = info.RowCount,
+                    ["enabled"] = info.Enabled,
                     ["error"] = info.Error,
                 });
             }
@@ -216,7 +237,7 @@ public class QuarryExtension : Extension
         return Task.FromResult(BuildSettingsResponse());
     }
 
-    public Task<JObject> QuarrySaveSettings(Session session, string datasetsFolder, string promptColumnsJson, string tagColumnsJson, bool addToExistingTag = true)
+    public Task<JObject> QuarrySaveSettings(Session session, string datasetsFolder, string promptColumnsJson, string tagColumnsJson, string disabledDatasetsJson = "", bool addToExistingTag = true)
     {
         try
         {
@@ -226,6 +247,8 @@ public class QuarryExtension : Extension
             DatasetManager.SetPromptColumns(ReadPromptColumns(parsed));
             JObject parsedTags = string.IsNullOrWhiteSpace(tagColumnsJson) ? [] : JObject.Parse(tagColumnsJson);
             DatasetManager.SetTagColumns(ReadTagColumns(parsedTags));
+            JArray parsedDisabled = string.IsNullOrWhiteSpace(disabledDatasetsJson) ? [] : JArray.Parse(disabledDatasetsJson);
+            DatasetManager.SetDisabledDatasets(ReadDisabledDatasets(parsedDisabled));
             DatasetManager.Sync();
             SaveSettings();
             return Task.FromResult(BuildSettingsResponse());
@@ -234,6 +257,17 @@ public class QuarryExtension : Extension
         {
             return Task.FromResult(new JObject { ["success"] = false, ["error"] = ex.Message });
         }
+    }
+
+    public Task<JObject> QuarrySetDatasetEnabled(Session session, string dataset, bool enabled)
+    {
+        if (string.IsNullOrWhiteSpace(dataset))
+        {
+            return Task.FromResult(new JObject { ["success"] = false, ["error"] = "No dataset specified." });
+        }
+        DatasetManager.SetDatasetEnabled(dataset, enabled);
+        SaveSettings();
+        return Task.FromResult(new JObject { ["success"] = true });
     }
 
     public Task<JObject> QuarryRefresh(Session session)

@@ -108,7 +108,7 @@ public static class PromptTagHandler
             {
                 foreach (DatasetEntry entry in DatasetManager.AllDatasets.OrderBy(e => e.Name, StringComparer.OrdinalIgnoreCase))
                 {
-                    if (DatasetNameMatching.GlobMatches(part, entry.Name) && seen.Add(entry.Name.ToLowerFast()))
+                    if (DatasetNameMatching.GlobMatches(part, entry.Name) && DatasetManager.IsDatasetEnabled(entry.Name) && seen.Add(entry.Name.ToLowerFast()))
                     {
                         targets.Add(entry);
                     }

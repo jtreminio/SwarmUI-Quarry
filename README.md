@@ -94,6 +94,12 @@ If you keep some datasets in subfolders, a single `*` stays at **one level**: `<
 
 It also matches **partial names**, which is perfect when you keep a family of related sets. Say you have `portraits-photo`, `portraits-anime`, and `portraits-vintage`: then `<q:portraits-*>` pulls from all three at once. The `*` can stand in for as much of the name as you like, so even `<q:por*>` would catch the lot. And partial names take filters just like everything else, so `<q:portraits-*[tags=girl]>` grabs a "girl" entry from every one of your portrait sets.
 
+### Leaving a dataset out of wildcards
+
+Every dataset in the Quarry tab has a little on/off switch next to it. Flip it **off** and that dataset is skipped whenever a wildcard would otherwise sweep it in — `<q:*>`, `<q:**>`, `<q:anime/**>`, `<q:por*>`, and so on all pretend it isn't there. Handy for a set you keep around but don't want mixed into "everything" rolls.
+
+The switch only affects wildcard matches. **Name the dataset directly and it still works**, even while switched off: `<q:portraits-vintage[tags=girl]>` reads `portraits-vintage` no matter what its toggle says. So "off" means "don't pull me in automatically," not "disabled." The switch saves the moment you click it — no need to press **Save Settings**.
+
 ### Filtering: `<q:FOO[tags=girl]>`
 
 Add `[ ... ]` after the name to filter. `<q:characters[tags=girl]>` keeps only the entries tagged "girl," then picks one of those at random. A filter reads as `column operator value`: which column to look in, how to match, and what to match.

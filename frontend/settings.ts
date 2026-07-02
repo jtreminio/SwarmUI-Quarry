@@ -85,6 +85,20 @@ export const renderDatasetNameButton = (
 ): string =>
     `<button type="button" class="quarry-dataset-name quarry-dataset-name-link" data-dataset="${name}" title="Add a reference to this dataset to your prompt">${label}</button>`;
 
+const ENABLE_TITLE =
+    "Enabled — included when a <q:> wildcard (like **) matches it. Click to disable.";
+const DISABLE_TITLE =
+    "Disabled — skipped by <q:> wildcards, but still used when a prompt names it explicitly. Click to enable.";
+
+export const isDatasetEnabled = (dataset: DatasetDto): boolean =>
+    dataset.enabled !== false;
+
+export const renderEnableToggle = (name: string, enabled: boolean): string => {
+    const stateCls = enabled ? "quarry-enabled" : "quarry-disabled";
+    const title = enabled ? ENABLE_TITLE : DISABLE_TITLE;
+    return `<button type="button" class="quarry-dataset-enable ${stateCls}" role="switch" aria-checked="${enabled}" data-dataset="${escapeHtml(name)}" title="${escapeHtml(title)}"><span class="quarry-enable-knob" aria-hidden="true"></span></button>`;
+};
+
 export const renderDatasetRow = (
     dataset: DatasetDto,
     displayName: string = dataset.name,
@@ -94,18 +108,22 @@ export const renderDatasetRow = (
 ): string => {
     const name = escapeHtml(dataset.name);
     const label = escapeHtml(displayName);
-    const cls = `quarry-dataset-row${hidden ? " quarry-row-hidden" : ""}`;
+    const enabled = isDatasetEnabled(dataset);
+    const cls = `quarry-dataset-row${hidden ? " quarry-row-hidden" : ""}${enabled ? "" : " quarry-dataset-disabled"}`;
+    const toggleCell = `<td class="quarry-dataset-enable-cell">${renderEnableToggle(dataset.name, enabled)}</td>`;
     const parentAttr = container
         ? ` data-parent="${escapeHtml(container)}"`
         : "";
     const attrs = `${parentAttr} style="--quarry-depth: ${depth}"`;
     if (dataset.error) {
         return `<tr class="${cls} quarry-dataset-error" data-dataset="${name}"${attrs}>
+            ${toggleCell}
             <td class="quarry-dataset-name-cell">${renderDatasetNameButton(name, label)}</td>
             <td colspan="4"><span class="quarry-dataset-error-msg">⚠️ ${escapeHtml(dataset.error)}</span></td>
         </tr>`;
     }
     return `<tr class="${cls}" data-dataset="${name}"${attrs}>
+        ${toggleCell}
         <td class="quarry-dataset-name-cell">${renderDatasetNameButton(name, label)}</td>
         <td><select class="quarry-dataset-column" data-dataset="${name}">${renderDatasetOptions(dataset)}</select></td>
         <td class="quarry-dataset-tags" title="Columns the 'tags' keyword searches across">${renderTagCheckboxes(dataset)}</td>
@@ -131,7 +149,7 @@ export const renderFolderHeaderRow = (
         ? ` data-parent="${escapeHtml(container)}"`
         : "";
     return `<tr class="quarry-folder-row${collapsedClass}${hiddenClass}" data-folder="${path}"${parentAttr} style="--quarry-depth: ${depth}">
-        <td colspan="5">
+        <td colspan="6">
             <button type="button" class="quarry-folder-toggle" data-folder="${path}" aria-expanded="${!collapsed}" title="Show or hide the datasets in this folder">
                 <span class="quarry-folder-caret" aria-hidden="true"></span>
                 <span class="quarry-folder-name">${escapeHtml(node.name)}</span>
@@ -180,7 +198,7 @@ export const renderDatasets = (
         .join("");
     return `<table class="quarry-datasets-table">
         <thead>
-            <tr><th>Dataset</th><th>Prompt column</th><th>Tag columns</th><th>Rows</th><th>Preview</th></tr>
+            <tr><th class="quarry-enable-th" title="Enable or disable this dataset for &lt;q:&gt; wildcard matches">On</th><th>Dataset</th><th>Prompt column</th><th>Tag columns</th><th>Rows</th><th>Preview</th></tr>
         </thead>
         <tbody>${folderRows}${looseRows}</tbody>
     </table>`;
@@ -309,6 +327,19 @@ export const collectTagColumns = (
     return result;
 };
 
+export const collectDisabledDatasets = (container: HTMLElement): string[] => {
+    const result: string[] = [];
+    container
+        .querySelectorAll<HTMLElement>("button.quarry-dataset-enable")
+        .forEach((button) => {
+            const name = button.getAttribute("data-dataset");
+            if (name && button.getAttribute("aria-checked") === "false") {
+                result.push(name);
+            }
+        });
+    return result;
+};
+
 let messageTimer: ReturnType<typeof setTimeout> | null = null;
 
 const applyTableHighlights = (names: string[]): void => {
@@ -382,6 +413,9 @@ const saveSettings = (): void => {
     const container = document.getElementById("quarry-datasets");
     const promptColumns = container ? collectPromptColumns(container) : {};
     const tagColumns = container ? collectTagColumns(container) : {};
+    const disabledDatasets = container
+        ? collectDisabledDatasets(container)
+        : [];
     const addToExistingEl = document.getElementById(
         ADD_TO_EXISTING_TAG_ID,
     ) as HTMLInputElement | null;
@@ -391,6 +425,7 @@ const saveSettings = (): void => {
             datasetsFolder: folder,
             promptColumnsJson: JSON.stringify(promptColumns),
             tagColumnsJson: JSON.stringify(tagColumns),
+            disabledDatasetsJson: JSON.stringify(disabledDatasets),
             addToExistingTag: addToExistingEl?.checked ?? true,
         },
         (data) => {
@@ -659,11 +694,52 @@ const toggleFolder = (toggle: HTMLElement): void => {
     }
 };
 
+const applyEnabledState = (button: HTMLElement, enabled: boolean): void => {
+    button.setAttribute("aria-checked", String(enabled));
+    button.classList.toggle("quarry-enabled", enabled);
+    button.classList.toggle("quarry-disabled", !enabled);
+    button.setAttribute("title", enabled ? ENABLE_TITLE : DISABLE_TITLE);
+    button
+        .closest<HTMLElement>(".quarry-dataset-row")
+        ?.classList.toggle("quarry-dataset-disabled", !enabled);
+};
+
+const toggleDatasetEnabled = (button: HTMLElement): void => {
+    const name = button.getAttribute("data-dataset");
+    if (!name) {
+        return;
+    }
+    const next = button.getAttribute("aria-checked") === "false";
+    applyEnabledState(button, next);
+    (button as HTMLButtonElement).disabled = true;
+    genericRequest<{ success: boolean; error?: string }>(
+        "QuarrySetDatasetEnabled",
+        { dataset: name, enabled: next },
+        (data) => {
+            (button as HTMLButtonElement).disabled = false;
+            if (data.success) {
+                recomputeReferences();
+            } else {
+                applyEnabledState(button, !next);
+                showMessage(
+                    `Failed to ${next ? "enable" : "disable"} '${name}': ${data.error ?? "unknown error"}`,
+                    "error",
+                );
+            }
+        },
+    );
+};
+
 const datasetsClickHandler = (event: Event): void => {
     const target = event.target as HTMLElement | null;
     const folderToggle = target?.closest<HTMLElement>(".quarry-folder-toggle");
     if (folderToggle) {
         toggleFolder(folderToggle);
+        return;
+    }
+    const enableToggle = target?.closest<HTMLElement>(".quarry-dataset-enable");
+    if (enableToggle) {
+        toggleDatasetEnabled(enableToggle);
         return;
     }
     const previewButton = target?.closest<HTMLElement>(

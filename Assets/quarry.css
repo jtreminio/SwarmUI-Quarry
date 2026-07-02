@@ -56,6 +56,58 @@
     box-shadow: inset 3px 0 0 var(--green);
 }
 
+.quarry-enable-th,
+.quarry-dataset-enable-cell {
+    width: 1%;
+    white-space: nowrap;
+    text-align: center;
+}
+
+.quarry-dataset-enable {
+    position: relative;
+    display: inline-block;
+    width: 2rem;
+    height: 1.05rem;
+    padding: 0;
+    border: none;
+    border-radius: 1rem;
+    background: var(--text-soft);
+    cursor: pointer;
+    vertical-align: middle;
+    transition: background 0.15s ease;
+}
+
+.quarry-dataset-enable.quarry-enabled {
+    background: var(--emphasis);
+}
+
+.quarry-dataset-enable:focus-visible {
+    outline: 2px solid var(--emphasis);
+    outline-offset: 2px;
+}
+
+.quarry-enable-knob {
+    position: absolute;
+    top: 0.15rem;
+    left: 0.15rem;
+    width: 0.75rem;
+    height: 0.75rem;
+    border-radius: 50%;
+    background: #fff;
+    transition: left 0.15s ease;
+}
+
+.quarry-dataset-enable.quarry-enabled .quarry-enable-knob {
+    left: calc(2rem - 0.9rem);
+}
+
+.quarry-dataset-row.quarry-dataset-disabled .quarry-dataset-name-link,
+.quarry-dataset-row.quarry-dataset-disabled .quarry-dataset-column,
+.quarry-dataset-row.quarry-dataset-disabled .quarry-dataset-tags,
+.quarry-dataset-row.quarry-dataset-disabled .quarry-dataset-rows {
+    opacity: 0.5;
+}
+
 .quarry-dataset-name {
     font-weight: 600;
     overflow-wrap: anywhere;

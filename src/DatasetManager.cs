@@ -94,6 +94,14 @@ public static class DatasetManager
 
     public static IReadOnlyDictionary<string, IReadOnlyList<string>> GetTagColumnsSnapshot() => ColumnConfig.GetTagColumnsSnapshot();
 
+    public static bool IsDatasetEnabled(string name) => DatasetEnabledConfig.IsEnabled(name);
+
+    public static void SetDisabledDatasets(IEnumerable<string> names) => DatasetEnabledConfig.SetDisabled(names);
+
+    public static void SetDatasetEnabled(string name, bool enabled) => DatasetEnabledConfig.SetEnabled(name, enabled);
+
+    public static IReadOnlyList<string> GetDisabledDatasetsSnapshot() => DatasetEnabledConfig.GetDisabledSnapshot();
+
     public static IReadOnlyCollection<DatasetEntry> AllDatasets => [.. Datasets.Values];
 
     public static IReadOnlyList<string> AllDatasetNames => [.. Datasets.Values.Select(e => e.Name)];
@@ -207,11 +215,11 @@ public static class DatasetManager
                     {
                     }
                 }
-                result.Add(new DatasetInfo(entry.Name, [.. schema.VisibleColumns], resolved, GetConfiguredPromptColumn(entry.Name), [.. GetConfiguredTagColumns(entry.Name)], rowCount, null));
+                result.Add(new DatasetInfo(entry.Name, [.. schema.VisibleColumns], resolved, GetConfiguredPromptColumn(entry.Name), [.. GetConfiguredTagColumns(entry.Name)], rowCount, IsDatasetEnabled(entry.Name), null));
             }
             catch (Exception ex)
             {
-                result.Add(new DatasetInfo(entry.Name, [], null, GetConfiguredPromptColumn(entry.Name), [.. GetConfiguredTagColumns(entry.Name)], null, ex.Message));
+                result.Add(new DatasetInfo(entry.Name, [], null, GetConfiguredPromptColumn(entry.Name), [.. GetConfiguredTagColumns(entry.Name)], null, IsDatasetEnabled(entry.Name), ex.Message));
             }
         }
         DatasetCache.PersistIfDirty();
@@ -468,4 +476,5 @@ public sealed record DatasetInfo(
     string ConfiguredPromptColumn,
     IReadOnlyList<string> ConfiguredTagColumns,
     long? RowCount,
+    bool Enabled,
     string Error);

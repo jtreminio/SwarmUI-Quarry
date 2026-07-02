@@ -1821,19 +1821,31 @@
     });
   };
   var renderDatasetNameButton = (name, label = name) => `<button type="button" class="quarry-dataset-name quarry-dataset-name-link" data-dataset="${name}" title="Add a reference to this dataset to your prompt">${label}</button>`;
+  var ENABLE_TITLE = "Enabled — included when a <q:> wildcard (like **) matches it. Click to disable.";
+  var DISABLE_TITLE = "Disabled — skipped by <q:> wildcards, but still used when a prompt names it explicitly. Click to enable.";
+  var isDatasetEnabled = (dataset) => dataset.enabled !== false;
+  var renderEnableToggle = (name, enabled) => {
+    const stateCls = enabled ? "quarry-enabled" : "quarry-disabled";
+    const title = enabled ? ENABLE_TITLE : DISABLE_TITLE;
+    return `<button type="button" class="quarry-dataset-enable ${stateCls}" role="switch" aria-checked="${enabled}" data-dataset="${escapeHtml(name)}" title="${escapeHtml(title)}"><span class="quarry-enable-knob" aria-hidden="true"></span></button>`;
+  };
   var renderDatasetRow = (dataset, displayName = dataset.name, depth = 0, container = null, hidden = false) => {
     const name = escapeHtml(dataset.name);
     const label = escapeHtml(displayName);
-    const cls = `quarry-dataset-row${hidden ? " quarry-row-hidden" : ""}`;
+    const enabled = isDatasetEnabled(dataset);
+    const cls = `quarry-dataset-row${hidden ? " quarry-row-hidden" : ""}${enabled ? "" : " quarry-dataset-disabled"}`;
+    const toggleCell = `<td class="quarry-dataset-enable-cell">${renderEnableToggle(dataset.name, enabled)}</td>`;
     const parentAttr = container ? ` data-parent="${escapeHtml(container)}"` : "";
     const attrs = `${parentAttr} style="--quarry-depth: ${depth}"`;
     if (dataset.error) {
       return `<tr class="${cls} quarry-dataset-error" data-dataset="${name}"${attrs}>
+            ${toggleCell}
             <td class="quarry-dataset-name-cell">${renderDatasetNameButton(name, label)}</td>
             <td colspan="4"><span class="quarry-dataset-error-msg">⚠️ ${escapeHtml(dataset.error)}</span></td>
         </tr>`;
     }
     return `<tr class="${cls}" data-dataset="${name}"${attrs}>
+        ${toggleCell}
         <td class="quarry-dataset-name-cell">${renderDatasetNameButton(name, label)}</td>
         <td><select class="quarry-dataset-column" data-dataset="${name}">${renderDatasetOptions(dataset)}</select></td>
         <td class="quarry-dataset-tags" title="Columns the 'tags' keyword searches across">${renderTagCheckboxes(dataset)}</td>
@@ -1850,7 +1862,7 @@
     const collapsedClass = collapsed ? " quarry-collapsed" : "";
     const parentAttr = container ? ` data-parent="${escapeHtml(container)}"` : "";
     return `<tr class="quarry-folder-row${collapsedClass}${hiddenClass}" data-folder="${path}"${parentAttr} style="--quarry-depth: ${depth}">
-        <td colspan="5">
+        <td colspan="6">
             <button type="button" class="quarry-folder-toggle" data-folder="${path}" aria-expanded="${!collapsed}" title="Show or hide the datasets in this folder">
                 <span class="quarry-folder-caret" aria-hidden="true"></span>
                 <span class="quarry-folder-name">${escapeHtml(node.name)}</span>
@@ -1882,7 +1894,7 @@
     const looseRows = loose.map((dataset) => renderDatasetRow(dataset)).join("");
     return `<table class="quarry-datasets-table">
         <thead>
-            <tr><th>Dataset</th><th>Prompt column</th><th>Tag columns</th><th>Rows</th><th>Preview</th></tr>
+            <tr><th class="quarry-enable-th" title="Enable or disable this dataset for &lt;q:&gt; wildcard matches">On</th><th>Dataset</th><th>Prompt column</th><th>Tag columns</th><th>Rows</th><th>Preview</th></tr>
         </thead>
         <tbody>${folderRows}${looseRows}</tbody>
     </table>`;
@@ -1987,6 +1999,16 @@
     });
     return result;
   };
+  var collectDisabledDatasets = (container) => {
+    const result = [];
+    container.querySelectorAll("button.quarry-dataset-enable").forEach((button) => {
+      const name = button.getAttribute("data-dataset");
+      if (name && button.getAttribute("aria-checked") === "false") {
+        result.push(name);
+      }
+    });
+    return result;
+  };
   var messageTimer = null;
   var applyTableHighlights = (names) => {
     const container = document.getElementById("quarry-datasets");
@@ -2053,6 +2075,7 @@
     const container = document.getElementById("quarry-datasets");
     const promptColumns = container ? collectPromptColumns(container) : {};
     const tagColumns = container ? collectTagColumns(container) : {};
+    const disabledDatasets = container ? collectDisabledDatasets(container) : [];
     const addToExistingEl = document.getElementById(
       ADD_TO_EXISTING_TAG_ID
     );
@@ -2062,6 +2085,7 @@
         datasetsFolder: folder,
         promptColumnsJson: JSON.stringify(promptColumns),
         tagColumnsJson: JSON.stringify(tagColumns),
+        disabledDatasetsJson: JSON.stringify(disabledDatasets),
         addToExistingTag: addToExistingEl?.checked ?? true
       },
       (data) => {
@@ -2300,11 +2324,48 @@
       refreshFolderVisibility(container, expandedFolders2);
     }
   };
+  var applyEnabledState = (button, enabled) => {
+    button.setAttribute("aria-checked", String(enabled));
+    button.classList.toggle("quarry-enabled", enabled);
+    button.classList.toggle("quarry-disabled", !enabled);
+    button.setAttribute("title", enabled ? ENABLE_TITLE : DISABLE_TITLE);
+    button.closest(".quarry-dataset-row")?.classList.toggle("quarry-dataset-disabled", !enabled);
+  };
+  var toggleDatasetEnabled = (button) => {
+    const name = button.getAttribute("data-dataset");
+    if (!name) {
+      return;
+    }
+    const next = button.getAttribute("aria-checked") === "false";
+    applyEnabledState(button, next);
+    button.disabled = true;
+    genericRequest(
+      "QuarrySetDatasetEnabled",
+      { dataset: name, enabled: next },
+      (data) => {
+        button.disabled = false;
+        if (data.success) {
+          recomputeReferences();
+        } else {
+          applyEnabledState(button, !next);
+          showMessage2(
+            `Failed to ${next ? "enable" : "disable"} '${name}': ${data.error ?? "unknown error"}`,
+            "error"
+          );
+        }
+      }
+    );
+  };
   var datasetsClickHandler = (event) => {
     const target = event.target;
     const folderToggle = target?.closest(".quarry-folder-toggle");
     if (folderToggle) {
       toggleFolder2(folderToggle);
+      return;
+    }
+    const enableToggle = target?.closest(".quarry-dataset-enable");
+    if (enableToggle) {
+      toggleDatasetEnabled(enableToggle);
       return;
     }
     const previewButton = target?.closest(

@@ -1,15 +1,18 @@
 import { describe, expect, it } from "@jest/globals";
 import {
     applyInPromptHighlights,
+    collectDisabledDatasets,
     collectPromptColumns,
     collectTagColumns,
     datasetFolder,
     datasetLeafName,
     formatRowCount,
+    isDatasetEnabled,
     PREVIEW_LOAD_MORE_COUNT,
     PREVIEW_ROW_LIMIT,
     renderDatasetRow,
     renderDatasets,
+    renderEnableToggle,
     renderFolderHeaderRow,
     renderPreviewStatus,
     renderPreviewTable,
@@ -521,6 +524,101 @@ describe("renderPreviewStatus", () => {
         expect(renderPreviewStatus(1000, undefined)).toBe(
             "Showing 1,000 row(s).",
         );
+    });
+});
+
+describe("renderEnableToggle", () => {
+    it("renders an enabled switch reflecting checked state", () => {
+        const html = renderEnableToggle("prompts/1girl", true);
+        expect(html).toContain("quarry-dataset-enable");
+        expect(html).toContain("quarry-enabled");
+        expect(html).toContain('aria-checked="true"');
+        expect(html).toContain('data-dataset="prompts/1girl"');
+        expect(html).toContain('role="switch"');
+    });
+
+    it("renders a disabled switch reflecting unchecked state", () => {
+        const html = renderEnableToggle("a", false);
+        expect(html).toContain("quarry-disabled");
+        expect(html).toContain('aria-checked="false"');
+    });
+
+    it("escapes the dataset name", () => {
+        expect(renderEnableToggle('a"b', true)).toContain(
+            'data-dataset="a&quot;b"',
+        );
+    });
+});
+
+describe("isDatasetEnabled", () => {
+    it("treats a missing flag as enabled", () => {
+        expect(isDatasetEnabled(makeDataset({ name: "a" }))).toBe(true);
+    });
+
+    it("treats enabled:false as disabled", () => {
+        expect(
+            isDatasetEnabled(makeDataset({ name: "a", enabled: false })),
+        ).toBe(false);
+    });
+
+    it("treats enabled:true as enabled", () => {
+        expect(
+            isDatasetEnabled(makeDataset({ name: "a", enabled: true })),
+        ).toBe(true);
+    });
+});
+
+describe("renderDatasetRow enable toggle", () => {
+    it("renders the toggle enabled by default", () => {
+        const html = renderDatasetRow(makeDataset({ name: "a" }));
+        expect(html).toContain("quarry-dataset-enable-cell");
+        expect(html).toContain('aria-checked="true"');
+        expect(html).not.toContain("quarry-dataset-disabled");
+    });
+
+    it("marks the row and toggle disabled when enabled is false", () => {
+        const html = renderDatasetRow(
+            makeDataset({ name: "a", enabled: false }),
+        );
+        expect(html).toContain("quarry-dataset-disabled");
+        expect(html).toContain('aria-checked="false"');
+    });
+
+    it("renders the toggle on error rows too", () => {
+        const html = renderDatasetRow(
+            makeDataset({
+                name: "bad",
+                columns: [],
+                enabled: false,
+                error: "boom",
+            }),
+        );
+        expect(html).toContain("quarry-dataset-enable-cell");
+        expect(html).toContain('aria-checked="false"');
+        expect(html).toContain("quarry-dataset-disabled");
+    });
+});
+
+describe("collectDisabledDatasets", () => {
+    it("returns names of toggles that are switched off", () => {
+        const container = document.createElement("div");
+        container.innerHTML = `
+            <button class="quarry-dataset-enable" data-dataset="a" aria-checked="true"></button>
+            <button class="quarry-dataset-enable" data-dataset="b" aria-checked="false"></button>
+            <button class="quarry-dataset-enable" data-dataset="c" aria-checked="false"></button>`;
+        expect(collectDisabledDatasets(container)).toEqual(["b", "c"]);
+    });
+
+    it("returns an empty list when all datasets are enabled", () => {
+        const container = document.createElement("div");
+        container.innerHTML = `<button class="quarry-dataset-enable" data-dataset="a" aria-checked="true"></button>`;
+        expect(collectDisabledDatasets(container)).toEqual([]);
+    });
+
+    it("ignores toggles without a data-dataset attribute", () => {
+        const container = document.createElement("div");
+        container.innerHTML = `<button class="quarry-dataset-enable" aria-checked="false"></button>`;
+        expect(collectDisabledDatasets(container)).toEqual([]);
     });
 });
 
