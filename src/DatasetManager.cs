@@ -215,11 +215,11 @@ public static class DatasetManager
                     {
                     }
                 }
-                result.Add(new DatasetInfo(entry.Name, [.. schema.VisibleColumns], resolved, GetConfiguredPromptColumn(entry.Name), [.. GetConfiguredTagColumns(entry.Name)], rowCount, IsDatasetEnabled(entry.Name), null));
+                result.Add(new DatasetInfo(entry.Name, [.. schema.VisibleColumns], resolved, GetConfiguredPromptColumn(entry.Name), [.. GetConfiguredTagColumns(entry.Name)], rowCount, ComputeSizeBytes(entry.Path), IsDatasetEnabled(entry.Name), null));
             }
             catch (Exception ex)
             {
-                result.Add(new DatasetInfo(entry.Name, [], null, GetConfiguredPromptColumn(entry.Name), [.. GetConfiguredTagColumns(entry.Name)], null, IsDatasetEnabled(entry.Name), ex.Message));
+                result.Add(new DatasetInfo(entry.Name, [], null, GetConfiguredPromptColumn(entry.Name), [.. GetConfiguredTagColumns(entry.Name)], null, ComputeSizeBytes(entry.Path), IsDatasetEnabled(entry.Name), ex.Message));
             }
         }
         DatasetCache.PersistIfDirty();
@@ -467,6 +467,27 @@ public static class DatasetManager
             return "unknown";
         }
     }
+
+    private static long ComputeSizeBytes(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+            {
+                long total = 0;
+                foreach (string file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
+                {
+                    total += new FileInfo(file).Length;
+                }
+                return total;
+            }
+            return File.Exists(path) ? new FileInfo(path).Length : 0;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
 }
 
 public sealed record DatasetInfo(
@@ -476,5 +497,6 @@ public sealed record DatasetInfo(
     string ConfiguredPromptColumn,
     IReadOnlyList<string> ConfiguredTagColumns,
     long? RowCount,
+    long SizeBytes,
     bool Enabled,
     string Error);

@@ -22,6 +22,7 @@ import {
     escapeHtml,
     type FolderNode,
     folderDatasetCount,
+    formatBytes,
     refreshFolderVisibility,
 } from "./util";
 
@@ -65,6 +66,31 @@ export const renderTagCheckboxes = (dataset: DatasetDto): string =>
 
 export const formatRowCount = (count: number | null | undefined): string =>
     count == null ? "—" : count.toLocaleString();
+
+const SUMMARY_ID = "quarry-datasets-summary";
+
+export const formatDatasetsSummary = (datasets: DatasetDto[]): string => {
+    const total = datasets.length;
+    let rows = 0;
+    let counted = 0;
+    let size = 0;
+    for (const dataset of datasets) {
+        if (dataset.rowCount != null) {
+            rows += dataset.rowCount;
+            counted += 1;
+        }
+        if (dataset.sizeBytes != null) {
+            size += dataset.sizeBytes;
+        }
+    }
+    const uncounted = total - counted;
+    const datasetsLabel = `${total.toLocaleString()} dataset${total === 1 ? "" : "s"}`;
+    const rowsLabel =
+        uncounted > 0
+            ? `${rows.toLocaleString()}+ rows (${uncounted.toLocaleString()} not counted yet)`
+            : `${rows.toLocaleString()} rows`;
+    return `${datasetsLabel} · ${rowsLabel} · ${formatBytes(size)}`;
+};
 
 export const applyInPromptHighlights = (
     container: HTMLElement,
@@ -201,6 +227,11 @@ export const renderDatasets = (
             <tr><th class="quarry-enable-th" title="Enable or disable this dataset for &lt;q:&gt; wildcard matches">On</th><th>Dataset</th><th>Prompt column</th><th>Tag columns</th><th>Rows</th><th>Preview</th></tr>
         </thead>
         <tbody>${folderRows}${looseRows}</tbody>
+        <tfoot>
+            <tr class="quarry-datasets-summary-row">
+                <td colspan="6"><span id="${SUMMARY_ID}" class="quarry-datasets-summary" title="Totals across all datasets. Uncounted rows fill in as datasets are warmed or previewed.">${escapeHtml(formatDatasetsSummary(datasets))}</span></td>
+            </tr>
+        </tfoot>
     </table>`;
 };
 
@@ -349,7 +380,17 @@ const applyTableHighlights = (names: string[]): void => {
     }
 };
 
+let currentDatasets: DatasetDto[] = [];
+
+const updateDatasetsSummary = (): void => {
+    const el = document.getElementById(SUMMARY_ID);
+    if (el) {
+        el.textContent = formatDatasetsSummary(currentDatasets);
+    }
+};
+
 const applyResponse = (data: SettingsResponse): void => {
+    currentDatasets = data.datasets ?? [];
     const folderEl = document.getElementById(
         "quarry-folder",
     ) as HTMLInputElement | null;
@@ -557,6 +598,11 @@ const applyRowCount = (dataset: string, count: number | null): void => {
         document.querySelectorAll<HTMLElement>(selector),
     )) {
         cell.textContent = formatRowCount(count);
+    }
+    const entry = currentDatasets.find((d) => d.name === dataset);
+    if (entry) {
+        entry.rowCount = count;
+        updateDatasetsSummary();
     }
 };
 

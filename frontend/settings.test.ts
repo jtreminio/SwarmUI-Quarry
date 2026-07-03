@@ -6,6 +6,7 @@ import {
     collectTagColumns,
     datasetFolder,
     datasetLeafName,
+    formatDatasetsSummary,
     formatRowCount,
     isDatasetEnabled,
     PREVIEW_LOAD_MORE_COUNT,
@@ -215,6 +216,36 @@ describe("renderDatasetRow", () => {
     });
 });
 
+describe("formatDatasetsSummary", () => {
+    it("sums rows and sizes across datasets", () => {
+        expect(
+            formatDatasetsSummary([
+                makeDataset({ name: "a", rowCount: 1234, sizeBytes: 1500 }),
+                makeDataset({
+                    name: "b",
+                    rowCount: 5000,
+                    sizeBytes: 2_000_000,
+                }),
+            ]),
+        ).toBe("2 datasets · 6,234 rows · 2.0 MB");
+    });
+
+    it("flags datasets whose row count is not yet known", () => {
+        expect(
+            formatDatasetsSummary([
+                makeDataset({ name: "a", rowCount: 100, sizeBytes: 0 }),
+                makeDataset({ name: "b", rowCount: null, sizeBytes: 0 }),
+            ]),
+        ).toBe("2 datasets · 100+ rows (1 not counted yet) · 0 B");
+    });
+
+    it("singularizes a lone dataset and tolerates missing sizes", () => {
+        expect(
+            formatDatasetsSummary([makeDataset({ name: "solo", rowCount: 7 })]),
+        ).toBe("1 dataset · 7 rows · 0 B");
+    });
+});
+
 describe("renderDatasets", () => {
     it("shows a hint when empty", () => {
         expect(renderDatasets([])).toContain("No datasets found");
@@ -246,6 +277,16 @@ describe("renderDatasets", () => {
         expect(html).toContain("<th>Rows</th>");
         expect(html).toContain('data-dataset="a"');
         expect(html).toContain('data-dataset="b"');
+    });
+
+    it("renders a totals summary in the table footer", () => {
+        const html = renderDatasets([
+            makeDataset({ name: "a", rowCount: 10, sizeBytes: 1000 }),
+            makeDataset({ name: "b", rowCount: 20, sizeBytes: 2000 }),
+        ]);
+        expect(html).toContain("<tfoot>");
+        expect(html).toContain('id="quarry-datasets-summary"');
+        expect(html).toContain("2 datasets · 30 rows · 3.0 KB");
     });
 
     it("groups foldered datasets under a collapsible header, collapsed by default", () => {

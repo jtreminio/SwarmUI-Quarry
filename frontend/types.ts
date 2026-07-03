@@ -13,6 +13,7 @@ export interface DatasetDto {
     configuredPromptColumn: string | null;
     configuredTagColumns: string[];
     rowCount: number | null;
+    sizeBytes?: number | null;
     enabled?: boolean;
     error: string | null;
 }

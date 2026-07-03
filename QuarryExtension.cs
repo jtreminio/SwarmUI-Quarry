@@ -215,6 +215,7 @@ public class QuarryExtension : Extension
                     ["configuredPromptColumn"] = info.ConfiguredPromptColumn,
                     ["configuredTagColumns"] = ToJArray(info.ConfiguredTagColumns),
                     ["rowCount"] = info.RowCount,
+                    ["sizeBytes"] = info.SizeBytes,
                     ["enabled"] = info.Enabled,
                     ["error"] = info.Error,
                 });

@@ -1813,6 +1813,26 @@
     return `<label class="quarry-tag-option"><input type="checkbox" class="quarry-dataset-tag" data-dataset="${escapeHtml(dataset.name)}" value="${escapeHtml(col.name)}"${checked}> ${escapeHtml(col.name)}${badge}</label>`;
   }).join("");
   var formatRowCount = (count) => count == null ? "—" : count.toLocaleString();
+  var SUMMARY_ID = "quarry-datasets-summary";
+  var formatDatasetsSummary = (datasets2) => {
+    const total2 = datasets2.length;
+    let rows = 0;
+    let counted = 0;
+    let size = 0;
+    for (const dataset of datasets2) {
+      if (dataset.rowCount != null) {
+        rows += dataset.rowCount;
+        counted += 1;
+      }
+      if (dataset.sizeBytes != null) {
+        size += dataset.sizeBytes;
+      }
+    }
+    const uncounted = total2 - counted;
+    const datasetsLabel = `${total2.toLocaleString()} dataset${total2 === 1 ? "" : "s"}`;
+    const rowsLabel = uncounted > 0 ? `${rows.toLocaleString()}+ rows (${uncounted.toLocaleString()} not counted yet)` : `${rows.toLocaleString()} rows`;
+    return `${datasetsLabel} · ${rowsLabel} · ${formatBytes(size)}`;
+  };
   var applyInPromptHighlights = (container, names) => {
     const wanted = new Set(names.map((n) => n.toLowerCase()));
     container.querySelectorAll("tr.quarry-dataset-row").forEach((row) => {
@@ -1897,6 +1917,11 @@
             <tr><th class="quarry-enable-th" title="Enable or disable this dataset for &lt;q:&gt; wildcard matches">On</th><th>Dataset</th><th>Prompt column</th><th>Tag columns</th><th>Rows</th><th>Preview</th></tr>
         </thead>
         <tbody>${folderRows}${looseRows}</tbody>
+        <tfoot>
+            <tr class="quarry-datasets-summary-row">
+                <td colspan="6"><span id="${SUMMARY_ID}" class="quarry-datasets-summary" title="Totals across all datasets. Uncounted rows fill in as datasets are warmed or previewed.">${escapeHtml(formatDatasetsSummary(datasets2))}</span></td>
+            </tr>
+        </tfoot>
     </table>`;
   };
   var renderPreviewTable = (columns, rows) => {
@@ -2016,7 +2041,15 @@
       applyInPromptHighlights(container, names);
     }
   };
+  var currentDatasets = [];
+  var updateDatasetsSummary = () => {
+    const el2 = document.getElementById(SUMMARY_ID);
+    if (el2) {
+      el2.textContent = formatDatasetsSummary(currentDatasets);
+    }
+  };
   var applyResponse = (data) => {
+    currentDatasets = data.datasets ?? [];
     const folderEl = document.getElementById(
       "quarry-folder"
     );
@@ -2202,6 +2235,11 @@
       document.querySelectorAll(selector)
     )) {
       cell.textContent = formatRowCount(count);
+    }
+    const entry = currentDatasets.find((d) => d.name === dataset);
+    if (entry) {
+      entry.rowCount = count;
+      updateDatasetsSummary();
     }
   };
   var updatePreviewControls = () => {

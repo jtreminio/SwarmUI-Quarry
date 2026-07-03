@@ -43,6 +43,17 @@
     vertical-align: middle;
 }
 
+.quarry-datasets-summary-row td {
+    border-top: 1px solid var(--light-border);
+    padding-top: 0.4rem;
+}
+
+.quarry-datasets-summary {
+    color: var(--text-soft);
+    font-size: 0.9em;
+    font-weight: 600;
+}
+
 .quarry-dataset-row:nth-child(even) {
     background: var(--background-gray);
 }
