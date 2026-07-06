@@ -36,6 +36,7 @@ public class QuarryExtension : Extension
         API.RegisterAPICall(QuarryClearPreviewCache, true, Permissions.FundamentalGenerateTabAccess);
         API.RegisterAPICall(QuarryCleanTempFiles, true, Permissions.FundamentalGenerateTabAccess);
         API.RegisterAPICall(QuarryResolveReferences, false, Permissions.FundamentalGenerateTabAccess);
+        API.RegisterAPICall(QuarryRunQuery, false, Permissions.FundamentalGenerateTabAccess);
         API.RegisterAPICall(QuarryInstallRequirements, true, Permissions.InstallFeatures);
         API.RegisterAPICall(QuarryListAvailableDatasets, false, Permissions.FundamentalGenerateTabAccess);
         API.RegisterAPICall(QuarryDownloadDataset, true, Permissions.InstallFeatures);
@@ -331,6 +332,41 @@ public class QuarryExtension : Extension
             ["success"] = true,
             ["names"] = ToJArray(PromptTagHandler.ResolveReferencedDatasetNames(prompt ?? "")),
         });
+    }
+
+    public Task<JObject> QuarryRunQuery(Session session, string query, int maxResults = QueryRunner.DefaultMaxResults)
+    {
+        try
+        {
+            QueryRunResult result = QueryRunner.Run(query, maxResults);
+            if (result.Invalid is not null)
+            {
+                return Task.FromResult(new JObject { ["invalid"] = result.Invalid });
+            }
+            JArray datasets = [];
+            foreach (QueryRunMatch match in result.Datasets)
+            {
+                datasets.Add(new JObject { ["name"] = match.Name, ["matches"] = match.Matches });
+            }
+            JArray results = [];
+            foreach (QueryRunRow row in result.Rows)
+            {
+                results.Add(new JObject { ["dataset"] = row.Dataset, ["prompt"] = row.Prompt });
+            }
+            return Task.FromResult(new JObject
+            {
+                ["total"] = result.Total,
+                ["datasets"] = datasets,
+                ["results"] = results,
+                ["truncated"] = result.Truncated,
+                ["highlights"] = ToJArray(result.Highlights),
+            });
+        }
+        catch (Exception ex)
+        {
+            Logs.Error($"Quarry: run-query failed for '{query}': {ex.ReadableString()}");
+            return Task.FromResult(new JObject { ["success"] = false, ["error"] = ex.Message });
+        }
     }
 
     public async Task<JObject> QuarryInstallRequirements(Session session)

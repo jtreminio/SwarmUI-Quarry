@@ -16,6 +16,13 @@ declare function getRequiredElementById(id: string): HTMLElement;
 declare function triggerChangeFor(elem: HTMLElement): void;
 declare function trimSpaces(text: string): string;
 declare function regexEscape(text: string): string;
+declare function copyText(text: string): void;
+declare function doNoticePopover(
+    text: string,
+    className: string,
+    targetX?: number,
+    targetY?: number,
+): void;
 
 declare const promptTabComplete: {
     registerPrefix(

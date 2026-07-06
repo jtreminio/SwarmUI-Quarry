@@ -4,6 +4,9 @@ export const escapeHtml = (text: string): string => {
     return div.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 };
 
+export const escapeRegExp = (text: string): string =>
+    text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 export const formatBytes = (bytes: number | null | undefined): string => {
     if (bytes == null || bytes < 0) {
         return "—";

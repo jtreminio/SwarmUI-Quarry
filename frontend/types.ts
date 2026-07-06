@@ -92,6 +92,26 @@ export interface DownloadStatusResponse {
     error?: string;
 }
 
+export interface RunQueryDatasetDto {
+    name: string;
+    matches: number;
+}
+
+export interface RunQueryResultDto {
+    dataset: string;
+    prompt: string;
+}
+
+export interface RunQueryResponse {
+    total?: number;
+    datasets?: RunQueryDatasetDto[];
+    results?: RunQueryResultDto[];
+    truncated?: boolean;
+    highlights?: string[];
+    invalid?: string;
+    error?: string;
+}
+
 export type ImageFieldType = "text" | "number" | "list" | "bool";
 
 export interface ImageFieldDto {

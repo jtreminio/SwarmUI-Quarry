@@ -6,6 +6,7 @@ import {
     recomputeReferences,
     setAddToExistingTag,
 } from "./prompt";
+import { openRunQueryModal } from "./runquery";
 import { QUARRY_TAB_BODY_ID } from "./tab";
 import type {
     CleanTempResponse,
@@ -282,6 +283,7 @@ export const renderForm = (folder: string): string => `
                     <div class="quarry-actions">
                         <button type="button" id="quarry-refresh" class="basic-button">Refresh</button>
                         <button type="button" id="quarry-download-datasets" class="basic-button" title="Browse and download ready-made datasets from the official collection">Download Datasets</button>
+                        <button type="button" id="quarry-run-query" class="basic-button" title="Paste a &lt;q:&gt; prompt tag and see which datasets and rows it matches">Run Query</button>
                     </div>
                     <div id="quarry-datasets" class="quarry-datasets"></div>
                     <div class="auto-input auto-input-flex">
@@ -833,6 +835,9 @@ const ensureFormRendered = (): void => {
     document
         .getElementById("quarry-download-datasets")
         ?.addEventListener("click", () => openDownloadModal(loadSettings));
+    document
+        .getElementById("quarry-run-query")
+        ?.addEventListener("click", openRunQueryModal);
     document
         .getElementById("quarry-datasets")
         ?.addEventListener("click", datasetsClickHandler);

@@ -98,7 +98,7 @@ public static class PromptTagHandler
         return names;
     }
 
-    private static List<DatasetEntry> ResolveTargets(string name)
+    internal static List<DatasetEntry> ResolveTargets(string name)
     {
         List<DatasetEntry> targets = [];
         HashSet<string> seen = [];
