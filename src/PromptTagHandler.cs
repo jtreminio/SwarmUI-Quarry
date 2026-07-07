@@ -184,11 +184,6 @@ public static class PromptTagHandler
         }
         List<string> usedQuarry = context.Input.ExtraMeta.GetOrCreate("used_quarry", () => new List<string>()) as List<string>;
 
-        bool indexBehavior = context.Input.Get(T2IParamTypes.WildcardSeedBehavior, "Random") == "Index";
-        Func<long> nextIndex = indexBehavior
-            ? () => context.Input.GetWildcardSeed()
-            : () => context.Input.GetWildcardRandom().Next();
-
         long total = 0;
         long[] offsets = new long[matched.Count];
         for (int i = 0; i < matched.Count; i++)
@@ -196,6 +191,26 @@ public static class PromptTagHandler
             offsets[i] = total;
             total += matched[i].Count;
         }
+
+        // Snapshot whether the wildcard seed looks user-pinned BEFORE resolving it below: GetWildcardSeed()
+        // persists the resolved value, so a check afterwards would report "pinned" on every generation.
+        // Gate to the first <q:> tag of the input (used_quarry still empty) so a later tag doesn't observe
+        // the value the first tag just persisted. Best-effort: a core <wildcard> earlier in the prompt can
+        // resolve the seed first.
+        bool firstQuarryTag = usedQuarry.Count == 0;
+        bool seedPinned = firstQuarryTag
+            && context.Input.TryGet(T2IParamTypes.WildcardSeed, out long pinnedSeed) && pinnedSeed >= 0;
+        WarnAboutRepeats(context, query.Name, total, matched, seedPinned);
+
+        bool indexBehavior = context.Input.Get(T2IParamTypes.WildcardSeedBehavior, "Random") == "Index";
+        // Random mode folds two Random draws through splitmix64 so consecutive per-image (batch) wildcard
+        // seeds don't land on .NET Random's near-affine first-draw lattice; Index mode steps seed, seed+1,
+        // ... so a multi-pick tag yields distinct rows instead of repeating the seed's row.
+        long lastDraw = 0;
+        Func<long> source = indexBehavior
+            ? RandomSelection.SequentialSource(context.Input.GetWildcardSeed())
+            : RandomSelection.MixedSource(context.Input.GetWildcardRandom());
+        Func<long> nextIndex = () => lastDraw = source();
 
         List<string> hitOrdered = [];
         HashSet<string> hit = [];
@@ -210,7 +225,9 @@ public static class PromptTagHandler
                 int i = LocateDataset(offsets, globalIndex);
                 MatchedDataset m = matched[i];
                 long localIndex = globalIndex - offsets[i];
-                string value = PromptSampler.Fetch(m, localIndex, globalIndex, context);
+                // lastDraw is the raw high-entropy draw behind this index; PromptSampler seeds its filtered
+                // rejection sampler from it (not the low-entropy modded index, which only takes Count values).
+                string value = PromptSampler.Fetch(m, localIndex, lastDraw, context);
                 if (value.Length == 0)
                 {
                     Logs.Warning(
@@ -231,6 +248,37 @@ public static class PromptTagHandler
             }
         }
         return result;
+    }
+
+    private const long SmallPoolWarningThreshold = 250;
+
+    // Warns (once per input, deduped by message) when <q:> is likely to visibly repeat: a pinned wildcard
+    // seed returns the same row every generation, and a small filtered pool repeats at the birthday-paradox
+    // floor no matter how uniform the draw is. Only fires for filtered queries; a bare dataset reference over
+    // millions of rows never warns.
+    private static void WarnAboutRepeats(T2IPromptHandling.PromptTagContext context, string name, long total, List<MatchedDataset> matched, bool seedPinned)
+    {
+        if (total <= 0 || !matched.Exists(m => !m.Filter.IsEmpty))
+        {
+            return;
+        }
+        if (seedPinned)
+        {
+            WarnOnce(context, $"Quarry '{name}': the Wildcard Seed is pinned, so <q:> returns the same row every generation (this query matches {total}). Set Wildcard Seed to -1 to vary it.");
+        }
+        else if (total < SmallPoolWarningThreshold)
+        {
+            WarnOnce(context, $"Quarry '{name}': matched only {total} row(s); the same prompts will recur across generations because the pool is small. Broaden the query (e.g. '=' any-of instead of '==' all-of) for more variety.");
+        }
+    }
+
+    private static void WarnOnce(T2IPromptHandling.PromptTagContext context, string message)
+    {
+        List<string> warnings = context.Input.ExtraMeta.GetOrCreate("parser_warnings", () => new List<string>()) as List<string>;
+        if (!warnings.Contains(message))
+        {
+            context.TrackWarning(message);
+        }
     }
 
     private sealed record PlanDraft(DatasetEntry Entry, string PromptColumn, SqlFilter Filter);
