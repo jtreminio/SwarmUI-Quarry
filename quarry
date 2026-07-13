@@ -1,0 +1,27 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.10"
+# dependencies = [
+#     "duckdb>=1.5.3",
+#     "pylance>=7.0.0",
+#     "pyarrow",
+#     "huggingface_hub",
+#     "visidata>=3.3",
+# ]
+# ///
+"""Quarry dataset-prep CLI entrypoint.
+
+A thin launcher: it puts ``<repo>/scripts`` on sys.path and hands off to the
+``quarry_tools`` package, which holds the argparse tree and every subcommand. Run
+``./quarry --help`` for the command list.
+"""
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "scripts"))
+
+from quarry_tools.cli import main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main())

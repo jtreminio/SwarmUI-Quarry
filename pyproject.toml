@@ -6,7 +6,9 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "duckdb>=1.5.3",
+    "huggingface-hub",
     "pip>=26.1.2",
+    "pyarrow",
     "pylance>=7.0.0",
     "visidata>=3.3",
 ]

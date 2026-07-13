@@ -1,42 +1,7 @@
-#!/usr/bin/env python3
-# /// script
-# requires-python = ">=3.10"
-# dependencies = ["huggingface_hub>=0.23"]
-# ///
-"""Download a sequential range of files from a Hugging Face repo via the HF SDK.
+"""`quarry hf` subcommands: fetch datasets from the Hugging Face Hub.
 
-Give it two ``.../resolve/<rev>/<file>`` URLs that are identical except for one
-counter (e.g. ``00000.parquet`` and ``03633.parquet``, or ``images-1.parquet``
-and ``images-11.parquet``). The script walks the counter from the first number
-to the second *inclusive*, incrementing by one, and downloads every file with
-``huggingface_hub`` -- 20 files at a time by default. The counter is reproduced
-in the start URL's format: zero-padded only when the start number itself is
-zero-padded (``00000``), otherwise the natural number (``1``, ``2`` ... ``11``).
-
-The access token is read from the ``HF_TOKEN`` environment variable (falling
-back to ``HUGGINGFACE_HUB_TOKEN``). If neither is set, downloads proceed
-unauthenticated, which still works for public repos (and the SDK's own cached
-login token, if any, is used).
-
-Both URLs must point at the same repo / type / revision and differ in exactly
-one run of digits (a constant number such as the ``03634`` in
-``train-00000-of-03634.parquet`` is fine -- it stays fixed).
-
-Existing, up-to-date files are skipped, so re-running resumes an interrupted
-batch. Files land under ``--output-dir`` preserving their in-repo path.
-
-Usage:
-    HF_TOKEN=hf_xxx python hf_download_range.py <url_start> <url_end> [-o DIR] [-w N]
-    export HF_TOKEN=hf_xxx
-    python hf_download_range.py \\
-        'https://huggingface.co/datasets/csuhan/midjourney-prompts-FLUX/resolve/main/00000.parquet?download=true' \\
-        'https://huggingface.co/datasets/csuhan/midjourney-prompts-FLUX/resolve/main/03633.parquet?download=true'
-
-Run with the project venv:
-    .venv/bin/python scripts/hf_download_range.py <url_start> <url_end>
-
-or standalone with uv (deps declared inline above):
-    uv run scripts/hf_download_range.py <url_start> <url_end>
+download-range -- carried over from hf_download_range.py. huggingface_hub is
+imported lazily inside the command function.
 """
 
 from __future__ import annotations
@@ -50,17 +15,35 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-# Keep per-file progress bars from 20 concurrent downloads off; we print our own.
-os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+_DOWNLOAD_RANGE_DESC = """\
+Download a sequential range of files from a Hugging Face repo via the HF SDK.
 
-from huggingface_hub import hf_hub_download  # noqa: E402
-from huggingface_hub.errors import EntryNotFoundError  # noqa: E402
+Give it two .../resolve/<rev>/<file> URLs that are identical except for one counter
+(e.g. 00000.parquet and 03633.parquet, or images-1.parquet and images-11.parquet).
+The script walks the counter from the first number to the second inclusive,
+incrementing by one, and downloads every file with huggingface_hub -- 20 files at
+a time by default. The counter is reproduced in the start URL's format: zero-padded
+only when the start number itself is zero-padded.
+
+The access token is read from the HF_TOKEN environment variable (falling back to
+HUGGINGFACE_HUB_TOKEN). If neither is set, downloads proceed unauthenticated.
+
+Existing, up-to-date files are skipped, so re-running resumes an interrupted batch.
+Files land under --output-dir preserving their in-repo path.
+
+Usage:
+    HF_TOKEN=hf_xxx quarry hf download-range <url_start> <url_end> [-o DIR] [-w N]
+    export HF_TOKEN=hf_xxx
+    quarry hf download-range \\
+        'https://huggingface.co/datasets/csuhan/midjourney-prompts-FLUX/resolve/main/00000.parquet?download=true' \\
+        'https://huggingface.co/datasets/csuhan/midjourney-prompts-FLUX/resolve/main/03633.parquet?download=true'
+"""
 
 _URL_REPO_TYPE = {"datasets": "dataset", "spaces": "space"}
 _DEFAULT_ENDPOINT = "https://huggingface.co"
 
 
-class ParsedUrl:
+class _ParsedUrl:
     __slots__ = ("repo_id", "repo_type", "revision", "path", "endpoint")
 
     def __init__(self, repo_id, repo_type, revision, path, endpoint):
@@ -75,15 +58,12 @@ class ParsedUrl:
         return (self.repo_id, self.repo_type, self.revision, self.endpoint)
 
 
-def parse_resolve_url(url: str) -> ParsedUrl:
-    """Parse a HF ``.../resolve/<rev>/<path>`` URL into its components."""
+def _parse_resolve_url(url: str) -> _ParsedUrl:
     parts = urlsplit(url)
     if not parts.scheme or not parts.netloc:
         raise SystemExit(f"error: not a valid URL: {url!r}")
     if "/resolve/" not in parts.path:
-        raise SystemExit(
-            f"error: not a HF resolve URL (no '/resolve/'): {url!r}"
-        )
+        raise SystemExit(f"error: not a HF resolve URL (no '/resolve/'): {url!r}")
     left, right = parts.path.split("/resolve/", 1)
     left_segs = left.strip("/").split("/")
     repo_type = None
@@ -102,16 +82,11 @@ def parse_resolve_url(url: str) -> ParsedUrl:
         raise SystemExit(f"error: no file path found in URL: {url!r}")
 
     endpoint = f"{parts.scheme}://{parts.netloc}"
-    return ParsedUrl(repo_id, repo_type, revision, path, endpoint)
+    return _ParsedUrl(repo_id, repo_type, revision, path, endpoint)
 
 
-def find_counter(start: str, end: str) -> tuple[list[str], int, int, int, int]:
-    """Locate the single incrementing digit-run between two in-repo paths.
-
-    Returns (tokens, idx, start_num, end_num, width) where ``tokens`` is the
-    start path split into digit / non-digit runs, ``idx`` indexes the counter
-    token, and ``width`` is the zero-pad width to reproduce.
-    """
+def _find_counter(start: str, end: str):
+    """Locate the single incrementing digit-run between two in-repo paths."""
     tok_re = re.compile(r"\d+|\D+")
     a = tok_re.findall(start)
     b = tok_re.findall(end)
@@ -153,62 +128,23 @@ def find_counter(start: str, end: str) -> tuple[list[str], int, int, int, int]:
         raise SystemExit(
             f"error: start number {a[idx]} is greater than end number {b[idx]}"
         )
-    # Zero-padding only applies when the counter is a fixed-width field written
-    # with a leading zero (e.g. ``00000``). If the start token has no leading
-    # zero the repo names files with the natural number, so we must not widen to
-    # match a longer end token -- doing so turns ``1`` into ``01`` and requests
-    # files (``images-01.parquet``) that don't exist. ``zfill`` never truncates,
-    # so a counter that grows past ``width`` digits (1 -> 11) just keeps growing.
     width = len(start_tok) if start_tok.startswith("0") else 1
     return a, idx, start_num, end_num, width
 
 
-def resolve_token() -> str | None:
-    """Read the HF token from the environment (None if unset -> unauthenticated)."""
+def _resolve_token() -> str | None:
     return os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="Download a sequential range of files from a HF repo "
-        "(token read from $HF_TOKEN).",
-    )
-    parser.add_argument("url_start", help="resolve URL of the first file in the range")
-    parser.add_argument("url_end", help="resolve URL of the last file (inclusive)")
-    parser.add_argument(
-        "-o",
-        "--output-dir",
-        default=None,
-        help="where to save files (default: ./<repo-name>)",
-    )
-    parser.add_argument(
-        "-w",
-        "--workers",
-        type=int,
-        default=20,
-        help="concurrent downloads (default: 20)",
-    )
-    parser.add_argument(
-        "--retries",
-        type=int,
-        default=3,
-        help="attempts per file before giving up (default: 3)",
-    )
-    parser.add_argument(
-        "--force",
-        action="store_true",
-        help="re-download even if an up-to-date local copy exists",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="print the planned file list and exit without downloading",
-    )
-    args = parser.parse_args(argv)
+def cmd_download_range(args) -> int:
+    # Keep per-file progress bars from 20 concurrent downloads off; we print ours.
+    os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+    from huggingface_hub import hf_hub_download
+    from huggingface_hub.errors import EntryNotFoundError
 
-    token = resolve_token()
-    start = parse_resolve_url(args.url_start)
-    end = parse_resolve_url(args.url_end)
+    token = _resolve_token()
+    start = _parse_resolve_url(args.url_start)
+    end = _parse_resolve_url(args.url_end)
     if start.key() != end.key():
         raise SystemExit(
             "error: the two URLs must be the same repo / type / revision:\n"
@@ -218,7 +154,7 @@ def main(argv: list[str] | None = None) -> int:
             f" ({end.endpoint})"
         )
 
-    tokens, idx, start_num, end_num, width = find_counter(start.path, end.path)
+    tokens, idx, start_num, end_num, width = _find_counter(start.path, end.path)
 
     def path_for(n: int) -> str:
         parts = list(tokens)
@@ -252,8 +188,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"({total} file(s) total; nothing downloaded)", file=sys.stderr)
         return 0
 
-    def download_one(filename: str) -> tuple[str, bool, str | None]:
-        last_err: str | None = None
+    def download_one(filename: str):
+        last_err = None
         for attempt in range(1, args.retries + 1):
             try:
                 hf_hub_download(
@@ -290,9 +226,7 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"\n  FAILED {filename}: {err}", file=sys.stderr)
                 print(
                     f"\rProgress: {done}/{total}  ok={ok}  fail={len(failures)}",
-                    end="",
-                    file=sys.stderr,
-                    flush=True,
+                    end="", file=sys.stderr, flush=True,
                 )
         except KeyboardInterrupt:
             print("\nInterrupted; cancelling pending downloads...", file=sys.stderr)
@@ -310,8 +244,33 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-if __name__ == "__main__":
-    try:
-        sys.exit(main())
-    except KeyboardInterrupt:
-        sys.exit(130)
+def register(subparsers) -> None:
+    p = subparsers.add_parser(
+        "download-range",
+        help="download a sequential range of files from a HF repo",
+        description=_DOWNLOAD_RANGE_DESC,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("url_start", help="resolve URL of the first file in the range")
+    p.add_argument("url_end", help="resolve URL of the last file (inclusive)")
+    p.add_argument(
+        "-o", "--output-dir", default=None,
+        help="where to save files (default: ./<repo-name>)",
+    )
+    p.add_argument(
+        "-w", "--workers", type=int, default=20,
+        help="concurrent downloads (default: 20)",
+    )
+    p.add_argument(
+        "--retries", type=int, default=3,
+        help="attempts per file before giving up (default: 3)",
+    )
+    p.add_argument(
+        "--force", action="store_true",
+        help="re-download even if an up-to-date local copy exists",
+    )
+    p.add_argument(
+        "--dry-run", action="store_true",
+        help="print the planned file list and exit without downloading",
+    )
+    p.set_defaults(func=cmd_download_range)
