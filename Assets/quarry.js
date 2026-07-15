@@ -246,9 +246,15 @@
     if (named.length === 0) {
       return [];
     }
-    const frag = suffix.slice(colonIdx + 1).trim().toLowerCase();
+    const overridePart = suffix.slice(colonIdx + 1);
+    const lastComma = overridePart.lastIndexOf(",");
+    const frag = (lastComma === -1 ? overridePart : overridePart.slice(lastComma + 1)).trim().toLowerCase();
+    const chosen = new Set(
+      (lastComma === -1 ? "" : overridePart.slice(0, lastComma + 1)).split(",").map((s) => s.trim().toLowerCase()).filter((s) => s.length > 0)
+    );
+    const candidates = orderColumnsForPrompt(named).filter((c) => !chosen.has(c.name.toLowerCase()));
     const matches = filterByFragment(
-      orderColumnsForPrompt(named),
+      candidates,
       frag,
       (c) => c.name,
       false
@@ -256,7 +262,7 @@
     if (matches.length === 1 && matches[0].name.toLowerCase() === frag) {
       return [];
     }
-    const applyHead = `<q:${suffix.slice(0, colonIdx + 1)}`;
+    const applyHead = `<q:${suffix.slice(0, colonIdx + 1 + (lastComma === -1 ? 0 : lastComma + 1))}`;
     return matches.map((c) => ({
       apply: applyHead + c.name,
       label: c.name,
