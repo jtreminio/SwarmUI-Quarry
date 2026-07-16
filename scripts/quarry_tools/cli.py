@@ -32,7 +32,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     _add_group(sub, "columns", "inspect and reshape a file's columns", columns)
     _add_group(sub, "convert", "change a dataset's on-disk representation", convert)
-    _add_group(sub, "lance", "clean and index standalone Lance datasets", lance)
+    _add_group(sub, "lance", "create and prep standalone Lance datasets", lance)
     _add_group(sub, "hf", "fetch datasets from the Hugging Face Hub", hf)
     _add_group(sub, "text", "plain-text edits", text)
     browse.register(sub)  # a top-level command, not a group

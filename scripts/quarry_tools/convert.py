@@ -1,8 +1,9 @@
 """`quarry convert` subcommands: change a dataset's on-disk representation.
 
-jsonl / csv / append / to-lance -- carried over from json_to_jsonl.py, to_csv.py,
-append_files.py and to_lancedb.py. Heavy libraries (duckdb, lance) are imported
-lazily inside the command functions; jsonl and csv are pure stdlib.
+jsonl / csv / append -- carried over from json_to_jsonl.py, to_csv.py and
+append_files.py. to-lance now lives in the lance module as `quarry lance convert`
+and is re-registered here as an alias. Heavy libraries (duckdb, lance) are
+imported lazily inside the command functions; jsonl and csv are pure stdlib.
 """
 
 from __future__ import annotations
@@ -13,17 +14,15 @@ import json
 import sys
 from pathlib import Path
 
+from . import lance as _lance
 from .common import (
     EXT_FORMAT,
-    as_pool_results,
     atomic_output,
     copy_options,
     detect_format,
     format_parent,
-    quote_ident,
     quote_literal,
     resolve_files,
-    workers_parent,
 )
 
 # ===========================================================================
@@ -278,204 +277,6 @@ def cmd_append(args) -> int:
 
 
 # ===========================================================================
-# convert to-lance
-# ===========================================================================
-
-_TOLANCE_DESC = """\
-Convert CSV / JSONL / Parquet file(s) into standalone Lance dataset(s).
-
-The input is read with DuckDB as a stream of Arrow record batches and written
-straight into a Lance dataset, so even large files convert without loading
-everything into memory.
-
-Rows whose prompt column is empty or whitespace-only are dropped during conversion
-(see --prompt-column), so the dataset holds only usable wildcard picks. This lets
-the Quarry extension pick a random row with a plain LIMIT/OFFSET (a native O(1)
-Lance seek) instead of a non-empty WHERE filter.
-
-Each input file becomes its own single <name>.lance dataset directory.
-
-The input may be a single file or a directory:
-  * a file      -> one .lance dataset. -o is the output dataset path
-                   (default: <input>.lance next to the input).
-  * a directory -> every convertible file in it (non-recursive) becomes its own
-                   <stem>.lance dataset. -o is the output directory
-                   (default: the input directory itself).
-
-In directory mode the files are converted concurrently (16 at a time by default,
-see -w); each goes through its own DuckDB connection and writes its own dataset.
-
-Usage:
-    quarry convert to-lance <file-or-dir> [-o OUT] [--mode MODE] [-w N]
-    quarry convert to-lance data.parquet
-    quarry convert to-lance prompts.jsonl -o ./prompts.lance
-    quarry convert to-lance ./shards/                 # one .lance per file
-    quarry convert to-lance ./shards/ -o ./lance/     # into ./lance/
-    quarry convert to-lance more.parquet -o ./prompts.lance --mode append
-
-Modes: create (default, fails if the dataset exists), overwrite, append.
-"""
-
-_TOLANCE_FORMATS = ("parquet", "csv", "jsonl")
-
-# Conventionally named text columns, in preference order. Mirrors the extension's
-# PromptColumnResolver so the column we strip blanks from is the one it later reads.
-_PREFERRED_PROMPT_COLUMNS = ("prompt", "text", "caption", "description", "value")
-
-
-def _tolance_reader(fmt: str, *, parallel: bool = True) -> str:
-    """DuckDB reader call with a ``?`` placeholder; ``parallel`` affects only CSV."""
-    if fmt == "parquet":
-        return "read_parquet(?)"
-    if fmt == "csv":
-        return "read_csv_auto(?)" if parallel else "read_csv_auto(?, parallel=false)"
-    return "read_json(?, format='newline_delimited')"
-
-
-def _resolve_prompt_column(columns: list[str], override: str | None) -> str | None:
-    if override:
-        for col in columns:
-            if col.lower() == override.lower():
-                return col
-        raise SystemExit(
-            f"error: --prompt-column {override!r} not found; "
-            f"columns: {', '.join(columns) or '(none)'}"
-        )
-    by_lower = {col.lower(): col for col in columns}
-    for preferred in _PREFERRED_PROMPT_COLUMNS:
-        if preferred in by_lower:
-            return by_lower[preferred]
-    return columns[0] if columns else None
-
-
-def _plan_jobs(path, output, override_format):
-    if path.is_file():
-        out = Path(output) if output else path.with_suffix(".lance")
-        return [(path, out)]
-
-    if path.is_dir():
-        files = sorted(p for p in path.iterdir() if p.is_file())
-        if override_format:
-            srcs = files
-        else:
-            srcs = [p for p in files if p.suffix.lower() in EXT_FORMAT]
-        if not srcs:
-            raise SystemExit(
-                f"error: no convertible files found in {path} "
-                f"(looked for: {', '.join(sorted(EXT_FORMAT))}; "
-                "pass --format to process other extensions)"
-            )
-        out_dir = Path(output) if output else path
-        out_dir.mkdir(parents=True, exist_ok=True)
-        jobs = [(p, out_dir / f"{p.stem}.lance") for p in srcs]
-        first_for: dict[Path, Path] = {}
-        for src, out in jobs:
-            if out in first_for:
-                raise SystemExit(
-                    f"error: {src} and {first_for[out]} both map to {out}; "
-                    f"rename one or convert them separately"
-                )
-            first_for[out] = src
-        return jobs
-
-    raise SystemExit(f"error: no such file or directory: {path}")
-
-
-def _stream_to_lance(src, fmt, out_path, mode, batch_rows, prompt_column, parallel):
-    import duckdb
-    import lance
-
-    con = duckdb.connect()
-    try:
-        reader_call = _tolance_reader(fmt, parallel=parallel)
-        columns = [
-            row[0]
-            for row in con.execute(
-                f"DESCRIBE SELECT * FROM {reader_call}", [str(src)]
-            ).fetchall()
-        ]
-        col = _resolve_prompt_column(columns, prompt_column)
-        select_sql = (
-            f"SELECT * FROM {reader_call} "
-            f"WHERE length(trim(CAST({quote_ident(col)} AS VARCHAR))) > 0"
-            if col is not None
-            else f"SELECT * FROM {reader_call}"
-        )
-        reader = con.execute(select_sql, [str(src)]).to_arrow_reader(batch_rows)
-        ds = lance.write_dataset(reader, str(out_path), mode=mode)
-        return ds.count_rows(), list(ds.schema.names)
-    finally:
-        con.close()
-
-
-def _convert_one(src, fmt, out_path, mode, batch_rows, prompt_column):
-    import shutil
-
-    existed_before = out_path.exists()
-    try:
-        return _stream_to_lance(
-            src, fmt, out_path, mode, batch_rows, prompt_column, parallel=True
-        )
-    except Exception as exc:
-        # DuckDB's multi-threaded CSV reader can't do a full read of some files
-        # (quoted fields spanning newlines, etc.); retry once single-threaded.
-        if fmt != "csv" or "Parallel CSV Reader" not in str(exc):
-            raise
-        if mode == "create" and not existed_before and out_path.exists():
-            shutil.rmtree(out_path, ignore_errors=True)
-        return _stream_to_lance(
-            src, fmt, out_path, mode, batch_rows, prompt_column, parallel=False
-        )
-
-
-def cmd_to_lance(args) -> int:
-    path = Path(args.input)
-    if not path.exists():
-        raise SystemExit(f"error: no such file or directory: {path}")
-
-    jobs = _plan_jobs(path, args.output, args.format)
-    single = len(jobs) == 1
-    planned = [
-        (
-            src,
-            detect_format(
-                src, args.format, ext_map=EXT_FORMAT, formats=_TOLANCE_FORMATS,
-                hint="parquet|csv|jsonl",
-            ),
-            out,
-        )
-        for src, out in jobs
-    ]
-
-    converted = 0
-    failed = 0
-    for item, result, exc in as_pool_results(
-        lambda t: _convert_one(
-            t[0], t[1], t[2], args.mode, args.batch_rows, args.prompt_column
-        ),
-        planned,
-        args.workers,
-    ):
-        src, fmt, out_path = item
-        if exc is not None:
-            failed += 1
-            print(
-                f"FAIL {src} [{fmt}] -> {str(out_path)!r}: {exc}", file=sys.stderr
-            )
-            continue
-        rows, columns = result
-        converted += 1
-        line = f"{src} [{fmt}] -> {str(out_path)!r} (mode={args.mode}; {rows} row(s))"
-        if single:
-            line += f"\nColumns: {', '.join(columns)}"
-        print(line)
-
-    if not single:
-        print(f"\nConverted {converted}/{len(jobs)} file(s); {failed} failed.")
-    return 1 if failed else 0
-
-
-# ===========================================================================
 # registration
 # ===========================================================================
 
@@ -531,42 +332,5 @@ def register(subparsers) -> None:
     )
     p.set_defaults(func=cmd_append)
 
-    p = subparsers.add_parser(
-        "to-lance", help="convert csv/jsonl/parquet file(s) into .lance dataset(s)",
-        description=_TOLANCE_DESC, formatter_class=raw,
-        parents=[
-            format_parent(
-                _TOLANCE_FORMATS,
-                "override the input format instead of inferring it from the extension",
-            ),
-            workers_parent(
-                16,
-                "how many files to convert concurrently in directory mode "
-                "(default: 16). Each conversion is itself multi-threaded, so lower "
-                "this for very large or memory-heavy inputs",
-            ),
-        ],
-    )
-    p.add_argument(
-        "input", help="a .csv/.jsonl/.parquet file, or a directory of such files"
-    )
-    p.add_argument(
-        "-o", "--output", default=None,
-        help="output .lance dataset path (file input; default: <input>.lance), "
-        "or output directory (directory input; default: the input directory)",
-    )
-    p.add_argument(
-        "--mode", choices=("create", "overwrite", "append"), default="create",
-        help="create (default; fail if it exists), overwrite, or append",
-    )
-    p.add_argument(
-        "--prompt-column", default=None,
-        help="column to drop blank/whitespace rows on (the prompt text column). "
-        "Default: the first of prompt/text/caption/description/value present, else "
-        "the first column -- mirroring how the Quarry extension resolves it",
-    )
-    p.add_argument(
-        "--batch-rows", type=int, default=50_000,
-        help="rows per streamed Arrow batch (default: 50000)",
-    )
-    p.set_defaults(func=cmd_to_lance)
+    _lance.register_convert(subparsers, "to-lance", "quarry convert to-lance",
+                            alias_of="quarry lance convert")

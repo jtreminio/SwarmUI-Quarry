@@ -1,9 +1,12 @@
-"""`quarry lance` subcommands: clean and index standalone Lance datasets.
+"""`quarry lance` subcommands: create and prep standalone Lance datasets.
 
-clean / index -- carried over from lance_clean.py and build_index.py. The index
-command runs the clean pass first (as build_index did, via a sibling import); here
-that is a normal intra-module call to ``process_dataset``. Heavy libraries (lance,
-pyarrow, duckdb) are imported lazily inside the command functions.
+convert / prep -- convert (carried over from to_lancedb.py; ``quarry convert
+to-lance`` remains as an alias) turns CSV/JSONL/Parquet files into .lance
+datasets. prep is the merger of the old clean and index subcommands: it cleans
+each dataset (flatten list columns, drop empty/duplicate rows) and then builds
+the Quarry search indices, all in one pass via ``process_dataset``. Heavy
+libraries (lance, pyarrow, duckdb) are imported lazily inside the command
+functions.
 """
 
 from __future__ import annotations
@@ -17,7 +20,16 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import timedelta
 from pathlib import Path
 
-from .common import quote_ident, quote_ident_backtick, quote_literal, workers_parent
+from .common import (
+    EXT_FORMAT,
+    as_pool_results,
+    detect_format,
+    format_parent,
+    quote_ident,
+    quote_ident_backtick,
+    quote_literal,
+    workers_parent,
+)
 
 # Conventionally named text columns, in preference order. Mirrors the extension's
 # PromptColumnResolver (and to_lancedb) so the column we clean is the one it reads.
@@ -29,7 +41,7 @@ class DatasetError(Exception):
 
 
 # ===========================================================================
-# clean -- shared per-dataset logic (also reused by the index command)
+# clean -- shared per-dataset logic used by prep's clean pass
 # ===========================================================================
 
 
@@ -161,32 +173,6 @@ def empty_row_predicate(col: str, dtype) -> str:
     return f"{ident} IS NULL"
 
 
-def find_lance_datasets(root: Path) -> list[Path]:
-    """Enumerate ``*.lance`` dataset directories under ``root`` the way the
-    extension's DatasetScanner does."""
-    if not root.exists():
-        raise SystemExit(f"error: no such file or directory: {root}")
-    if root.is_file():
-        raise SystemExit(
-            f"error: {root} is a file, not a directory of Lance datasets"
-        )
-    if root.name.lower().endswith(".lance"):
-        return [root.resolve()]
-
-    found: list[Path] = []
-    for dirpath, dirnames, _files in os.walk(root):
-        keep: list[str] = []
-        for name in dirnames:
-            if name.startswith("."):
-                continue  # hidden: skip and don't descend
-            if name.lower().endswith(".lance"):
-                found.append((Path(dirpath) / name).resolve())  # dataset leaf
-            else:
-                keep.append(name)  # descend into it
-        dirnames[:] = keep
-    return sorted(found)
-
-
 # A single ``_rowid IN (...)`` delete predicate per this many rowids.
 _DELETE_BATCH = 4096
 
@@ -267,115 +253,271 @@ def process_dataset(
 
 
 # ===========================================================================
-# lance clean
+# lance convert (aliased as `quarry convert to-lance`)
 # ===========================================================================
 
-_CLEAN_DESC = """\
-Clean every Lance dataset under a directory (recursive): flatten list columns to
-strings, drop empty rows and, by default, normalized-duplicate rows.
+_CONVERT_DESC_TEMPLATE = """\
+Convert CSV / JSONL / Parquet file(s) into standalone Lance dataset(s).
 
-A list column (one whose Arrow type is a list) is flattened in place to a plain
-string by joining its elements with ', ' (via Lance's array_to_string). This runs
-first, before the empty and duplicate passes. On by default; pass --no-flatten to
-leave lists as-is.
+The input is read with DuckDB as a stream of Arrow record batches and written
+straight into a Lance dataset, so even large files convert without loading
+everything into memory.
+
+Rows whose prompt column is empty or whitespace-only are dropped during conversion
+(see --prompt-column), so the dataset holds only usable wildcard picks. This lets
+the Quarry extension pick a random row with a plain LIMIT/OFFSET (a native O(1)
+Lance seek) instead of a non-empty WHERE filter.
+
+Each input file becomes its own single <name>.lance dataset directory.
+
+The input may be a single file or a directory:
+  * a file      -> one .lance dataset. -o is the output dataset path
+                   (default: <input>.lance next to the input).
+  * a directory -> every convertible file in it (non-recursive) becomes its own
+                   <stem>.lance dataset. -o is the output directory
+                   (default: the input directory itself).
+
+In directory mode the files are converted concurrently (16 at a time by default,
+see -w); each goes through its own DuckDB connection and writes its own dataset.
+
+Usage:
+    {cmd} <file-or-dir> [-o OUT] [--mode MODE] [-w N]
+    {cmd} data.parquet
+    {cmd} prompts.jsonl -o ./prompts.lance
+    {cmd} ./shards/                 # one .lance per file
+    {cmd} ./shards/ -o ./lance/     # into ./lance/
+    {cmd} more.parquet -o ./prompts.lance --mode append
+
+Modes: create (default, fails if the dataset exists), overwrite, append.
+"""
+
+_CONVERT_FORMATS = ("parquet", "csv", "jsonl")
+
+
+def _convert_reader(fmt: str, *, parallel: bool = True) -> str:
+    """DuckDB reader call with a ``?`` placeholder; ``parallel`` affects only CSV."""
+    if fmt == "parquet":
+        return "read_parquet(?)"
+    if fmt == "csv":
+        return "read_csv_auto(?)" if parallel else "read_csv_auto(?, parallel=false)"
+    return "read_json(?, format='newline_delimited')"
+
+
+def _convert_prompt_column(columns: list[str], override: str | None) -> str | None:
+    if override:
+        for col in columns:
+            if col.lower() == override.lower():
+                return col
+        raise SystemExit(
+            f"error: --prompt-column {override!r} not found; "
+            f"columns: {', '.join(columns) or '(none)'}"
+        )
+    by_lower = {col.lower(): col for col in columns}
+    for preferred in _PREFERRED_PROMPT_COLUMNS:
+        if preferred in by_lower:
+            return by_lower[preferred]
+    return columns[0] if columns else None
+
+
+def _plan_jobs(path, output, override_format):
+    if path.is_file():
+        out = Path(output) if output else path.with_suffix(".lance")
+        return [(path, out)]
+
+    if path.is_dir():
+        files = sorted(p for p in path.iterdir() if p.is_file())
+        if override_format:
+            srcs = files
+        else:
+            srcs = [p for p in files if p.suffix.lower() in EXT_FORMAT]
+        if not srcs:
+            raise SystemExit(
+                f"error: no convertible files found in {path} "
+                f"(looked for: {', '.join(sorted(EXT_FORMAT))}; "
+                "pass --format to process other extensions)"
+            )
+        out_dir = Path(output) if output else path
+        out_dir.mkdir(parents=True, exist_ok=True)
+        jobs = [(p, out_dir / f"{p.stem}.lance") for p in srcs]
+        first_for: dict[Path, Path] = {}
+        for src, out in jobs:
+            if out in first_for:
+                raise SystemExit(
+                    f"error: {src} and {first_for[out]} both map to {out}; "
+                    f"rename one or convert them separately"
+                )
+            first_for[out] = src
+        return jobs
+
+    raise SystemExit(f"error: no such file or directory: {path}")
+
+
+def _stream_to_lance(src, fmt, out_path, mode, batch_rows, prompt_column, parallel):
+    import duckdb
+    import lance
+
+    con = duckdb.connect()
+    try:
+        reader_call = _convert_reader(fmt, parallel=parallel)
+        columns = [
+            row[0]
+            for row in con.execute(
+                f"DESCRIBE SELECT * FROM {reader_call}", [str(src)]
+            ).fetchall()
+        ]
+        col = _convert_prompt_column(columns, prompt_column)
+        select_sql = (
+            f"SELECT * FROM {reader_call} "
+            f"WHERE length(trim(CAST({quote_ident(col)} AS VARCHAR))) > 0"
+            if col is not None
+            else f"SELECT * FROM {reader_call}"
+        )
+        reader = con.execute(select_sql, [str(src)]).to_arrow_reader(batch_rows)
+        ds = lance.write_dataset(reader, str(out_path), mode=mode)
+        return ds.count_rows(), list(ds.schema.names)
+    finally:
+        con.close()
+
+
+def _convert_one(src, fmt, out_path, mode, batch_rows, prompt_column):
+    import shutil
+
+    existed_before = out_path.exists()
+    try:
+        return _stream_to_lance(
+            src, fmt, out_path, mode, batch_rows, prompt_column, parallel=True
+        )
+    except Exception as exc:
+        # DuckDB's multi-threaded CSV reader can't do a full read of some files
+        # (quoted fields spanning newlines, etc.); retry once single-threaded.
+        if fmt != "csv" or "Parallel CSV Reader" not in str(exc):
+            raise
+        if mode == "create" and not existed_before and out_path.exists():
+            shutil.rmtree(out_path, ignore_errors=True)
+        return _stream_to_lance(
+            src, fmt, out_path, mode, batch_rows, prompt_column, parallel=False
+        )
+
+
+def cmd_convert(args) -> int:
+    path = Path(args.input)
+    if not path.exists():
+        raise SystemExit(f"error: no such file or directory: {path}")
+
+    jobs = _plan_jobs(path, args.output, args.format)
+    single = len(jobs) == 1
+    planned = [
+        (
+            src,
+            detect_format(
+                src, args.format, ext_map=EXT_FORMAT, formats=_CONVERT_FORMATS,
+                hint="parquet|csv|jsonl",
+            ),
+            out,
+        )
+        for src, out in jobs
+    ]
+
+    converted = 0
+    failed = 0
+    for item, result, exc in as_pool_results(
+        lambda t: _convert_one(
+            t[0], t[1], t[2], args.mode, args.batch_rows, args.prompt_column
+        ),
+        planned,
+        args.workers,
+    ):
+        src, fmt, out_path = item
+        if exc is not None:
+            failed += 1
+            print(
+                f"FAIL {src} [{fmt}] -> {str(out_path)!r}: {exc}", file=sys.stderr
+            )
+            continue
+        rows, columns = result
+        converted += 1
+        line = f"{src} [{fmt}] -> {str(out_path)!r} (mode={args.mode}; {rows} row(s))"
+        if single:
+            line += f"\nColumns: {', '.join(columns)}"
+        print(line)
+
+    if not single:
+        print(f"\nConverted {converted}/{len(jobs)} file(s); {failed} failed.")
+    return 1 if failed else 0
+
+
+def register_convert(subparsers, name: str, invocation: str, alias_of=None) -> None:
+    """Register the convert command as ``name``; ``invocation`` is the full
+    command shown in the usage examples. ``alias_of`` marks it as an alias."""
+    desc = _CONVERT_DESC_TEMPLATE.format(cmd=invocation)
+    help_text = "convert csv/jsonl/parquet file(s) into .lance dataset(s)"
+    if alias_of:
+        desc = f"Alias of `{alias_of}`.\n\n" + desc
+        help_text += f" (alias of `{alias_of}`)"
+
+    p = subparsers.add_parser(
+        name, help=help_text, description=desc,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        parents=[
+            format_parent(
+                _CONVERT_FORMATS,
+                "override the input format instead of inferring it from the extension",
+            ),
+            workers_parent(
+                16,
+                "how many files to convert concurrently in directory mode "
+                "(default: 16). Each conversion is itself multi-threaded, so lower "
+                "this for very large or memory-heavy inputs",
+            ),
+        ],
+    )
+    p.add_argument(
+        "input", help="a .csv/.jsonl/.parquet file, or a directory of such files"
+    )
+    p.add_argument(
+        "-o", "--output", default=None,
+        help="output .lance dataset path (file input; default: <input>.lance), "
+        "or output directory (directory input; default: the input directory)",
+    )
+    p.add_argument(
+        "--mode", choices=("create", "overwrite", "append"), default="create",
+        help="create (default; fail if it exists), overwrite, or append",
+    )
+    p.add_argument(
+        "--prompt-column", default=None,
+        help="column to drop blank/whitespace rows on (the prompt text column). "
+        "Default: the first of prompt/text/caption/description/value present, else "
+        "the first column -- mirroring how the Quarry extension resolves it",
+    )
+    p.add_argument(
+        "--batch-rows", type=int, default=50_000,
+        help="rows per streamed Arrow batch (default: 50000)",
+    )
+    p.set_defaults(func=cmd_convert)
+
+
+# ===========================================================================
+# lance prep (the old clean + index subcommands, merged)
+# ===========================================================================
+
+_PREP_DESC = """\
+Prep standalone Lance dataset(s) for Quarry: clean, then build search indices.
+
+Each dataset is first cleaned -- list columns are flattened to ', '-joined
+strings, and empty plus normalized-duplicate prompt rows are deleted (see the
+--no-flatten / --no-dedup / --no-compact toggles and --prompt-column). This is
+DESTRUCTIVE. Pass --no-clean to skip it, or --dry-run to preview what cleaning
+would remove without touching anything.
 
 An empty row is one whose prompt column is NULL or, for a text column, blank once
 stripped of surrounding spaces. Deleting them keeps a random pick a plain
-LIMIT/OFFSET (a native O(1) Lance seek) instead of a non-empty WHERE filter.
+LIMIT/OFFSET (a native O(1) Lance seek) instead of a non-empty WHERE filter. A
+duplicate row is one whose prompt, once normalized (lowercased, non-alphanumerics
+dropped), was already seen earlier in the same dataset; the first row of each
+group is kept. The prompt column is resolved per dataset the way the extension's
+PromptColumnResolver does.
 
-A duplicate row is one whose prompt, once normalized (lowercased, non-alphanumerics
-dropped), was already seen earlier in the same dataset. The first row of each group
-is kept and the rest deleted. On by default; pass --no-dedup to skip it.
-
-The prompt column is resolved per dataset the way the extension's
-PromptColumnResolver does. Datasets are discovered the way DatasetScanner
-enumerates them: *.lance dirs are leaves and hidden entries are skipped.
-
-After flattening or deleting, fragments are compacted and old versions purged so
-freed space is reclaimed. On by default; pass --no-compact to keep the soft-delete
-tombstones (pre-delete version stays recoverable). Pass --dry-run to report how
-many rows would be deleted without touching anything.
-
-Usage:
-    quarry lance clean <dir-or-dataset> [--dry-run] [--no-flatten] [--no-dedup] [--no-compact] [-w N]
-    quarry lance clean ./datasets
-    quarry lance clean ./datasets --dry-run
-    quarry lance clean ./prompts.lance --prompt-column caption
-"""
-
-
-def cmd_clean(args) -> int:
-    datasets = find_lance_datasets(Path(args.directory))
-    if not datasets:
-        print(f"No Lance datasets found under {args.directory}")
-        return 0
-
-    workers = max(1, min(args.workers, len(datasets)))
-    action = "would delete" if args.dry_run else "deleted"
-    flat_verb = "would flatten" if args.dry_run else "flattened"
-
-    ok = 0
-    total_empty = 0
-    total_dup = 0
-    total_flat = 0
-    failures: list[tuple[Path, str]] = []
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {
-            pool.submit(
-                process_dataset,
-                path,
-                args.prompt_column,
-                args.dry_run,
-                args.compact,
-                args.dedup,
-                args.flatten,
-            ): path
-            for path in datasets
-        }
-        for future in as_completed(futures):
-            path = futures[future]
-            try:
-                r = future.result()
-            except Exception as exc:  # DatasetError or an unexpected Lance error
-                failures.append((path, str(exc)))
-                print(f"  SKIP {path}: {exc}", file=sys.stderr)
-                continue
-            ok += 1
-            flat = r["list_columns"] if args.dry_run else r["flattened"]
-            empties = r["empty"] if args.dry_run else r["empty_removed"]
-            dups = r["duplicate"] if args.dry_run else r["duplicate_removed"]
-            removed = empties + dups
-            total_flat += flat
-            total_empty += empties
-            total_dup += dups
-            prefix = f"{flat_verb} {flat} list column(s); " if flat else ""
-            print(
-                f"  {path} [{r['column']}]: {prefix}{action} {empties} empty + "
-                f"{dups} duplicate row(s) of {r['total']} "
-                f"({r['total'] - removed} remain)"
-            )
-
-    verb = "would delete" if args.dry_run else "deleted"
-    summary = (
-        f"Done: {ok}/{len(datasets)} dataset(s) processed, "
-        f"{flat_verb} {total_flat} list column(s), "
-        f"{verb} {total_empty} empty + {total_dup} duplicate row(s)"
-    )
-    if failures:
-        summary += f"; {len(failures)} skipped"
-    print(summary, file=sys.stderr)
-
-    return 1 if failures else 0
-
-
-# ===========================================================================
-# lance index
-# ===========================================================================
-
-_INDEX_DESC = """\
-Build Quarry search indices on standalone Lance dataset(s).
-
-For each chosen text column X this builds a Lance NGRAM scalar index so Quarry's
+Then, for each chosen text column X, this builds a Lance NGRAM scalar index so Quarry's
 substring filters (contains) are pushed down by the DuckDB lance extension. Quarry
 matches case-insensitively by lowercasing the search value, so:
 
@@ -385,12 +527,6 @@ matches case-insensitively by lowercasing the search value, so:
 The original column X is never modified. Pass --always-companion to force the X__lc
 form even for lowercase columns.
 
-Before indexing, each dataset is first cleaned (flatten list columns, drop empty
-and normalized-duplicate prompt rows, compact) so a list prompt column becomes
-indexable and the index covers the final data. This is DESTRUCTIVE. Pass --no-clean
-to skip it, the --no-flatten / --no-dedup / --no-compact toggles or --prompt-column
-to tune it, or --dry-run to preview what cleaning would remove.
-
 Auto-builds a BTREE scalar index on every declared-numeric column so numeric range
 filters (+= / -=) push down. --no-btree disables this; --btree a,b adds extras.
 --bitmap is also accepted for exact-equality queries.
@@ -398,16 +534,16 @@ filters (+= / -=) push down. --no-btree disables this; --btree a,b adds extras.
 Lance is versioned: by default this prunes everything but the current version
 afterward; pass --keep-history to retain old versions.
 
-When given a directory, datasets are indexed in parallel (-j / --jobs, default 4).
+When given a directory, datasets are prepped in parallel (-j / --jobs, default 4).
 
 Usage:
-    quarry lance index <dataset.lance | dir-searched-recursively> [options]
-    quarry lance index ~/data/AIConfigs/Quarry
-    quarry lance index ~/data/AIConfigs/Quarry -j 8
-    quarry lance index ./nl/ --text-columns prompt,caption
-    quarry lance index ./mixed/ --always-companion
-    quarry lance index ~/data/AIConfigs/Quarry --dry-run
-    quarry lance index ~/data/AIConfigs/Quarry --no-clean
+    quarry lance prep <dataset.lance | dir-searched-recursively> [options]
+    quarry lance prep ~/data/AIConfigs/Quarry
+    quarry lance prep ~/data/AIConfigs/Quarry -j 8
+    quarry lance prep ./nl/ --text-columns prompt,caption
+    quarry lance prep ./mixed/ --always-companion
+    quarry lance prep ~/data/AIConfigs/Quarry --dry-run
+    quarry lance prep ~/data/AIConfigs/Quarry --no-clean
 """
 
 LC_SUFFIX = "__lc"
@@ -582,7 +718,7 @@ def _build_one(
     emit(f"  size: {_human(before)} -> {_human(after)}  (+{_human(after - before)})")
 
 
-def cmd_index(args) -> int:
+def cmd_prep(args) -> int:
     def split(s: str) -> list[str]:
         return [x.strip() for x in s.split(",") if x.strip()]
 
@@ -652,7 +788,7 @@ def cmd_index(args) -> int:
                     failed += 1
 
     if len(targets) > 1:
-        verb = "Previewed" if args.dry_run else "Indexed"
+        verb = "Previewed" if args.dry_run else "Prepped"
         print(
             f"\n{verb} {len(targets) - failed}/{len(targets)} dataset(s) "
             f"with {jobs} job(s); {failed} failed."
@@ -668,47 +804,12 @@ def cmd_index(args) -> int:
 def register(subparsers) -> None:
     raw = argparse.RawDescriptionHelpFormatter
 
-    p = subparsers.add_parser(
-        "clean",
-        help="clean Lance dataset(s): flatten lists, drop empty/duplicate rows",
-        description=_CLEAN_DESC, formatter_class=raw,
-        parents=[
-            workers_parent(16, "how many datasets to process concurrently (default: 16)")
-        ],
-    )
-    p.add_argument(
-        "directory",
-        help="a directory to scan recursively, or a single *.lance dataset directory",
-    )
-    p.add_argument(
-        "--prompt-column", default=None,
-        help="column whose NULL/blank rows are deleted (the prompt text column). "
-        "Default: the first of prompt/text/caption/description/value present, else "
-        "the first column",
-    )
-    p.add_argument(
-        "--dry-run", action="store_true",
-        help="report how many rows would be deleted from each dataset without "
-        "changing anything",
-    )
-    p.add_argument(
-        "--flatten", action=argparse.BooleanOptionalAction, default=True,
-        help="first flatten every list column to a ', '-joined string (default: on)",
-    )
-    p.add_argument(
-        "--dedup", action=argparse.BooleanOptionalAction, default=True,
-        help="also delete normalized-duplicate prompt rows (default: on)",
-    )
-    p.add_argument(
-        "--compact", action=argparse.BooleanOptionalAction, default=True,
-        help="after deleting, compact fragments and purge old versions (default: on). "
-        "Ignored in --dry-run",
-    )
-    p.set_defaults(func=cmd_clean)
+    register_convert(subparsers, "convert", "quarry lance convert")
 
     p = subparsers.add_parser(
-        "index", help="build Quarry NGRAM/scalar indices on Lance dataset(s)",
-        description=_INDEX_DESC, formatter_class=raw,
+        "prep",
+        help="prep Lance dataset(s): clean, then build Quarry NGRAM/scalar indices",
+        description=_PREP_DESC, formatter_class=raw,
     )
     p.add_argument(
         "input",
@@ -741,7 +842,7 @@ def register(subparsers) -> None:
     )
     p.add_argument(
         "-j", "--jobs", type=int, default=4,
-        help="datasets to index in parallel when given a directory (default: 4). "
+        help="datasets to prep in parallel when given a directory (default: 4). "
         "1 = serial with live per-step output; >1 buffers each dataset's output",
     )
     p.add_argument(
@@ -772,4 +873,4 @@ def register(subparsers) -> None:
         help="preview what the clean pass would remove, without writing or building "
         "any indices",
     )
-    p.set_defaults(func=cmd_index)
+    p.set_defaults(func=cmd_prep)

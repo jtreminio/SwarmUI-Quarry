@@ -1,13 +1,15 @@
 """`quarry columns` subcommands: inspect and reshape a file's columns.
 
 show / rename / remove / reorder / name / reduce-json -- each preserved verbatim
-from the original standalone scripts (show_columns.py, rename_columns.py, ...).
-Heavy libraries (duckdb, lance) are imported lazily inside the command functions.
+from the original standalone scripts (show_columns.py, rename_columns.py, ...) --
+plus merge. Heavy libraries (duckdb, lance) are imported lazily inside the
+command functions.
 """
 
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -772,6 +774,261 @@ def cmd_reduce_json(args) -> int:
 
 
 # ===========================================================================
+# columns merge
+# ===========================================================================
+
+_MERGE_DESC = """\
+Merge column values into one new text column in Parquet/CSV/JSONL file(s) in place.
+
+Given a comma-separated list of column paths, the values are concatenated -- in
+the order given, separated by --delimiter -- into a single new column named by
+--name. The source columns are consumed (dropped) and the merged column takes the
+position of the first one; every other column is untouched. Pass --keep to leave
+the source columns in place as well.
+
+A path is either a plain column name or a jq-style walk into a JSON-valued column
+(native struct/list or raw JSON text):
+
+    style                   the whole column
+    meta.style              key 'style' inside object column 'meta'
+    subject[0].expression   'expression' of the first element of list 'subject'
+    subject[].expression    'expression' of EVERY element, joined by the delimiter
+
+(jq would write these .meta.style / .subject[0].expression / .subject[].expression;
+the leading dot is dropped and the rest is the same. A bare integer segment like
+subject.0.expression is also accepted, matching reduce-json paths.)
+
+With --use-column-names each value is prefixed with its path, spelled as every
+key and index joined by spaces (wildcard markers contribute nothing): 'style'
+prefixes 'style:', 'subject[0].expression' prefixes 'subject 0 expression:', and
+'subject[].expression' prefixes 'subject expression:'. Missing/null/empty values
+are skipped entirely -- they contribute neither a prefix nor a delimiter. The
+delimiter is inserted verbatim (the default ', ' includes the space).
+
+Before writing, each nested path is probed against the first rows and a path that
+matches nothing is reported and the file skipped -- so a typo won't silently
+produce empty merges.
+
+The 'file' argument may be a single path or a shell-style wildcard pattern (*, ?,
+[...], **). Files are processed concurrently (16 at a time by default, see -w) and
+independently: a failure on one is reported and the rest still run.
+
+    quarry columns merge data.jsonl 'style,setting,subject[].expression'
+    quarry columns merge data.jsonl 'style,subject[].age' --use-column-names
+    quarry columns merge data.parquet 'title,meta.style' --name text --keep
+    quarry columns merge 'shards/*.jsonl' 'style,mood' --delimiter ' | '
+"""
+
+# A path segment: an optional key name followed by any number of [N] / [] / [*]
+# index groups, e.g. 'subject', 'subject[0]', 'subject[]', '[2]'.
+_MERGE_SEGMENT_RE = re.compile(r"^([^\[\]]*)((?:\[[^\[\]]*\])*)$")
+
+
+def _parse_merge_path(raw: str) -> tuple[str, list, str]:
+    """Parse a merge path into (column, nested_segments, label).
+
+    Each nested segment is a ``str`` (object key), an ``int`` (array index), or
+    ``None`` (a ``[]`` / ``[*]`` wildcard: every element). A bare integer dot
+    segment ('subject.0.name') is an index too, matching reduce-json paths.
+    ``label`` is the --use-column-names prefix: every key and index joined by
+    spaces ('subject[0].expression' -> 'subject 0 expression'), wildcards dropped.
+    """
+
+    def bad(why: str) -> SystemExit:
+        return SystemExit(f"error: bad path {raw!r}: {why}")
+
+    segments: list = []
+    for part in raw.split("."):
+        m = _MERGE_SEGMENT_RE.match(part.strip())
+        if m is None:
+            raise bad("unbalanced brackets")
+        name, brackets = m.groups()
+        if not name and not brackets:
+            raise bad("empty segment (check for stray dots)")
+        if name:
+            segments.append(int(name) if name.lstrip("-").isdigit() else name)
+        for idx in re.findall(r"\[([^\[\]]*)\]", brackets):
+            idx = idx.strip()
+            if idx in ("", "*"):
+                segments.append(None)
+            elif idx.lstrip("-").isdigit():
+                segments.append(int(idx))
+            else:
+                raise bad(f"bad index {idx!r} (expected a number, [] or [*])")
+
+    if not isinstance(segments[0], str):
+        raise bad("must start with a column name")
+    label = " ".join(str(seg) for seg in segments if seg is not None)
+    return segments[0], segments[1:], label
+
+
+def _merge_json_path(segments) -> tuple[str, bool]:
+    """Compile nested segments to a DuckDB JSONPath; also return has-wildcard."""
+    parts = ["$"]
+    wildcard = False
+    for seg in segments:
+        if seg is None:
+            parts.append("[*]")
+            wildcard = True
+        elif isinstance(seg, int):
+            parts.append(f"[{seg}]")
+        else:
+            parts.append('."' + seg.replace('"', '\\"') + '"')
+    return "".join(parts), wildcard
+
+
+def _merge_value_expr(col_ident, col_type, segments, delim_lit) -> str:
+    """SQL producing the path's value as VARCHAR, NULL when missing/empty."""
+    native = col_type.upper() not in ("VARCHAR", "JSON")
+    source = f"to_json({col_ident})" if native else col_ident
+    if not segments:
+        whole = f"CAST({source} AS VARCHAR)" if native else col_ident
+        return f"nullif({whole}, '')"
+    path, wildcard = _merge_json_path(segments)
+    ptr = quote_literal(path)
+    if wildcard:
+        # json_extract_string with a wildcard yields a VARCHAR list (objects come
+        # out as JSON text); drop empty matches and join with the delimiter.
+        return (
+            f"nullif(array_to_string(list_filter("
+            f"json_extract_string({source}, {ptr}), "
+            f"x -> x IS NOT NULL AND x <> ''), {delim_lit}), '')"
+        )
+    # json_extract_string is NULL for a JSON null AND for an object/array; the
+    # json_type guard keeps the object/array fallback (its JSON text) without
+    # turning a JSON null into the literal string 'null'.
+    return (
+        f"nullif(coalesce(json_extract_string({source}, {ptr}), "
+        f"CASE WHEN json_type({source}, {ptr}) <> 'NULL' "
+        f"THEN CAST(json_extract({source}, {ptr}) AS VARCHAR) END), '')"
+    )
+
+
+def _merge_file(path, paths, name, delimiter, use_names, keep, fmt_override):
+    import duckdb
+
+    fmt = detect_format(
+        path, fmt_override, ext_map=EXT_FORMAT, formats=("parquet", "csv", "jsonl"),
+        batch=True, hint="parquet|csv|jsonl",
+    )
+
+    con = duckdb.connect()
+    try:
+        described = con.execute(
+            f"DESCRIBE SELECT * FROM {read_relation_sql(fmt)}", [str(path)]
+        ).fetchall()
+        existing = [(row[0], row[1]) for row in described]
+        existing_lower = {n.lower(): (n, t) for n, t in existing}
+
+        missing = [raw for raw, col, _, _ in paths if col.lower() not in existing_lower]
+        if missing:
+            available = ", ".join(n for n, _ in existing)
+            raise FileError(
+                f"column(s) not found for path(s): {', '.join(missing)} "
+                f"(available: {available})"
+            )
+
+        source_lower = {col.lower() for _, col, _, _ in paths}
+        if name.lower() in existing_lower and (
+            keep or name.lower() not in source_lower
+        ):
+            raise FileError(
+                f"output column {name!r} already exists; pick another --name "
+                f"or merge it too"
+            )
+
+        reader = read_relation_sql(fmt, quote_literal(str(path)))
+        delim_lit = quote_literal(delimiter)
+
+        pieces: list[str] = []
+        for raw, col, segments, label in paths:
+            canon, col_type = existing_lower[col.lower()]
+            ident = quote_ident(canon)
+            val = _merge_value_expr(ident, col_type, segments, delim_lit)
+            if segments:
+                src_n, out_n = con.execute(
+                    f"SELECT count(*) FILTER (WHERE {ident} IS NOT NULL), "
+                    f"count({val}) "
+                    f"FROM (SELECT * FROM {reader} LIMIT {_PROBE_ROWS}) t"
+                ).fetchone()
+                if src_n and not out_n:
+                    raise FileError(
+                        f"path {raw!r} matched no values "
+                        f"(checked first {_PROBE_ROWS} rows); is the path correct?"
+                    )
+            if use_names:
+                val = f"({quote_literal(label + ': ')} || {val})"
+            pieces.append(val)
+
+        merged = (
+            f"nullif(concat_ws({delim_lit}, {', '.join(pieces)}), '') "
+            f"AS {quote_ident(name)}"
+        )
+
+        select_parts: list[str] = []
+        for col, _ in existing:
+            if col.lower() in source_lower:
+                if merged is not None:
+                    select_parts.append(merged)
+                    merged = None
+                if keep:
+                    select_parts.append(quote_ident(col))
+            else:
+                select_parts.append(quote_ident(col))
+
+        select_list = ", ".join(select_parts)
+        with atomic_output(path) as tmp_path:
+            con.execute(
+                f"COPY (SELECT {select_list} FROM {reader}) "
+                f"TO {quote_literal(str(tmp_path))} ({copy_options(fmt)})"
+            )
+    finally:
+        con.close()
+
+    return fmt
+
+
+def cmd_merge(args) -> int:
+    name = args.name.strip()
+    if not name:
+        raise SystemExit("error: --name is empty")
+
+    raws = parse_columns(args.paths)
+    if not raws:
+        raise SystemExit("error: no column paths given")
+    paths = [(raw, *_parse_merge_path(raw)) for raw in raws]
+
+    files = resolve_files(args.file)
+
+    ok = 0
+    failures: list[tuple[Path, str]] = []
+    for path, result, exc in as_pool_results(
+        lambda p: _merge_file(
+            p, paths, name, args.delimiter, args.use_column_names, args.keep,
+            args.format,
+        ),
+        files, args.workers,
+    ):
+        if exc is not None:
+            failures.append((path, str(exc)))
+            print(f"  SKIP {path}: {exc}", file=sys.stderr)
+            continue
+        ok += 1
+        print(f"  {path} [{result}]: merged {', '.join(raws)} -> {name}")
+
+    if len(files) > 1 or failures:
+        summary = (
+            f"Done: {ok}/{len(files)} file(s) merged "
+            f"({', '.join(raws)} -> {name})"
+        )
+        if failures:
+            summary += f"; {len(failures)} skipped"
+        print(summary, file=sys.stderr)
+
+    return 1 if failures else 0
+
+
+# ===========================================================================
 # registration
 # ===========================================================================
 
@@ -857,3 +1114,34 @@ def register(subparsers) -> None:
         "'conversations=0.value;meta=prompt'",
     )
     p.set_defaults(func=cmd_reduce_json)
+
+    p = subparsers.add_parser(
+        "merge", aliases=["merge-columns"],
+        help="merge column values into one new column, in place",
+        description=_MERGE_DESC, formatter_class=raw,
+        parents=[format_parent(_TABULAR_CHOICES, each_help), workers],
+    )
+    p.add_argument("file", help="a file path or quoted wildcard pattern")
+    p.add_argument(
+        "paths",
+        help="comma-separated column paths, e.g. "
+        "'style,setting,subject[].expression'",
+    )
+    p.add_argument(
+        "--name", default="prompt",
+        help="name of the merged output column (default: prompt)",
+    )
+    p.add_argument(
+        "--delimiter", default=", ",
+        help="text placed between merged values, verbatim (default: ', ')",
+    )
+    p.add_argument(
+        "--use-column-names", action="store_true",
+        help="prefix each value with its space-joined path, "
+        "e.g. 'subject 0 expression: ...'",
+    )
+    p.add_argument(
+        "--keep", action="store_true",
+        help="keep the source columns instead of dropping them",
+    )
+    p.set_defaults(func=cmd_merge)
