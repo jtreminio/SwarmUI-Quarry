@@ -119,7 +119,7 @@ public static class QueryRunner
             try
             {
                 (_, fetched) = DatasetManager.Backend.GetFilteredRows(
-                    plan.Entry.Path, [plan.PromptColumn], plan.Filter, sortColumn: null, sortDescending: false, limit - rows.Count, 0);
+                    plan.Entry.Path, plan.PromptColumns, plan.Filter, sortColumn: null, sortDescending: false, limit - rows.Count, 0);
             }
             catch (Exception ex) when (multi)
             {
@@ -128,7 +128,15 @@ public static class QueryRunner
             }
             foreach (List<string> row in fetched)
             {
-                string prompt = row.Count > 0 ? row[0] : "";
+                List<string> parts = [];
+                foreach (string val in row)
+                {
+                    if (!string.IsNullOrWhiteSpace(val))
+                    {
+                        parts.Add(val);
+                    }
+                }
+                string prompt = string.Join(DatasetManager.ColumnSeparator, parts);
                 if (!string.IsNullOrWhiteSpace(prompt))
                 {
                     rows.Add(new QueryRunRow(plan.Entry.Name, prompt));
@@ -162,7 +170,7 @@ public static class QueryRunner
         return terms;
     }
 
-    private sealed record Plan(DatasetEntry Entry, string PromptColumn, SqlFilter Filter);
+    private sealed record Plan(DatasetEntry Entry, string PromptColumn, IReadOnlyList<string> PromptColumns, SqlFilter Filter);
 
     private static Plan DraftPlan(Query query, DatasetEntry entry)
     {
@@ -173,7 +181,23 @@ public static class QueryRunner
         {
             return null;
         }
+        List<string> resolvedColumns = [];
+        if (query.PromptColumns is { Count: > 1 })
+        {
+            foreach (string col in query.PromptColumns)
+            {
+                string resolved = PromptColumnResolver.Resolve(col, null, schema);
+                if (resolved is not null)
+                {
+                    resolvedColumns.Add(resolved);
+                }
+            }
+        }
+        else
+        {
+            resolvedColumns.Add(promptColumn);
+        }
         List<ColumnInfo> tagColumns = TagColumnResolver.Resolve(DatasetManager.GetConfiguredTagColumns(entry.Name), schema, promptColumn);
-        return new Plan(entry, promptColumn, SqlFilterBuilder.Build(query, schema, tagColumns));
+        return new Plan(entry, promptColumn, resolvedColumns, SqlFilterBuilder.Build(query, schema, tagColumns));
     }
 }

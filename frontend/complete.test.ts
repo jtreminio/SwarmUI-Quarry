@@ -317,6 +317,21 @@ describe("computeQuarryCompletions — prompt column override", () => {
     it("offers nothing for an unknown dataset", () => {
         expect(labels("nope:")).toEqual([]);
     });
+
+    it("lists subsequent columns after a comma, excluding already chosen columns", () => {
+        expect(labels("characters:prompt,")).toEqual(["tags", "source"]);
+        expect(labels("characters:prompt,ta")).toEqual(["tags"]);
+    });
+
+    it("inserts an open with the preceding columns kept", () => {
+        expect(
+            computeQuarryCompletions("characters:prompt,", ALL)[0],
+        ).toEqual({
+            apply: "<q:characters:prompt,tags",
+            label: "tags",
+            hint: "column", // since it's orderColumnsForPrompt
+        });
+    });
 });
 
 describe("setCompletionDatasets", () => {

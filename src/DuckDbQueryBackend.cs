@@ -159,6 +159,31 @@ public sealed class DuckDbQueryBackend : IQueryBackend, IDisposable
             return StringifyPrompt(result);
         }
 
+        public string GetRowAt(string datasetPath, IReadOnlyList<string> columns, SqlFilter filter, long index)
+        {
+            DatasetSource source = PrepareSource(datasetPath);
+            string projection = string.Join(", ", columns.Select(SqlText.QuoteIdentifier));
+            using DuckDBCommand cmd = _connection.CreateCommand();
+            cmd.CommandText =
+                $"SELECT {projection} FROM {source.FromExpression}{Where(filter)} LIMIT 1 OFFSET {index};";
+            Bind(cmd, filter);
+            using DuckDBDataReader reader = cmd.ExecuteReader();
+            if (!reader.Read())
+            {
+                return "";
+            }
+            List<string> parts = [];
+            for (int i = 0; i < columns.Count; i++)
+            {
+                string value = reader.IsDBNull(i) ? "" : Stringify(reader.GetValue(i));
+                if (value.Length > 0)
+                {
+                    parts.Add(value);
+                }
+            }
+            return string.Join(DatasetManager.ColumnSeparator, parts);
+        }
+
         public (string Value, bool Matches) GetCandidateAt(string datasetPath, string promptColumn, SqlFilter filter, long index)
         {
             DatasetSource source = PrepareSource(datasetPath);
@@ -427,6 +452,14 @@ public sealed class DuckDbQueryBackend : IQueryBackend, IDisposable
         lock (_lock)
         {
             return _shared.GetPromptAt(datasetPath, promptColumn, filter, index);
+        }
+    }
+
+    public string GetRowAt(string datasetPath, IReadOnlyList<string> columns, SqlFilter filter, long index)
+    {
+        lock (_lock)
+        {
+            return _shared.GetRowAt(datasetPath, columns, filter, index);
         }
     }
 

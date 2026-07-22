@@ -2,7 +2,7 @@ using SwarmUI.Text2Image;
 
 namespace Quarry;
 
-internal sealed record MatchedDataset(DatasetEntry Entry, string PromptColumn, SqlFilter Filter, long Count, long Total);
+internal sealed record MatchedDataset(DatasetEntry Entry, string PromptColumn, SqlFilter Filter, long Count, long Total, IReadOnlyList<string>? PromptColumns = null);
 
 internal static class PromptSampler
 {

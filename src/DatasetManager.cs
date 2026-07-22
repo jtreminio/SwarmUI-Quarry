@@ -14,6 +14,7 @@ public static class DatasetManager
     public static string CacheFolder => DatasetCache.CacheFolder;
     public static bool IsActive => !string.IsNullOrWhiteSpace(DatasetsFolder);
     private static readonly ConcurrentDictionary<string, DatasetEntry> Datasets = new();
+    //private static string ColumnSeparator = ", ";
     public const int DefaultPreviewLimit = 100;
     public const int MaxPreviewLimit = 10000;
     private static DuckDbQueryBackend _backend;
@@ -101,6 +102,14 @@ public static class DatasetManager
     public static void SetDatasetEnabled(string name, bool enabled) => DatasetEnabledConfig.SetEnabled(name, enabled);
 
     public static IReadOnlyList<string> GetDisabledDatasetsSnapshot() => DatasetEnabledConfig.GetDisabledSnapshot();
+
+    private static string _columnSeparator = ", ";
+
+    public static string ColumnSeparator
+    {
+        get => _columnSeparator;
+        set => _columnSeparator = value ?? ", ";
+    }
 
     public static IReadOnlyCollection<DatasetEntry> AllDatasets => [.. Datasets.Values];
 
