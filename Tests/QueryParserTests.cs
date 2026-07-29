@@ -318,4 +318,58 @@ public class QueryParserTests
         // No name AND no clause is not a kept query — it's malformed, so it still throws.
         Assert.Throws<QueryParseException>(() => QueryParser.Parse("[]"));
     }
+
+    [Fact]
+    public void MultiColumn_SingleTag()
+    {
+        Query q = QueryParser.Parse("FOO:full,general");
+        Assert.Equal("FOO", q.Name);
+        Assert.Equal("full", q.PromptColumn);
+        Assert.Equal(new[] { "full", "general" }, q.PromptColumns);
+    }
+
+    [Fact]
+    public void MultiColumn_WithFilter()
+    {
+        Query q = QueryParser.Parse("FOO[tags=girl]:full,general");
+        Assert.Equal("FOO", q.Name);
+        Assert.Equal("full", q.PromptColumn);
+        Assert.Equal(new[] { "full", "general" }, q.PromptColumns);
+        Assert.Equal("full", q.PromptColumns[0]);
+        QueryClause c = Assert.Single(q.Clauses);
+        Assert.Equal("tags", c.Column);
+    }
+
+    [Fact]
+    public void MultiColumn_WithMultipleNames()
+    {
+        Query q = QueryParser.Parse("FOO,BAZ:full,general");
+        Assert.Equal("FOO,BAZ", q.Name);
+        Assert.Equal(new[] { "full", "general" }, q.PromptColumns);
+    }
+
+    [Fact]
+    public void SingleColumn_PromptColumnAccessor_ReturnsSingleValue()
+    {
+        Query q = QueryParser.Parse("FOO:BAR");
+        Assert.Equal("BAR", q.PromptColumn);
+        Assert.Single(q.PromptColumns);
+    }
+
+    [Fact]
+    public void SingleColumn_PromptColumns_NotNull()
+    {
+        Query q = QueryParser.Parse("FOO:BAR");
+        Assert.NotNull(q.PromptColumns);
+        Assert.Single(q.PromptColumns);
+        Assert.Equal("BAR", q.PromptColumns[0]);
+    }
+
+    [Fact]
+    public void NoColon_PromptColumnsIsNull()
+    {
+        Query q = QueryParser.Parse("FOO");
+        Assert.Null(q.PromptColumns);
+        Assert.Null(q.PromptColumn);
+    }
 }

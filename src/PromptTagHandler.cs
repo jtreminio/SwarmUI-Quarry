@@ -174,7 +174,7 @@ public static class PromptTagHandler
                     continue;
                 }
                 long totalRows = draft.Filter.IsEmpty ? count : DatasetManager.GetRowCount(draft.Entry, draft.PromptColumn);
-                plan = new MatchedDataset(draft.Entry, draft.PromptColumn, draft.Filter, count, totalRows);
+                plan = new MatchedDataset(draft.Entry, draft.PromptColumn, draft.Filter, count, totalRows, query.PromptColumns);
             }
             catch (Exception ex) when (multi)
             {
@@ -231,7 +231,15 @@ public static class PromptTagHandler
                 long localIndex = globalIndex - offsets[i];
                 // lastDraw is the raw high-entropy draw behind this index; PromptSampler seeds its filtered
                 // rejection sampler from it (not the low-entropy modded index, which only takes Count values).
-                string value = PromptSampler.Fetch(m, localIndex, lastDraw, context);
+                string value;
+                if (m.PromptColumns is { Count: > 1 })
+                {
+                    value = DatasetManager.Backend.GetRowAt(m.Entry.Path, m.PromptColumns, m.Filter, localIndex);
+                }
+                else
+                {
+                    value = PromptSampler.Fetch(m, localIndex, lastDraw, context);
+                }
                 if (value.Length == 0)
                 {
                     Logs.Warning(

@@ -102,6 +102,7 @@ public class QuarryExtension : Extension
             JObject settings = JObject.Parse(File.ReadAllText(SettingsFilePath));
             DatasetManager.DatasetsFolder = settings.Value<string>("datasetsFolder") ?? "";
             AddToExistingTag = settings.Value<bool?>("addToExistingTag") ?? true;
+            DatasetManager.ColumnSeparator = settings.Value<string>("columnSeparator") ?? ", ";
             DatasetManager.SetPromptColumns(ReadPromptColumns(settings["promptColumns"] as JObject));
             DatasetManager.SetTagColumns(ReadTagColumns(settings["tagColumns"] as JObject));
             DatasetManager.SetDisabledDatasets(ReadDisabledDatasets(settings["disabledDatasets"] as JArray));
@@ -130,6 +131,7 @@ public class QuarryExtension : Extension
             {
                 ["datasetsFolder"] = DatasetManager.DatasetsFolder,
                 ["addToExistingTag"] = AddToExistingTag,
+                ["columnSeparator"] = DatasetManager.ColumnSeparator,
                 ["promptColumns"] = promptColumns,
                 ["tagColumns"] = tagColumns,
                 ["disabledDatasets"] = new JArray(DatasetManager.GetDisabledDatasetsSnapshot()),
