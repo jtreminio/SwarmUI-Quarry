@@ -12,6 +12,7 @@ const MODAL_ID = "quarry-runquery-modal";
 const QUERY_ID = "quarry-runquery-query";
 const MAX_ID = "quarry-runquery-max";
 const RUN_ID = "quarry-runquery-run";
+const SUMMARY_ID = "quarry-runquery-summary";
 const RESULTS_ID = "quarry-runquery-results";
 
 const EXAMPLE_QUERY = "<q:tags/**[tags=girl; tags!=anthro]>";
@@ -29,18 +30,93 @@ export const clampMaxResults = (
     return Math.max(Math.trunc(num), RUNQUERY_MIN_MAX);
 };
 
-export const runQuerySummaryText = (
+/** The shared `folder/` every dataset name starts with, if there is one. */
+export const commonDatasetPrefix = (names: string[]): string => {
+    if (names.length < 2) {
+        return "";
+    }
+    let prefix = names[0];
+    for (const name of names.slice(1)) {
+        let at = 0;
+        while (
+            at < prefix.length &&
+            at < name.length &&
+            prefix[at] === name[at]
+        ) {
+            at++;
+        }
+        prefix = prefix.slice(0, at);
+        if (prefix.length === 0) {
+            return "";
+        }
+    }
+    const slash = prefix.lastIndexOf("/");
+    if (slash < 0) {
+        return "";
+    }
+    const folder = prefix.slice(0, slash + 1);
+    return names.every((name) => name.length > folder.length) ? folder : "";
+};
+
+export const runQueryPoolText = (
+    total: number,
+    datasetCount: number,
+    prefix = "",
+): string => {
+    const prompts = `${total.toLocaleString()} prompt${total === 1 ? "" : "s"}`;
+    const datasets = `${datasetCount.toLocaleString()} dataset${datasetCount === 1 ? "" : "s"}`;
+    const scope = prefix ? ` under ${prefix}` : "";
+    return `${prompts} · ${datasets}${scope}`;
+};
+
+export const runQueryPreviewText = (
+    shown: number,
+    truncated: boolean,
+): string => {
+    if (shown <= 0) {
+        return "";
+    }
+    return truncated
+        ? `${shown.toLocaleString()} sampled below`
+        : `all ${shown.toLocaleString()} shown below`;
+};
+
+const summaryRow = (label: string, value: string): string =>
+    `<div class="quarry-runquery-summary-row"><span class="quarry-runquery-summary-label">${label}</span><span class="quarry-runquery-summary-value">${escapeHtml(value)}</span></div>`;
+
+export const renderRunQuerySummary = (
     total: number,
     datasetCount: number,
     shown: number,
     truncated: boolean,
+    prefix = "",
 ): string => {
-    const matches = `${total.toLocaleString()} match${total === 1 ? "" : "es"}`;
-    const datasets = `${datasetCount.toLocaleString()} dataset${datasetCount === 1 ? "" : "s"}`;
-    const note = truncated
-        ? ` · showing the first ${shown.toLocaleString()}`
-        : "";
-    return `${matches} across ${datasets}${note}`;
+    const preview = runQueryPreviewText(shown, truncated);
+    return `<div class="quarry-runquery-summary">${summaryRow(
+        "Pool",
+        runQueryPoolText(total, datasetCount, prefix),
+    )}${preview ? summaryRow("Preview", preview) : ""}</div>`;
+};
+
+export const formatShare = (matches: number, total: number): string => {
+    if (total <= 0 || matches <= 0) {
+        return "";
+    }
+    const pct = (matches / total) * 100;
+    return pct < 1 ? "<1%" : `${Math.round(pct)}%`;
+};
+
+const datasetRow = (
+    dataset: RunQueryDatasetDto,
+    prefix: string,
+    total: number,
+    max: number,
+): string => {
+    const shown = prefix ? dataset.name.slice(prefix.length) : dataset.name;
+    const raw = max > 0 ? (dataset.matches / max) * 100 : 0;
+    // Keep a sliver of bar for the long tail, so a tiny share never looks like a render bug.
+    const width = raw > 0 ? Math.max(raw, 2) : 0;
+    return `<div class="quarry-runquery-dataset-row"><span class="quarry-runquery-dataset-name" title="${escapeHtml(dataset.name)}">${escapeHtml(shown)}</span><span class="quarry-runquery-dataset-count">${dataset.matches.toLocaleString()}</span><span class="quarry-runquery-dataset-share">${escapeHtml(formatShare(dataset.matches, total))}</span><span class="quarry-runquery-dataset-bar"><span style="width: ${width.toFixed(1)}%"></span></span></div>`;
 };
 
 export const renderRunQueryDatasetCounts = (
@@ -49,13 +125,16 @@ export const renderRunQueryDatasetCounts = (
     if (!datasets || datasets.length === 0) {
         return "";
     }
-    const items = datasets
-        .map(
-            (dataset) =>
-                `<li><span class="quarry-runquery-dataset-name">${escapeHtml(dataset.name)}</span><span class="quarry-runquery-dataset-count">${dataset.matches.toLocaleString()}</span></li>`,
-        )
+    const total = datasets.reduce((sum, dataset) => sum + dataset.matches, 0);
+    const max = datasets.reduce(
+        (best, dataset) => Math.max(best, dataset.matches),
+        0,
+    );
+    const prefix = commonDatasetPrefix(datasets.map((dataset) => dataset.name));
+    const rows = datasets
+        .map((dataset) => datasetRow(dataset, prefix, total, max))
         .join("");
-    return `<ul class="quarry-runquery-datasets">${items}</ul>`;
+    return `<div class="quarry-runquery-datasets">${rows}</div>`;
 };
 
 const COPY_GLYPH = "&#x29C9;";
@@ -137,28 +216,41 @@ export const renderRunQueryResults = (
         .join("");
 };
 
-export const renderRunQueryResponse = (data: RunQueryResponse): string => {
+/** The summary rides in the controls row, the rest fills the scrolling body. */
+export interface RunQueryView {
+    summary: string;
+    body: string;
+}
+
+export const renderRunQueryResponse = (
+    data: RunQueryResponse,
+): RunQueryView => {
     if (data.invalid) {
-        return `<div class="quarry-runquery-invalid">${escapeHtml(data.invalid)}</div>`;
+        return {
+            summary: "",
+            body: `<div class="quarry-runquery-invalid">${escapeHtml(data.invalid)}</div>`,
+        };
     }
     if (data.error) {
-        return `<div class="quarry-preview-error">${escapeHtml(data.error)}</div>`;
+        return {
+            summary: "",
+            body: `<div class="quarry-preview-error">${escapeHtml(data.error)}</div>`,
+        };
     }
     const datasets = data.datasets ?? [];
     const results = data.results ?? [];
-    const summary = `<div class="quarry-runquery-summary">${escapeHtml(
-        runQuerySummaryText(
+    return {
+        summary: renderRunQuerySummary(
             data.total ?? 0,
             datasets.length,
             results.length,
             data.truncated ?? false,
+            commonDatasetPrefix(datasets.map((dataset) => dataset.name)),
         ),
-    )}</div>`;
-    return (
-        summary +
-        renderRunQueryDatasetCounts(datasets) +
-        renderRunQueryResults(results, data.highlights ?? [])
-    );
+        body:
+            renderRunQueryDatasetCounts(datasets) +
+            renderRunQueryResults(results, data.highlights ?? []),
+    };
 };
 
 let runBusy = false;
@@ -170,6 +262,17 @@ const updateRunControls = (): void => {
     }
 };
 
+const showView = (view: RunQueryView): void => {
+    const summaryEl = document.getElementById(SUMMARY_ID);
+    if (summaryEl) {
+        summaryEl.innerHTML = view.summary;
+    }
+    const bodyEl = document.getElementById(RESULTS_ID);
+    if (bodyEl) {
+        bodyEl.innerHTML = view.body;
+    }
+};
+
 const runQuery = (): void => {
     if (runBusy) {
         return;
@@ -178,13 +281,15 @@ const runQuery = (): void => {
         QUERY_ID,
     ) as HTMLTextAreaElement | null;
     const maxEl = document.getElementById(MAX_ID) as HTMLInputElement | null;
-    const resultsEl = document.getElementById(RESULTS_ID);
-    if (!queryEl || !resultsEl) {
+    if (!queryEl || !document.getElementById(RESULTS_ID)) {
         return;
     }
     const query = queryEl.value.trim();
     if (!query) {
-        resultsEl.innerHTML = `<div class="quarry-runquery-invalid">Enter a &lt;q:&gt; query to run.</div>`;
+        showView({
+            summary: "",
+            body: `<div class="quarry-runquery-invalid">Enter a &lt;q:&gt; query to run.</div>`,
+        });
         return;
     }
     const maxResults = clampMaxResults(maxEl?.value);
@@ -193,17 +298,17 @@ const runQuery = (): void => {
     }
     runBusy = true;
     updateRunControls();
-    resultsEl.innerHTML = `<div class="quarry-preview-loading">Running…</div>`;
+    showView({
+        summary: "",
+        body: `<div class="quarry-preview-loading">Running…</div>`,
+    });
     genericRequest<RunQueryResponse>(
         "QuarryRunQuery",
         { query, maxResults },
         (data) => {
             runBusy = false;
             updateRunControls();
-            const bodyEl = document.getElementById(RESULTS_ID);
-            if (bodyEl) {
-                bodyEl.innerHTML = renderRunQueryResponse(data);
-            }
+            showView(renderRunQueryResponse(data));
         },
     );
 };
@@ -247,7 +352,8 @@ const ensureRunQueryModal = (): void => {
                         <label for="${QUERY_ID}" class="quarry-runquery-label">Query — paste a <code>&lt;q:&gt;</code> prompt tag (or just its inner part)</label>
                         <textarea id="${QUERY_ID}" class="auto-text quarry-runquery-input" rows="3" placeholder="${escapeHtml(EXAMPLE_QUERY)}" spellcheck="false"></textarea>
                         <div class="quarry-runquery-options">
-                            <label for="${MAX_ID}">Max results</label>
+                            <div id="${SUMMARY_ID}" class="quarry-runquery-summary-slot"></div>
+                            <label for="${MAX_ID}" class="quarry-runquery-max-label">Max results</label>
                             <input type="number" id="${MAX_ID}" class="auto-text quarry-runquery-max" value="${RUNQUERY_DEFAULT_MAX}" min="${RUNQUERY_MIN_MAX}">
                             <button type="button" id="${RUN_ID}" class="basic-button quarry-runquery-run" title="Run the query and show the matching rows (Ctrl+Enter in the query box also runs)">Run</button>
                         </div>

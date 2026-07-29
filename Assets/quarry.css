@@ -584,8 +584,16 @@
     margin: 0.5rem 0;
 }
 
+.quarry-runquery-max-label {
+    flex: none;
+    margin: 0;
+    color: var(--text-soft);
+    font-size: 0.9em;
+}
+
 .quarry-runquery-max {
-    width: 6rem;
+    flex: none;
+    width: 3rem;
 }
 
 .quarry-runquery-run {
@@ -597,27 +605,105 @@
     padding: 0.5rem 0;
 }
 
+.quarry-runquery-summary-slot {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
 .quarry-runquery-summary {
-    margin: 0.5rem 0 0.3rem;
-    font-weight: 600;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.1rem 1.5rem;
+    padding-right: 0.85rem;
+    border-right: 2px solid var(--light-border);
+    font-size: 0.95em;
     font-variant-numeric: tabular-nums;
 }
 
-.quarry-runquery-datasets {
-    list-style: none;
-    margin: 0 0 0.5rem;
-    padding: 0;
+.quarry-runquery-summary-row {
     display: flex;
-    flex-wrap: wrap;
-    gap: 0.2rem 1rem;
+    align-items: baseline;
+    gap: 0.4rem;
+    min-width: 0;
+}
+
+.quarry-runquery-summary-label {
+    flex: none;
+    color: var(--text-soft);
+    text-transform: uppercase;
+    font-size: 0.75em;
+    letter-spacing: 0.05em;
+}
+
+.quarry-runquery-summary-value {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 600;
+}
+
+.quarry-runquery-datasets {
+    --quarry-dataset-row: 1.4rem;
+    --quarry-dataset-pad: 0.3rem;
+    box-sizing: border-box;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto 2.5rem minmax(4rem, 12rem);
+    grid-auto-rows: var(--quarry-dataset-row);
+    align-items: center;
+    column-gap: 0.75rem;
+    /* Ten rows, then scroll — padding and border are inside the cap. */
+    max-height: calc(
+        var(--quarry-dataset-row) * 10 + var(--quarry-dataset-pad) * 2 + 2px
+    );
+    overflow-y: auto;
+    width: 90%;
+    margin: 0.4rem auto 0.7rem;
+    padding: var(--quarry-dataset-pad) 0.6rem;
+    border: 1px solid var(--light-border);
+    border-radius: 4px;
     font-size: 0.9em;
     color: var(--text-soft);
 }
 
+.quarry-runquery-dataset-row {
+    display: contents;
+}
+
+.quarry-runquery-dataset-row > * {
+    min-width: 0;
+}
+
+.quarry-runquery-dataset-name {
+    font-family: monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .quarry-runquery-dataset-count {
-    margin-left: 0.35rem;
+    text-align: right;
     font-variant-numeric: tabular-nums;
     font-weight: 600;
+    color: var(--text);
+}
+
+.quarry-runquery-dataset-share {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.quarry-runquery-dataset-bar {
+    height: 0.4rem;
+    border-radius: 2px;
+    background: var(--background-gray);
+    overflow: hidden;
+}
+
+.quarry-runquery-dataset-bar > span {
+    display: block;
+    height: 100%;
+    background: var(--emphasis);
 }
 
 .quarry-runquery-results {

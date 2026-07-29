@@ -1741,6 +1741,7 @@
   var QUERY_ID = "quarry-runquery-query";
   var MAX_ID = "quarry-runquery-max";
   var RUN_ID = "quarry-runquery-run";
+  var SUMMARY_ID = "quarry-runquery-summary";
   var RESULTS_ID = "quarry-runquery-results";
   var EXAMPLE_QUERY = "<q:tags/**[tags=girl; tags!=anthro]>";
   var clampMaxResults = (value) => {
@@ -1750,20 +1751,73 @@
     }
     return Math.max(Math.trunc(num), RUNQUERY_MIN_MAX);
   };
-  var runQuerySummaryText = (total2, datasetCount, shown, truncated) => {
-    const matches = `${total2.toLocaleString()} match${total2 === 1 ? "" : "es"}`;
+  var commonDatasetPrefix = (names) => {
+    if (names.length < 2) {
+      return "";
+    }
+    let prefix = names[0];
+    for (const name of names.slice(1)) {
+      let at = 0;
+      while (at < prefix.length && at < name.length && prefix[at] === name[at]) {
+        at++;
+      }
+      prefix = prefix.slice(0, at);
+      if (prefix.length === 0) {
+        return "";
+      }
+    }
+    const slash = prefix.lastIndexOf("/");
+    if (slash < 0) {
+      return "";
+    }
+    const folder = prefix.slice(0, slash + 1);
+    return names.every((name) => name.length > folder.length) ? folder : "";
+  };
+  var runQueryPoolText = (total2, datasetCount, prefix = "") => {
+    const prompts = `${total2.toLocaleString()} prompt${total2 === 1 ? "" : "s"}`;
     const datasets2 = `${datasetCount.toLocaleString()} dataset${datasetCount === 1 ? "" : "s"}`;
-    const note = truncated ? ` · showing the first ${shown.toLocaleString()}` : "";
-    return `${matches} across ${datasets2}${note}`;
+    const scope = prefix ? ` under ${prefix}` : "";
+    return `${prompts} · ${datasets2}${scope}`;
+  };
+  var runQueryPreviewText = (shown, truncated) => {
+    if (shown <= 0) {
+      return "";
+    }
+    return truncated ? `${shown.toLocaleString()} sampled below` : `all ${shown.toLocaleString()} shown below`;
+  };
+  var summaryRow = (label, value) => `<div class="quarry-runquery-summary-row"><span class="quarry-runquery-summary-label">${label}</span><span class="quarry-runquery-summary-value">${escapeHtml(value)}</span></div>`;
+  var renderRunQuerySummary = (total2, datasetCount, shown, truncated, prefix = "") => {
+    const preview = runQueryPreviewText(shown, truncated);
+    return `<div class="quarry-runquery-summary">${summaryRow(
+      "Pool",
+      runQueryPoolText(total2, datasetCount, prefix)
+    )}${preview ? summaryRow("Preview", preview) : ""}</div>`;
+  };
+  var formatShare = (matches, total2) => {
+    if (total2 <= 0 || matches <= 0) {
+      return "";
+    }
+    const pct = matches / total2 * 100;
+    return pct < 1 ? "<1%" : `${Math.round(pct)}%`;
+  };
+  var datasetRow = (dataset, prefix, total2, max) => {
+    const shown = prefix ? dataset.name.slice(prefix.length) : dataset.name;
+    const raw = max > 0 ? dataset.matches / max * 100 : 0;
+    const width = raw > 0 ? Math.max(raw, 2) : 0;
+    return `<div class="quarry-runquery-dataset-row"><span class="quarry-runquery-dataset-name" title="${escapeHtml(dataset.name)}">${escapeHtml(shown)}</span><span class="quarry-runquery-dataset-count">${dataset.matches.toLocaleString()}</span><span class="quarry-runquery-dataset-share">${escapeHtml(formatShare(dataset.matches, total2))}</span><span class="quarry-runquery-dataset-bar"><span style="width: ${width.toFixed(1)}%"></span></span></div>`;
   };
   var renderRunQueryDatasetCounts = (datasets2) => {
     if (!datasets2 || datasets2.length === 0) {
       return "";
     }
-    const items = datasets2.map(
-      (dataset) => `<li><span class="quarry-runquery-dataset-name">${escapeHtml(dataset.name)}</span><span class="quarry-runquery-dataset-count">${dataset.matches.toLocaleString()}</span></li>`
-    ).join("");
-    return `<ul class="quarry-runquery-datasets">${items}</ul>`;
+    const total2 = datasets2.reduce((sum, dataset) => sum + dataset.matches, 0);
+    const max = datasets2.reduce(
+      (best, dataset) => Math.max(best, dataset.matches),
+      0
+    );
+    const prefix = commonDatasetPrefix(datasets2.map((dataset) => dataset.name));
+    const rows = datasets2.map((dataset) => datasetRow(dataset, prefix, total2, max)).join("");
+    return `<div class="quarry-runquery-datasets">${rows}</div>`;
   };
   var COPY_GLYPH = "&#x29C9;";
   var highlightPrompt = (prompt, highlights) => {
@@ -1819,28 +1873,45 @@
   };
   var renderRunQueryResponse = (data) => {
     if (data.invalid) {
-      return `<div class="quarry-runquery-invalid">${escapeHtml(data.invalid)}</div>`;
+      return {
+        summary: "",
+        body: `<div class="quarry-runquery-invalid">${escapeHtml(data.invalid)}</div>`
+      };
     }
     if (data.error) {
-      return `<div class="quarry-preview-error">${escapeHtml(data.error)}</div>`;
+      return {
+        summary: "",
+        body: `<div class="quarry-preview-error">${escapeHtml(data.error)}</div>`
+      };
     }
     const datasets2 = data.datasets ?? [];
     const results = data.results ?? [];
-    const summary = `<div class="quarry-runquery-summary">${escapeHtml(
-      runQuerySummaryText(
+    return {
+      summary: renderRunQuerySummary(
         data.total ?? 0,
         datasets2.length,
         results.length,
-        data.truncated ?? false
-      )
-    )}</div>`;
-    return summary + renderRunQueryDatasetCounts(datasets2) + renderRunQueryResults(results, data.highlights ?? []);
+        data.truncated ?? false,
+        commonDatasetPrefix(datasets2.map((dataset) => dataset.name))
+      ),
+      body: renderRunQueryDatasetCounts(datasets2) + renderRunQueryResults(results, data.highlights ?? [])
+    };
   };
   var runBusy = false;
   var updateRunControls = () => {
     const run = document.getElementById(RUN_ID);
     if (run) {
       run.disabled = runBusy;
+    }
+  };
+  var showView = (view) => {
+    const summaryEl = document.getElementById(SUMMARY_ID);
+    if (summaryEl) {
+      summaryEl.innerHTML = view.summary;
+    }
+    const bodyEl = document.getElementById(RESULTS_ID);
+    if (bodyEl) {
+      bodyEl.innerHTML = view.body;
     }
   };
   var runQuery = () => {
@@ -1851,13 +1922,15 @@
       QUERY_ID
     );
     const maxEl = document.getElementById(MAX_ID);
-    const resultsEl = document.getElementById(RESULTS_ID);
-    if (!queryEl || !resultsEl) {
+    if (!queryEl || !document.getElementById(RESULTS_ID)) {
       return;
     }
     const query = queryEl.value.trim();
     if (!query) {
-      resultsEl.innerHTML = `<div class="quarry-runquery-invalid">Enter a &lt;q:&gt; query to run.</div>`;
+      showView({
+        summary: "",
+        body: `<div class="quarry-runquery-invalid">Enter a &lt;q:&gt; query to run.</div>`
+      });
       return;
     }
     const maxResults = clampMaxResults(maxEl?.value);
@@ -1866,17 +1939,17 @@
     }
     runBusy = true;
     updateRunControls();
-    resultsEl.innerHTML = `<div class="quarry-preview-loading">Running…</div>`;
+    showView({
+      summary: "",
+      body: `<div class="quarry-preview-loading">Running…</div>`
+    });
     genericRequest(
       "QuarryRunQuery",
       { query, maxResults },
       (data) => {
         runBusy = false;
         updateRunControls();
-        const bodyEl = document.getElementById(RESULTS_ID);
-        if (bodyEl) {
-          bodyEl.innerHTML = renderRunQueryResponse(data);
-        }
+        showView(renderRunQueryResponse(data));
       }
     );
   };
@@ -1916,7 +1989,8 @@
                         <label for="${QUERY_ID}" class="quarry-runquery-label">Query — paste a <code>&lt;q:&gt;</code> prompt tag (or just its inner part)</label>
                         <textarea id="${QUERY_ID}" class="auto-text quarry-runquery-input" rows="3" placeholder="${escapeHtml(EXAMPLE_QUERY)}" spellcheck="false"></textarea>
                         <div class="quarry-runquery-options">
-                            <label for="${MAX_ID}">Max results</label>
+                            <div id="${SUMMARY_ID}" class="quarry-runquery-summary-slot"></div>
+                            <label for="${MAX_ID}" class="quarry-runquery-max-label">Max results</label>
                             <input type="number" id="${MAX_ID}" class="auto-text quarry-runquery-max" value="${RUNQUERY_DEFAULT_MAX}" min="${RUNQUERY_MIN_MAX}">
                             <button type="button" id="${RUN_ID}" class="basic-button quarry-runquery-run" title="Run the query and show the matching rows (Ctrl+Enter in the query box also runs)">Run</button>
                         </div>
@@ -2041,7 +2115,7 @@
     return `<label class="quarry-tag-option"><input type="checkbox" class="quarry-dataset-tag" data-dataset="${escapeHtml(dataset.name)}" value="${escapeHtml(col.name)}"${checked}> ${escapeHtml(col.name)}${badge}</label>`;
   }).join("");
   var formatRowCount = (count) => count == null ? "—" : count.toLocaleString();
-  var SUMMARY_ID = "quarry-datasets-summary";
+  var SUMMARY_ID2 = "quarry-datasets-summary";
   var formatDatasetsSummary = (datasets2) => {
     const total2 = datasets2.length;
     let rows = 0;
@@ -2147,7 +2221,7 @@
         <tbody>${folderRows}${looseRows}</tbody>
         <tfoot>
             <tr class="quarry-datasets-summary-row">
-                <td colspan="6"><span id="${SUMMARY_ID}" class="quarry-datasets-summary" title="Totals across all datasets. Uncounted rows fill in as datasets are warmed or previewed.">${escapeHtml(formatDatasetsSummary(datasets2))}</span></td>
+                <td colspan="6"><span id="${SUMMARY_ID2}" class="quarry-datasets-summary" title="Totals across all datasets. Uncounted rows fill in as datasets are warmed or previewed.">${escapeHtml(formatDatasetsSummary(datasets2))}</span></td>
             </tr>
         </tfoot>
     </table>`;
@@ -2272,7 +2346,7 @@
   };
   var currentDatasets = [];
   var updateDatasetsSummary = () => {
-    const el2 = document.getElementById(SUMMARY_ID);
+    const el2 = document.getElementById(SUMMARY_ID2);
     if (el2) {
       el2.textContent = formatDatasetsSummary(currentDatasets);
     }

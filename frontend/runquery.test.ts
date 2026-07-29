@@ -1,13 +1,17 @@
 import { describe, expect, it } from "@jest/globals";
 import {
     clampMaxResults,
+    commonDatasetPrefix,
+    formatShare,
     highlightPrompt,
     RUNQUERY_DEFAULT_MAX,
     RUNQUERY_MIN_MAX,
     renderRunQueryDatasetCounts,
     renderRunQueryResponse,
     renderRunQueryResults,
-    runQuerySummaryText,
+    renderRunQuerySummary,
+    runQueryPoolText,
+    runQueryPreviewText,
 } from "./runquery";
 
 describe("runquery limits", () => {
@@ -49,47 +53,144 @@ describe("clampMaxResults", () => {
     });
 });
 
-describe("runQuerySummaryText", () => {
-    it("pluralizes matches and datasets with separators", () => {
-        expect(runQuerySummaryText(1234, 3, 25, false)).toBe(
-            "1,234 matches across 3 datasets",
-        );
+describe("runQueryPoolText", () => {
+    it("pluralizes prompts and datasets with a separator", () => {
+        expect(runQueryPoolText(1234, 3)).toBe("1,234 prompts · 3 datasets");
     });
 
-    it("singularizes a lone match in a lone dataset", () => {
-        expect(runQuerySummaryText(1, 1, 1, false)).toBe(
-            "1 match across 1 dataset",
-        );
+    it("singularizes a lone prompt in a lone dataset", () => {
+        expect(runQueryPoolText(1, 1)).toBe("1 prompt · 1 dataset");
     });
 
-    it("notes truncation with the shown count", () => {
-        expect(runQuerySummaryText(1234, 3, 25, true)).toBe(
-            "1,234 matches across 3 datasets · showing the first 25",
+    it("names the shared folder when there is one", () => {
+        expect(runQueryPoolText(1234, 3, "tags/")).toBe(
+            "1,234 prompts · 3 datasets under tags/",
         );
     });
 
     it("handles zero matches", () => {
-        expect(runQuerySummaryText(0, 0, 0, false)).toBe(
-            "0 matches across 0 datasets",
+        expect(runQueryPoolText(0, 0)).toBe("0 prompts · 0 datasets");
+    });
+});
+
+describe("runQueryPreviewText", () => {
+    it("calls a truncated preview a sample, not a ranking", () => {
+        expect(runQueryPreviewText(25, true)).toBe("25 sampled below");
+    });
+
+    it("says everything is shown when nothing was cut", () => {
+        expect(runQueryPreviewText(3, false)).toBe("all 3 shown below");
+    });
+
+    it("says nothing when there are no rows", () => {
+        expect(runQueryPreviewText(0, true)).toBe("");
+    });
+});
+
+describe("commonDatasetPrefix", () => {
+    it("finds the shared folder", () => {
+        expect(
+            commonDatasetPrefix(["tags/civitai", "tags/civitai.authors"]),
+        ).toBe("tags/");
+    });
+
+    it("keeps only whole folder segments", () => {
+        expect(commonDatasetPrefix(["tags/a/one", "tags/a/two"])).toBe(
+            "tags/a/",
         );
+    });
+
+    it("returns nothing when the names diverge at the root", () => {
+        expect(commonDatasetPrefix(["tags/a", "loose"])).toBe("");
+    });
+
+    it("returns nothing for a lone dataset", () => {
+        expect(commonDatasetPrefix(["tags/a"])).toBe("");
+    });
+
+    it("never strips a whole name away", () => {
+        expect(commonDatasetPrefix(["tags/a/", "tags/a/two"])).toBe("");
+    });
+});
+
+describe("formatShare", () => {
+    it("rounds to whole percents", () => {
+        expect(formatShare(7164, 21211)).toBe("34%");
+    });
+
+    it("floors tiny shares at <1%", () => {
+        expect(formatShare(1, 21211)).toBe("<1%");
+    });
+
+    it("returns nothing without a usable total", () => {
+        expect(formatShare(5, 0)).toBe("");
+        expect(formatShare(0, 10)).toBe("");
+    });
+});
+
+describe("renderRunQuerySummary", () => {
+    it("labels the pool and the preview on separate rows", () => {
+        const html = renderRunQuerySummary(1234, 3, 25, true, "tags/");
+        expect(html).toContain(">Pool</span>");
+        expect(html).toContain("1,234 prompts · 3 datasets under tags/");
+        expect(html).toContain(">Preview</span>");
+        expect(html).toContain("25 sampled below");
+        expect(html).not.toContain("showing the first");
+    });
+
+    it("drops the preview row when there is nothing to preview", () => {
+        const html = renderRunQuerySummary(0, 0, 0, false);
+        expect(html).toContain("0 prompts · 0 datasets");
+        expect(html).not.toContain(">Preview</span>");
     });
 });
 
 describe("renderRunQueryDatasetCounts", () => {
-    it("renders one item per dataset with its formatted count", () => {
+    it("renders one row per dataset with its formatted count and share", () => {
         const html = renderRunQueryDatasetCounts([
             { name: "tags/1girl", matches: 12345 },
             { name: "loose", matches: 2 },
         ]);
         expect(html).toContain("quarry-runquery-datasets");
-        expect(html).toContain(
-            '<span class="quarry-runquery-dataset-name">tags/1girl</span>',
+        expect(html.match(/quarry-runquery-dataset-row/g) ?? []).toHaveLength(
+            2,
         );
+        expect(html).toContain(">tags/1girl</span>");
         expect(html).toContain(
             '<span class="quarry-runquery-dataset-count">12,345</span>',
         );
+        expect(html).toContain(
+            '<span class="quarry-runquery-dataset-share">&lt;1%</span>',
+        );
         expect(html).toContain(">loose</span>");
         expect(html).toContain(">2</span>");
+    });
+
+    it("strips the shared folder from the names but keeps it in the tooltip", () => {
+        const html = renderRunQueryDatasetCounts([
+            { name: "tags/civitai", matches: 3 },
+            { name: "tags/moescape", matches: 1 },
+        ]);
+        expect(html).toContain('title="tags/civitai"');
+        expect(html).toContain(">civitai</span>");
+        expect(html).not.toContain(">tags/civitai</span>");
+    });
+
+    it("scales each bar against the largest dataset", () => {
+        const html = renderRunQueryDatasetCounts([
+            { name: "a", matches: 100 },
+            { name: "b", matches: 25 },
+        ]);
+        expect(html).toContain('style="width: 100.0%"');
+        expect(html).toContain('style="width: 25.0%"');
+    });
+
+    it("keeps a sliver of bar for a negligible share", () => {
+        const html = renderRunQueryDatasetCounts([
+            { name: "a", matches: 100000 },
+            { name: "b", matches: 1 },
+        ]);
+        expect(html).toContain('style="width: 2.0%"');
     });
 
     it("escapes dataset names", () => {
@@ -202,20 +303,21 @@ describe("highlightPrompt", () => {
 
 describe("renderRunQueryResponse", () => {
     it("renders an invalid-input notice without a summary", () => {
-        const html = renderRunQueryResponse({ invalid: "bad <syntax>" });
-        expect(html).toContain("quarry-runquery-invalid");
-        expect(html).toContain("bad &lt;syntax&gt;");
-        expect(html).not.toContain("quarry-runquery-summary");
+        const view = renderRunQueryResponse({ invalid: "bad <syntax>" });
+        expect(view.summary).toBe("");
+        expect(view.body).toContain("quarry-runquery-invalid");
+        expect(view.body).toContain("bad &lt;syntax&gt;");
     });
 
     it("renders unexpected errors with the error style", () => {
-        const html = renderRunQueryResponse({ error: "boom" });
-        expect(html).toContain("quarry-preview-error");
-        expect(html).toContain("boom");
+        const view = renderRunQueryResponse({ error: "boom" });
+        expect(view.summary).toBe("");
+        expect(view.body).toContain("quarry-preview-error");
+        expect(view.body).toContain("boom");
     });
 
-    it("renders summary, dataset counts, and result rows on success", () => {
-        const html = renderRunQueryResponse({
+    it("splits the summary from the counts and rows on success", () => {
+        const view = renderRunQueryResponse({
             total: 3,
             datasets: [
                 { name: "a", matches: 2 },
@@ -228,28 +330,30 @@ describe("renderRunQueryResponse", () => {
             ],
             truncated: false,
         });
-        expect(html).toContain("3 matches across 2 datasets");
-        expect(html).toContain("quarry-runquery-datasets");
-        expect(html).toContain("quarry-runquery-table");
-        expect(html).toContain(">one</div>");
-        expect(html).toContain(">three</div>");
-        expect(html).not.toContain("showing the first");
+        expect(view.summary).toContain("3 prompts · 2 datasets");
+        expect(view.summary).toContain("all 3 shown below");
+        expect(view.summary).not.toContain("quarry-runquery-datasets");
+        expect(view.body).toContain("quarry-runquery-datasets");
+        expect(view.body).toContain("quarry-runquery-table");
+        expect(view.body).toContain(">one</div>");
+        expect(view.body).toContain(">three</div>");
+        expect(view.body).not.toContain("quarry-runquery-summary");
     });
 
     it("notes truncation when the backend flags it", () => {
-        const html = renderRunQueryResponse({
+        const view = renderRunQueryResponse({
             total: 100,
             datasets: [{ name: "a", matches: 100 }],
             results: [{ dataset: "a", prompt: "one" }],
             truncated: true,
         });
-        expect(html).toContain("100 matches across 1 dataset");
-        expect(html).toContain("showing the first 1");
+        expect(view.summary).toContain("100 prompts · 1 dataset");
+        expect(view.summary).toContain("1 sampled below");
     });
 
     it("tolerates a sparse success payload", () => {
-        const html = renderRunQueryResponse({});
-        expect(html).toContain("0 matches across 0 datasets");
-        expect(html).toContain("No matching rows");
+        const view = renderRunQueryResponse({});
+        expect(view.summary).toContain("0 prompts · 0 datasets");
+        expect(view.body).toContain("No matching rows");
     });
 });
