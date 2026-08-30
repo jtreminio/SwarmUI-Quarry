@@ -89,4 +89,30 @@ public class ImageMetadataExtractorTests
         Assert.Null(row.Prompt);
         Assert.Equal("{}", row.MetaJson);
     }
+
+    [Fact]
+    public void Extract_ReadsGridMetadataScriptBesideVideo()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "quarry-grid-meta-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            string mediaPath = Path.Combine(dir, "video.mp4");
+            System.IO.File.WriteAllText(mediaPath, "video bytes are not read when the sidecar has metadata");
+            System.IO.File.WriteAllText(
+                Path.Combine(dir, "video.metadata.js"),
+                "all_metadata[\"video\"] = {\"sui_image_params\":{\"prompt\":\"found from sidecar\"}}\nfix_video(\"video\")");
+            FileInfo info = new(mediaPath);
+            ImageHistoryFile file = new("Grids/run/video.mp4", mediaPath, info.LastWriteTimeUtc.Ticks, ImageHistoryEnumerator.HashOf(info));
+
+            ImageIndexRow row = ImageMetadataExtractor.Extract(file, dir, starNoFolders: false, indexedAt: 1);
+
+            Assert.Equal("found from sidecar", row.Prompt);
+            Assert.Equal("found from sidecar", row.OriginalPrompt);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
 }

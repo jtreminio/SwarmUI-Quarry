@@ -66,14 +66,17 @@ public static class ImageMetadataExtractor
 
     public static ImageIndexRow Extract(ImageHistoryFile file, string root, bool starNoFolders, long indexedAt)
     {
-        string raw = null;
-        try
+        string raw = TryReadSidecarMetadata(file.AbsolutePath);
+        if (!HasGenParams(raw))
         {
-            raw = OutputMetadataTracker.GetMetadataFor(file.AbsolutePath, root, starNoFolders)?.Metadata;
-        }
-        catch (Exception ex)
-        {
-            Logs.Debug($"Quarry: could not read metadata for '{file.RelativePath}': {ex.Message}");
+            try
+            {
+                raw = OutputMetadataTracker.GetMetadataFor(file.AbsolutePath, root, starNoFolders)?.Metadata;
+            }
+            catch (Exception ex)
+            {
+                Logs.Debug($"Quarry: could not read metadata for '{file.RelativePath}': {ex.Message}");
+            }
         }
         if (!HasGenParams(raw))
         {
@@ -84,6 +87,48 @@ public static class ImageMetadataExtractor
             }
         }
         return BuildRow(file, raw, indexedAt);
+    }
+
+    private static string TryReadSidecarMetadata(string absolutePath)
+    {
+        foreach (string extension in ImageHistoryEnumerator.MetadataSidecarExtensions)
+        {
+            string sidecar = Path.ChangeExtension(absolutePath, extension);
+            if (!File.Exists(sidecar))
+            {
+                continue;
+            }
+            try
+            {
+                string raw = File.ReadAllText(sidecar);
+                JObject metadata;
+                if (extension == ".metadata.js")
+                {
+                    int assignment = raw.IndexOf(" = ", StringComparison.Ordinal);
+                    int objectStart = assignment < 0 ? -1 : raw.IndexOf('{', assignment + 3);
+                    if (objectStart < 0)
+                    {
+                        continue;
+                    }
+                    using StringReader text = new(raw[objectStart..]);
+                    using JsonTextReader json = new(text) { DateParseHandling = DateParseHandling.None };
+                    metadata = JToken.ReadFrom(json) as JObject;
+                }
+                else
+                {
+                    metadata = JObject.Parse(raw);
+                }
+                if (metadata?["sui_image_params"] is JObject)
+                {
+                    return metadata.ToString(Formatting.None);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logs.Debug($"Quarry: could not read metadata sidecar '{sidecar}': {ex.Message}");
+            }
+        }
+        return null;
     }
 
     private static bool HasGenParams(string raw)

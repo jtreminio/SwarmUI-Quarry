@@ -43,4 +43,31 @@ public class ImageHistoryEnumeratorTests
         List<ImageHistoryFile> files = [File("raw/a.png"), File("raw/b.png")];
         Assert.Equal(2, ImageHistoryEnumerator.DeduplicateStarred(files, starNoFolders: false).Count);
     }
+
+    [Fact]
+    public void HashOf_ChangesWhenGridMetadataSidecarChanges()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "quarry-grid-hash-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            string mediaPath = Path.Combine(dir, "video.mp4");
+            string metadataPath = Path.Combine(dir, "video.metadata.js");
+            System.IO.File.WriteAllText(mediaPath, "video");
+            FileInfo media = new(mediaPath);
+            string withoutSidecar = ImageHistoryEnumerator.HashOf(media);
+
+            System.IO.File.WriteAllText(metadataPath, "one");
+            string first = ImageHistoryEnumerator.HashOf(media);
+            System.IO.File.WriteAllText(metadataPath, "longer metadata");
+            string second = ImageHistoryEnumerator.HashOf(media);
+
+            Assert.NotEqual(withoutSidecar, first);
+            Assert.NotEqual(first, second);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
 }

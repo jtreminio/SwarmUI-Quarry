@@ -6,12 +6,34 @@ public sealed record ImageHistoryFile(string RelativePath, string AbsolutePath, 
 
 public static class ImageHistoryEnumerator
 {
+    public static readonly IReadOnlyList<string> MetadataSidecarExtensions =
+        [".swarm.json", ".metadata.js"];
+
     public static readonly IReadOnlySet<string> Extensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
         "png", "jpg", "jpeg", "gif", "webp", "webm", "mp4", "mov", "mp3", "aac", "wav", "flac",
     };
 
-    public static string HashOf(FileInfo info) => $"{info.Length}:{info.LastWriteTimeUtc.Ticks}";
+    public static string HashOf(FileInfo info)
+    {
+        string hash = $"{info.Length}:{info.LastWriteTimeUtc.Ticks}";
+        foreach (string extension in MetadataSidecarExtensions)
+        {
+            string sidecarPath = Path.ChangeExtension(info.FullName, extension);
+            try
+            {
+                FileInfo sidecar = new(sidecarPath);
+                if (sidecar.Exists)
+                {
+                    hash += $"|{extension}:{sidecar.Length}:{sidecar.LastWriteTimeUtc.Ticks}";
+                }
+            }
+            catch
+            {
+            }
+        }
+        return hash;
+    }
 
     public static List<ImageHistoryFile> Enumerate(string root, bool starNoFolders, CancellationToken cancel)
     {
