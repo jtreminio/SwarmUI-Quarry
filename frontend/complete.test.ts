@@ -158,7 +158,13 @@ describe("computeQuarryCompletions — filter columns", () => {
     });
 
     it("offers operators for a complete column in a later clause too", () => {
-        expect(labels("characters[source")).toEqual(["=", "==", "!="]);
+        expect(labels("characters[source")).toEqual([
+            "=",
+            "==",
+            "!=",
+            "+=",
+            "-=",
+        ]);
         expect(
             computeQuarryCompletions("characters[tags=girl;source", ALL)[0],
         ).toEqual({
@@ -168,7 +174,7 @@ describe("computeQuarryCompletions — filter columns", () => {
         });
     });
 
-    it("adds `+=` and `-=` only for number-based columns", () => {
+    it("adds `+=` and `-=` for numeric and text scalar columns", () => {
         const rated: CompletionDataset = {
             name: "rated",
             columns: [
@@ -199,20 +205,24 @@ describe("computeQuarryCompletions — filter columns", () => {
             {
                 apply: "<q:rated[score+=",
                 label: "+=",
-                hint: "at least (number columns)",
+                hint: "at least (number or text length)",
             },
             {
                 apply: "<q:rated[score-=",
                 label: "-=",
-                hint: "at most (number columns)",
+                hint: "at most (number or text length)",
             },
         ]);
-        // ...while a text column in the same dataset keeps just the three matchers.
+        // A text column uses the same operators for character-count comparisons.
         expect(
             computeQuarryCompletions("rated[prompt", [rated]).map(
                 (c) => c.label,
             ),
-        ).toEqual(["=", "==", "!="]);
+        ).toEqual(["=", "==", "!=", "+=", "-="]);
+    });
+
+    it("does not add length modifiers for list columns", () => {
+        expect(labels("characters[tags")).toEqual(["=", "==", "!="]);
     });
 
     it("stops suggesting columns once a `+=` / `-=` is typed", () => {

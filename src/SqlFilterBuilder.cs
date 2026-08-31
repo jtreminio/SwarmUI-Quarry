@@ -19,7 +19,8 @@ public static class SqlFilterBuilder
             {
                 if (clause.Op is MatchOp.GreaterOrEqual or MatchOp.LessOrEqual)
                 {
-                    throw new NonNumericComparisonException(TagsKeyword);
+                    terms.Add(BuildMergedTagComparisonTerm(tagColumns, clause, parameters));
+                    continue;
                 }
                 terms.Add(BuildMergedTagTerm(tagColumns, clause, parameters, schema));
                 continue;
@@ -32,11 +33,11 @@ public static class SqlFilterBuilder
             string quoted = SqlText.QuoteIdentifier(column.Name);
             if (clause.Op is MatchOp.GreaterOrEqual or MatchOp.LessOrEqual)
             {
-                if (!column.IsNumeric)
+                if (column.Kind != ColumnKind.Scalar)
                 {
                     throw new NonNumericComparisonException(column.Name);
                 }
-                terms.Add(BuildNumericTerm(column, clause, parameters));
+                terms.Add(BuildComparisonTerm(column, clause, parameters));
                 continue;
             }
             terms.Add(column.Kind == ColumnKind.List
@@ -74,25 +75,55 @@ public static class SqlFilterBuilder
         return Combine(clause, valueMatches);
     }
 
-    private static string BuildNumericTerm(ColumnInfo column, QueryClause clause, List<QueryParameter> parameters)
+    private static string BuildMergedTagComparisonTerm(
+        IReadOnlyList<ColumnInfo> tagColumns,
+        QueryClause clause,
+        List<QueryParameter> parameters)
     {
-        bool atLeast = clause.Op == MatchOp.GreaterOrEqual;
-        string op = atLeast ? ">=" : "<=";
-        string castType = string.IsNullOrEmpty(column.NumericType) ? "DOUBLE" : column.NumericType;
-        bool integral = DuckDbTypeMapper.IsIntegerType(castType);
-        string quoted = SqlText.QuoteIdentifier(column.Name);
+        if (tagColumns.Any(column => column.Kind != ColumnKind.Scalar))
+        {
+            throw new NonNumericComparisonException(TagsKeyword);
+        }
+        string[] valueMatches = new string[clause.Values.Count];
+        for (int i = 0; i < clause.Values.Count; i++)
+        {
+            string value = clause.Values[i];
+            string name = $"p{parameters.Count}";
+            parameters.Add(new QueryParameter(name, value));
+            string[] perColumn = [.. tagColumns.Select(column => ComparisonCheck(column, clause.Op, name, value))];
+            valueMatches[i] = perColumn.Length == 1 ? perColumn[0] : $"({string.Join(" OR ", perColumn)})";
+        }
+        return $"({string.Join(" OR ", valueMatches)})";
+    }
+
+    private static string BuildComparisonTerm(ColumnInfo column, QueryClause clause, List<QueryParameter> parameters)
+    {
         string[] checks = new string[clause.Values.Count];
         for (int i = 0; i < clause.Values.Count; i++)
         {
             string value = clause.Values[i];
             string name = $"p{parameters.Count}";
             parameters.Add(new QueryParameter(name, value));
-            string bound = integral && !IsIntegerLiteral(value)
-                ? $"TRY_CAST({(atLeast ? "CEIL" : "FLOOR")}(TRY_CAST(${name} AS DOUBLE)) AS {castType})"
-                : $"TRY_CAST(${name} AS {castType})";
-            checks[i] = $"{quoted} {op} {bound}";
+            checks[i] = ComparisonCheck(column, clause.Op, name, value);
         }
         return $"({string.Join(" OR ", checks)})";
+    }
+
+    private static string ComparisonCheck(ColumnInfo column, MatchOp matchOp, string parameterName, string value)
+    {
+        bool atLeast = matchOp == MatchOp.GreaterOrEqual;
+        string op = atLeast ? ">=" : "<=";
+        string castType = column.IsNumeric && !string.IsNullOrEmpty(column.NumericType)
+            ? column.NumericType
+            : column.IsNumeric ? "DOUBLE" : "BIGINT";
+        bool integral = !column.IsNumeric || DuckDbTypeMapper.IsIntegerType(castType);
+        string bound = integral && !IsIntegerLiteral(value)
+            ? $"TRY_CAST({(atLeast ? "CEIL" : "FLOOR")}(TRY_CAST(${parameterName} AS DOUBLE)) AS {castType})"
+            : $"TRY_CAST(${parameterName} AS {castType})";
+        string valueExpression = column.IsNumeric
+            ? SqlText.QuoteIdentifier(column.Name)
+            : $"length({SqlText.QuoteIdentifier(column.Name)})";
+        return $"{valueExpression} {op} {bound}";
     }
 
     private static bool IsIntegerLiteral(string value)

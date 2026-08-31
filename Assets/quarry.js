@@ -104,8 +104,8 @@
     { op: "=", hint: "match any of the values" },
     { op: "==", hint: "match all of the values" },
     { op: "!=", hint: "match none of the values" },
-    { op: "+=", hint: "at least (number columns)", numericOnly: true },
-    { op: "-=", hint: "at most (number columns)", numericOnly: true }
+    { op: "+=", hint: "at least (number or text length)", scalarOnly: true },
+    { op: "-=", hint: "at most (number or text length)", scalarOnly: true }
   ];
   var findDataset = (list, name) => {
     const low = name.trim().toLowerCase();
@@ -141,7 +141,7 @@
         result.push({
           name: col.name,
           hint,
-          numeric: col.numeric ?? false
+          scalar: col.kind === "scalar"
         });
       }
     };
@@ -201,7 +201,7 @@
     const exact = columns.find((c) => c.name.toLowerCase() === frag);
     if (exact) {
       return FILTER_OPERATORS.filter(
-        (o) => !o.numericOnly || exact.numeric
+        (o) => !o.scalarOnly || exact.scalar
       ).map((o) => ({
         apply: `${head}${exact.name}${o.op}`,
         label: o.op,

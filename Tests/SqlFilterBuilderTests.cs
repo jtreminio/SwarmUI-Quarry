@@ -215,7 +215,34 @@ public class SqlFilterBuilderTests
             f.WhereClause);
     }
 
-    // --- Numeric columns: >= / <= comparisons against a number-based column -------------------------
+    // --- Ordered comparisons: numbers compare directly; text compares by character length -----------
+
+    [Fact]
+    public void TextGreaterOrEqual_UsesCharacterLength()
+    {
+        SqlFilter f = BuildNumeric("p[prompt+=5]", ("prompt", ColumnKind.Scalar, false));
+        Assert.Equal("(length(\"prompt\") >= TRY_CAST($p0 AS BIGINT))", f.WhereClause);
+        Assert.Equal("5", Assert.Single(f.Parameters).Value);
+    }
+
+    [Fact]
+    public void TextLessOrEqual_UsesCharacterLength()
+    {
+        SqlFilter f = BuildNumeric("p[tags-=50]", ("tags", ColumnKind.Scalar, false));
+        Assert.Equal("(length(\"tags\") <= TRY_CAST($p0 AS BIGINT))", f.WhereClause);
+        Assert.Equal("50", Assert.Single(f.Parameters).Value);
+    }
+
+    [Fact]
+    public void TextLengthComparison_FractionalBoundsRoundInTheSafeDirection()
+    {
+        Assert.Equal(
+            "(length(\"prompt\") >= TRY_CAST(CEIL(TRY_CAST($p0 AS DOUBLE)) AS BIGINT))",
+            BuildNumeric("p[prompt+=5.1]", ("prompt", ColumnKind.Scalar, false)).WhereClause);
+        Assert.Equal(
+            "(length(\"prompt\") <= TRY_CAST(FLOOR(TRY_CAST($p0 AS DOUBLE)) AS BIGINT))",
+            BuildNumeric("p[prompt-=5.9]", ("prompt", ColumnKind.Scalar, false)).WhereClause);
+    }
 
     [Fact]
     public void NumericGreaterOrEqual_BuildsComparison()
@@ -341,11 +368,16 @@ public class SqlFilterBuilderTests
     }
 
     [Fact]
-    public void NumericComparison_OnNonNumericColumn_Throws()
+    public void TextComparison_MixedWithNumericClause_ParamsSequential()
     {
-        // A scalar text column is not numeric, so `+=` must signal that the dataset should be skipped.
-        Assert.Throws<NonNumericComparisonException>(
-            () => BuildNumeric("p[name+=5]", ("name", ColumnKind.Scalar, false)));
+        SqlFilter f = BuildNumeric(
+            "p[prompt-=50;score+=0.8]",
+            ("prompt", ColumnKind.Scalar, false),
+            ("score", ColumnKind.Scalar, true));
+        Assert.Equal(
+            "(length(\"prompt\") <= TRY_CAST($p0 AS BIGINT)) AND (\"score\" >= TRY_CAST($p1 AS DOUBLE))",
+            f.WhereClause);
+        Assert.Equal(new[] { "50", "0.8" }, f.Parameters.Select(p => p.Value));
     }
 
     [Fact]
@@ -356,11 +388,24 @@ public class SqlFilterBuilderTests
     }
 
     [Fact]
-    public void NumericComparison_OnMergedTagsKeyword_Throws()
+    public void TextComparison_OnMergedTagsKeyword_UsesConfiguredScalarColumns()
     {
-        // The `tags` keyword merges configured (text) tag columns; a numeric comparison can never apply.
+        SqlFilter f = BuildWithTags(
+            "p[tags-=50]",
+            ["bar", "baz"],
+            ("bar", ColumnKind.Scalar),
+            ("baz", ColumnKind.Scalar));
+        Assert.Equal(
+            "((length(\"bar\") <= TRY_CAST($p0 AS BIGINT) OR length(\"baz\") <= TRY_CAST($p0 AS BIGINT)))",
+            f.WhereClause);
+        Assert.Equal("50", Assert.Single(f.Parameters).Value);
+    }
+
+    [Fact]
+    public void Comparison_OnMergedTagsKeyword_WithListColumn_Throws()
+    {
         Assert.Throws<NonNumericComparisonException>(
-            () => BuildWithTags("p[tags+=5]", ["bar"], ("foo", ColumnKind.Scalar), ("bar", ColumnKind.Scalar)));
+            () => BuildWithTags("p[tags+=5]", ["bar"], ("bar", ColumnKind.List)));
     }
 
     // --- Mixed / general ----------------------------------------------------------------------------
