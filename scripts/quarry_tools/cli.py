@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import argparse
 
-from . import browse, columns, convert, hf, lance, text
+from . import browse, columns, convert, hf, lance, prep, text
 
 
 def _add_group(subparsers, name: str, help: str, module) -> None:
@@ -30,6 +30,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", metavar="<command>")
 
+    prep.register(sub)
     _add_group(sub, "columns", "inspect and reshape a file's columns", columns)
     _add_group(sub, "convert", "change a dataset's on-disk representation", convert)
     _add_group(sub, "lance", "create and prep standalone Lance datasets", lance)

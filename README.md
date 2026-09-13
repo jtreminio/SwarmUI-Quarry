@@ -60,6 +60,31 @@ hf download jtreminio/prompt-dataset --repo-type dataset \
   --local-dir /path/to/your/quarry-datasets
 ```
 
+## Prepare your own dataset with one command
+
+From this extension's directory, use the `quarry` CLI (requires [uv](https://docs.astral.sh/uv/)):
+
+```bash
+./quarry prep /path/to/data.parquet
+```
+
+Quarry prints the source row count and available columns, then asks which to keep. Enter column names in the order you want, separated by semicolons. Rename any column with `original_name=new_name`; a bare name keeps its existing name:
+
+```text
+Columns to keep: caption=prompt;tags;rating=score
+```
+
+This keeps only those three columns, in that order. Quarry converts the selection to Lance, flattens list columns into text, removes empty and duplicate prompt rows, and builds search indices automatically. Search companion columns, when needed, follow your selected columns.
+
+Inputs can be CSV, TSV, JSON, JSONL, NDJSON, Parquet, or a `.lance` dataset directory. The result is `<stem>.lance` beside the input, or `<stem>.prepared.lance` for Lance input. The source stays intact, and an existing output is never overwritten. Use `-o` to choose an output path, or `--columns` to supply the selection without a prompt:
+
+```bash
+./quarry prep data.jsonl -o /path/to/Quarry/prompts.lance \
+  --columns 'caption=prompt;tags;rating=score'
+```
+
+Cleaning uses the first selected column named `prompt`, `text`, `caption`, `description`, or `value` in that preference order, falling back to the first selected column. Use `--prompt-column` with its **new name** to override this. Run `./quarry prep --help` for all options; the existing individual commands remain available.
+
 ## Writing `<q:>` tags
 
 This is the fun part. A Quarry tag always begins with `<q:` followed by the name of a dataset, and it grows from there as you need it:

@@ -786,22 +786,28 @@ the order given, separated by --delimiter -- into a single new column named by
 position of the first one; every other column is untouched. Pass --keep to leave
 the source columns in place as well.
 
-A path is either a plain column name or a jq-style walk into a JSON-valued column
+A path is either a plain column name or a dot/bracket walk into a JSON-valued column
 (native struct/list or raw JSON text):
 
     style                   the whole column
     meta.style              key 'style' inside object column 'meta'
     subject[0].expression   'expression' of the first element of list 'subject'
     subject[].expression    'expression' of EVERY element, joined by the delimiter
+    meta.*                  every value in object 'meta', joined by the delimiter
+    subject[].*             every value of every object in list 'subject'
 
-(jq would write these .meta.style / .subject[0].expression / .subject[].expression;
-the leading dot is dropped and the rest is the same. A bare integer segment like
-subject.0.expression is also accepted, matching reduce-json paths.)
+A bare integer segment like subject.0.expression is also accepted, matching
+reduce-json paths. [] / [*] visits array elements; .* visits object values in
+their stored field order. subject[].* joins all fields of the first subject,
+then all fields of the next. Keys are omitted. This is one level per wildcard,
+not recursive flattening: nested objects/arrays remain JSON text unless the
+path continues into them, e.g. subject[].*.description.
 
 With --use-column-names each value is prefixed with its path, spelled as every
 key and index joined by spaces (wildcard markers contribute nothing): 'style'
 prefixes 'style:', 'subject[0].expression' prefixes 'subject 0 expression:', and
-'subject[].expression' prefixes 'subject expression:'. Missing/null/empty values
+'subject[].expression' prefixes 'subject expression:', and 'subject[].*' prefixes
+'subject:' once for the joined values. Missing/null/empty values
 are skipped entirely -- they contribute neither a prefix nor a delimiter. The
 delimiter is inserted verbatim (the default ', ' includes the space).
 
@@ -814,6 +820,8 @@ The 'file' argument may be a single path or a shell-style wildcard pattern (*, ?
 independently: a failure on one is reported and the rest still run.
 
     quarry columns merge data.jsonl 'style,setting,subject[].expression'
+    quarry columns merge data.parquet 'subject[].*' --name subject
+    quarry columns merge data.jsonl 'style,setting,subject[].*' --name prompt
     quarry columns merge data.jsonl 'style,subject[].age' --use-column-names
     quarry columns merge data.parquet 'title,meta.style' --name text --keep
     quarry columns merge 'shards/*.jsonl' 'style,mood' --delimiter ' | '
@@ -828,7 +836,8 @@ def _parse_merge_path(raw: str) -> tuple[str, list, str]:
     """Parse a merge path into (column, nested_segments, label).
 
     Each nested segment is a ``str`` (object key), an ``int`` (array index), or
-    ``None`` (a ``[]`` / ``[*]`` wildcard: every element). A bare integer dot
+    ``None`` (a ``[]`` / ``[*]`` wildcard: every element). The string ``*``
+    represents an object-value wildcard, rather than a literal key. A bare integer dot
     segment ('subject.0.name') is an index too, matching reduce-json paths.
     ``label`` is the --use-column-names prefix: every key and index joined by
     spaces ('subject[0].expression' -> 'subject 0 expression'), wildcards dropped.
@@ -858,7 +867,7 @@ def _parse_merge_path(raw: str) -> tuple[str, list, str]:
 
     if not isinstance(segments[0], str):
         raise bad("must start with a column name")
-    label = " ".join(str(seg) for seg in segments if seg is not None)
+    label = " ".join(str(seg) for seg in segments if seg is not None and seg != "*")
     return segments[0], segments[1:], label
 
 
@@ -869,6 +878,9 @@ def _merge_json_path(segments) -> tuple[str, bool]:
     for seg in segments:
         if seg is None:
             parts.append("[*]")
+            wildcard = True
+        elif seg == "*":
+            parts.append(".*")
             wildcard = True
         elif isinstance(seg, int):
             parts.append(f"[{seg}]")
@@ -1125,7 +1137,8 @@ def register(subparsers) -> None:
     p.add_argument(
         "paths",
         help="comma-separated column paths, e.g. "
-        "'style,setting,subject[].expression'",
+        "'style,setting,subject[].expression' or 'subject[].*' "
+        "([] visits array elements; .* visits object values)",
     )
     p.add_argument(
         "--name", default="prompt",
