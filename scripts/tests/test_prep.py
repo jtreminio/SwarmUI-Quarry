@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
 
@@ -134,6 +135,42 @@ class PrepTests(unittest.TestCase):
         self.assertEqual(ds.to_table(columns=["prompt", "id"]).to_pylist(), [
             {"prompt": "Hello, world", "id": 1}, {"prompt": "Next", "id": 5},
         ])
+
+    def test_decimal_columns_are_preserved_without_unsupported_indices(self):
+        table = pa.table({
+            "prompt": ["first", "second", "third"],
+            "score": pa.array([
+                Decimal("99999999999999999999999999999999999999"), Decimal("-42"), None,
+            ], type=pa.decimal128(38, 0)),
+            "fraction": pa.array([
+                Decimal("12345678901234567890.1234"), Decimal("-0.0001"), None,
+            ], type=pa.decimal128(38, 4)),
+            "fav_count": [1, 2, 3],
+            "weight": [1.5, 2.5, 3.5],
+        })
+        for command in ("prep", "lance prep"):
+            with self.subTest(command=command):
+                source = self.root / ("decimals.parquet" if command == "prep" else "existing.lance")
+                if command == "prep":
+                    pq.write_table(table, source)
+                    argv = ["prep", str(source), "--columns", ";".join(table.schema.names)]
+                else:
+                    lance.write_dataset(table, str(source))
+                    # Explicit requests must handle the same unsupported type.
+                    argv = ["lance", "prep", str(source), "--btree", "score", "--bitmap", "fraction"]
+                result, stdout, stderr, _ = self.run_cli(argv)
+                self.assertEqual(result, 0, stderr)
+                ds = lance.dataset(str(source.with_suffix(".lance")))
+                self.assertEqual(ds.to_table(columns=table.schema.names), table)
+                self.assertEqual(
+                    {tuple(index["fields"]) for index in ds.list_indices()},
+                    {("prompt",), ("fav_count",), ("weight",)},
+                )
+                self.assertIn("'score': BTREE index skipped", stdout)
+                self.assertIn("decimal128(38, 0)", stdout)
+                self.assertIn("'fraction': BTREE index skipped", stdout)
+                if command == "lance prep":
+                    self.assertIn("'fraction': BITMAP index skipped", stdout)
 
     def test_invalid_interactive_selection_reprompts(self):
         source = self.write_source(".csv")

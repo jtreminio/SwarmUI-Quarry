@@ -667,6 +667,7 @@ def _build_one(
     dry_run=False,
 ) -> None:
     import lance
+    import pyarrow as pa
 
     emit(f"\n=== {path} ===")
     if clean:
@@ -703,6 +704,13 @@ def _build_one(
     ]:
         if col not in ds.schema.names:
             emit(f"  !! {kind} column {col!r} not in schema; skipping")
+            continue
+        col_type = ds.schema.field(col).type
+        if pa.types.is_decimal(col_type):
+            emit(
+                f"  {col!r}: {kind} index skipped: Lance does not support "
+                f"{col_type}; column preserved without an index"
+            )
             continue
         t = time.time()
         ds.create_scalar_index(col, kind, replace=True)
