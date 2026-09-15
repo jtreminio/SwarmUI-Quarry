@@ -268,6 +268,27 @@ describe("computeQuarryCompletions — filter columns", () => {
 });
 
 describe("computeQuarryCompletions — prompt column override", () => {
+    it("offers unselected columns after each comma, ignoring case and spaces", () => {
+        expect(labels("characters: PROMPT ,")).toEqual(["tags", "source"]);
+        expect(labels("characters:prompt, tags,")).toEqual(["source"]);
+        expect(labels("characters:prompt,tags,source,")).toEqual([]);
+    });
+
+    it("completes the current column while preserving datasets, filters, and prior columns", () => {
+        expect(
+            computeQuarryCompletions(
+                "characters,creatures[source=http://x;tags=goth,punk]:prompt,caption, so",
+                ALL,
+            ),
+        ).toEqual([
+            {
+                apply: "<q:characters,creatures[source=http://x;tags=goth,punk]:prompt,caption,source",
+                label: "source",
+                hint: "column",
+            },
+        ]);
+    });
+
     it("lists the columns usable as the prompt after `:`, the default first", () => {
         expect(labels("characters:")).toEqual(["prompt", "tags", "source"]);
         expect(computeQuarryCompletions("characters:", ALL)[0].hint).toBe(

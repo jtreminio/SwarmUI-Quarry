@@ -4,6 +4,26 @@ namespace Quarry.Tests;
 
 public class QueryParserTests
 {
+    [Theory]
+    [InlineData("characters:appearance, clothing,pose")]
+    [InlineData("characters,creatures:appearance, clothing,pose")]
+    [InlineData("characters,creatures[tags=goth,punk;url=http://x]:appearance, clothing,pose")]
+    public void OutputColumns_PreserveOrderAndTrimEachName(string input)
+    {
+        Query query = QueryParser.Parse(input);
+        Assert.Equal(new[] { "appearance", "clothing", "pose" }, query.PromptColumns);
+        Assert.Equal(input.Split('[')[0].Split(':')[0], query.Name);
+    }
+
+    [Theory]
+    [InlineData("characters:appearance,")]
+    [InlineData("characters:,appearance")]
+    [InlineData("characters:appearance, ,pose")]
+    public void OutputColumns_EmptyNamesAreInvalid(string input)
+    {
+        Assert.Throws<QueryParseException>(() => QueryParser.Parse(input));
+    }
+
     [Fact]
     public void BareName_NoClauses()
     {
@@ -23,7 +43,7 @@ public class QueryParserTests
     [Fact]
     public void BareName_HasNoPromptColumn()
     {
-        Assert.Null(QueryParser.Parse("prompts/1girl").PromptColumn);
+        Assert.Empty(QueryParser.Parse("prompts/1girl").PromptColumns);
     }
 
     [Fact]
@@ -32,7 +52,7 @@ public class QueryParserTests
         Query q = QueryParser.Parse("FOO:BAR");
         Assert.Equal("FOO", q.Name);
         Assert.False(q.HasFilter);
-        Assert.Equal("BAR", q.PromptColumn);
+        Assert.Equal(new[] { "BAR" }, q.PromptColumns);
     }
 
     [Fact]
@@ -40,7 +60,7 @@ public class QueryParserTests
     {
         Query q = QueryParser.Parse("FOO[tags=girl]:BAR");
         Assert.Equal("FOO", q.Name);
-        Assert.Equal("BAR", q.PromptColumn);
+        Assert.Equal(new[] { "BAR" }, q.PromptColumns);
         QueryClause c = Assert.Single(q.Clauses);
         Assert.Equal("tags", c.Column);
         Assert.Equal(MatchOp.Any, c.Op);
@@ -53,7 +73,7 @@ public class QueryParserTests
         Query q = QueryParser.Parse("FOO,BAZ:BAR");
         Assert.Equal("FOO,BAZ", q.Name);
         Assert.False(q.HasFilter);
-        Assert.Equal("BAR", q.PromptColumn);
+        Assert.Equal(new[] { "BAR" }, q.PromptColumns);
     }
 
     [Fact]
@@ -61,7 +81,7 @@ public class QueryParserTests
     {
         Query q = QueryParser.Parse("FOO,BAZ[tags=girl]:BAR");
         Assert.Equal("FOO,BAZ", q.Name);
-        Assert.Equal("BAR", q.PromptColumn);
+        Assert.Equal(new[] { "BAR" }, q.PromptColumns);
         QueryClause c = Assert.Single(q.Clauses);
         Assert.Equal("tags", c.Column);
         Assert.Equal(new[] { "girl" }, c.Values);
@@ -72,7 +92,7 @@ public class QueryParserTests
     {
         Query q = QueryParser.Parse("  FOO  :  BAR  ");
         Assert.Equal("FOO", q.Name);
-        Assert.Equal("BAR", q.PromptColumn);
+        Assert.Equal(new[] { "BAR" }, q.PromptColumns);
     }
 
     [Fact]
@@ -80,7 +100,7 @@ public class QueryParserTests
     {
         Query q = QueryParser.Parse("FOO[url=http://x]");
         Assert.Equal("FOO", q.Name);
-        Assert.Null(q.PromptColumn);
+        Assert.Empty(q.PromptColumns);
         QueryClause c = Assert.Single(q.Clauses);
         Assert.Equal("url", c.Column);
         Assert.Equal(new[] { "http://x" }, c.Values);
@@ -91,7 +111,7 @@ public class QueryParserTests
     {
         Query q = QueryParser.Parse("FOO[url=http://x]:BAR");
         Assert.Equal("FOO", q.Name);
-        Assert.Equal("BAR", q.PromptColumn);
+        Assert.Equal(new[] { "BAR" }, q.PromptColumns);
         QueryClause c = Assert.Single(q.Clauses);
         Assert.Equal("url", c.Column);
         Assert.Equal(new[] { "http://x" }, c.Values);
@@ -308,7 +328,7 @@ public class QueryParserTests
     {
         Query q = QueryParser.Parse("[tags=a]:caption");
         Assert.Equal("", q.Name);
-        Assert.Equal("caption", q.PromptColumn);
+        Assert.Equal(new[] { "caption" }, q.PromptColumns);
         Assert.Single(q.Clauses);
     }
 

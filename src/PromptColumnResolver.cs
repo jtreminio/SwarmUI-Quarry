@@ -7,6 +7,24 @@ public static class PromptColumnResolver
     public static string Resolve(string configuredColumn, ColumnSchema schema)
         => Resolve(null, configuredColumn, schema);
 
+    public static IReadOnlyList<string> ResolveOutputColumns(IReadOnlyList<string> requestedColumns, string configuredColumn, ColumnSchema schema)
+    {
+        if (requestedColumns.Count <= 1)
+        {
+            string resolved = Resolve(requestedColumns.FirstOrDefault(), configuredColumn, schema);
+            return resolved is null ? [] : [resolved];
+        }
+        List<string> columns = [];
+        foreach (string name in requestedColumns)
+        {
+            if (schema.TryGet(name, out ColumnInfo column))
+            {
+                columns.Add(column.Name);
+            }
+        }
+        return columns;
+    }
+
     /// Resolves the prompt column for one dataset. A tag-level <paramref name="requestedColumn"/> wins when it
     /// exists in this dataset's schema; otherwise it is ignored and resolution falls back to the dataset's
     /// configured column, then a preferred name, then the first column. Because the requested column is checked

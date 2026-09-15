@@ -99,6 +99,7 @@ This is the fun part. A Quarry tag always begins with `<q:` followed by the name
 <q:characters,creatures[tags=girl]>  the same filter, across both sets
 <q:*[tags=girl]>                     the same filter, across your top-level sets
 <q:characters:caption>               read the prompt from the "caption" column
+<q:characters:appearance,clothing>   print both columns from the same random row
 ```
 
 Let's unpack that line by line.
@@ -173,6 +174,26 @@ The column always comes **last**, after the name list and after any `[ ... ]` fi
 
 If a dataset does not have the column you asked for, Quarry quietly falls back to that dataset's own default prompt column — and it decides **per dataset**. So with `<q:FOO,BAZ:caption>`, if `FOO` has a `caption` column but `BAZ` does not, Quarry reads `FOO`'s `caption` and `BAZ`'s default. A column override never breaks a multi-dataset tag.
 
+### Printing several columns: `<q:FOO:column1,column2>`
+
+Separate output column names with commas to print several values from **the same randomly chosen row**, in the order you list them:
+
+```text
+<q:characters:appearance,clothing,pose>
+<q:characters[tags=goth]:appearance, clothing>
+<q:characters,creatures:name,description>
+```
+
+Quarry joins nonempty values with `, `. For example, `silver hair`, `black leather jacket`, and `leaning against a wall` become:
+
+```text
+silver hair, black leather jacket, leaning against a wall
+```
+
+Spaces around commas are allowed. Empty values and missing columns are silently skipped, without extra separators or warnings. A dataset with none of the requested columns is skipped entirely. Unlike a single-column override, a multi-column list does not substitute the default prompt column for missing columns. Run Query shows the same joined output.
+
+Filters still apply before a row is picked. When no tag columns are configured, `tags=` searches the dataset's default prompt column for multi-column output.
+
 ### A few examples
 
 | Tag | What you get |
@@ -200,7 +221,7 @@ You do not have to remember your dataset names. Start typing a Quarry tag in any
 - After `<q:` you get a list of **every dataset**. Keep typing to narrow it.
 - Type a comma and it suggests the **next dataset** for a combined pull (the ones you have already added drop out of the list).
 - With a single dataset, type `[` and it lists **that dataset's columns** to filter on, with its tag columns first — so `<q:characters[` immediately offers `tags`. Once you have picked a column it offers the **operators** (`=` any, `==` all, `!=` none, plus `+=` and `-=` for numbers or text length); after a `;` it starts over for your next condition.
-- Type `:` (after the name and any `[filter]`) and it lists the **columns you can use as the prompt** — the default prompt column first — for the [`:column` override](#picking-the-prompt-column-qfoobar).
+- Type `:` (after the name and any `[filter]`) and it lists the **columns you can use as the prompt** — the default prompt column first — for the [`:column` override](#picking-the-prompt-column-qfoobar). Add a comma to choose another output column; already selected columns are excluded from the suggestions.
 
 Picking a suggestion leaves the tag open so you can keep going — add another comma, open a `[` filter, or just type `>` to finish.
 

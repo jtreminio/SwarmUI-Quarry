@@ -76,7 +76,7 @@ public static class QueryRunner
             }
             if (plan is null)
             {
-                if (!multi)
+                if (!multi && query.PromptColumns.Count <= 1)
                 {
                     return QueryRunResult.ForInvalid($"Dataset '{entry.Name}' has no columns to read.");
                 }
@@ -115,20 +115,19 @@ public static class QueryRunner
             {
                 break;
             }
-            List<List<string>> fetched;
+            List<string> fetched;
             try
             {
-                (_, fetched) = DatasetManager.Backend.GetFilteredRows(
-                    plan.Entry.Path, [plan.PromptColumn], plan.Filter, sortColumn: null, sortDescending: false, limit - rows.Count, 0);
+                fetched = DatasetManager.Backend.GetPrompts(
+                    plan.Entry.Path, plan.OutputColumns, plan.Filter, limit - rows.Count, 0);
             }
             catch (Exception ex) when (multi)
             {
                 Logs.Debug($"Quarry: skipping rows from '{plan.Entry.Name}' in '{query.Name}': {ex.Message}");
                 continue;
             }
-            foreach (List<string> row in fetched)
+            foreach (string prompt in fetched)
             {
-                string prompt = row.Count > 0 ? row[0] : "";
                 if (!string.IsNullOrWhiteSpace(prompt))
                 {
                     rows.Add(new QueryRunRow(plan.Entry.Name, prompt));
@@ -162,18 +161,21 @@ public static class QueryRunner
         return terms;
     }
 
-    private sealed record Plan(DatasetEntry Entry, string PromptColumn, SqlFilter Filter);
+    private sealed record Plan(DatasetEntry Entry, string PromptColumn, IReadOnlyList<string> OutputColumns, SqlFilter Filter);
 
     private static Plan DraftPlan(Query query, DatasetEntry entry)
     {
         ColumnSchema schema = DatasetManager.GetSchema(entry);
         string promptColumn = PromptColumnResolver.Resolve(
-            query.PromptColumn, DatasetManager.GetConfiguredPromptColumn(entry.Name), schema);
+            query.PromptColumns.Count == 1 ? query.PromptColumns[0] : null,
+            DatasetManager.GetConfiguredPromptColumn(entry.Name), schema);
         if (promptColumn is null)
         {
             return null;
         }
         List<ColumnInfo> tagColumns = TagColumnResolver.Resolve(DatasetManager.GetConfiguredTagColumns(entry.Name), schema, promptColumn);
-        return new Plan(entry, promptColumn, SqlFilterBuilder.Build(query, schema, tagColumns));
+        IReadOnlyList<string> outputColumns = PromptColumnResolver.ResolveOutputColumns(
+            query.PromptColumns, DatasetManager.GetConfiguredPromptColumn(entry.Name), schema);
+        return outputColumns.Count == 0 ? null : new Plan(entry, promptColumn, outputColumns, SqlFilterBuilder.Build(query, schema, tagColumns));
     }
 }

@@ -12,7 +12,7 @@ public static class QueryParser
         {
             throw new QueryParseException("Query is null.");
         }
-        (string head, string promptColumn) = SplitPromptColumn(data);
+        (string head, IReadOnlyList<string> promptColumns) = SplitPromptColumns(data);
         int open = head.IndexOf('[');
         if (open < 0)
         {
@@ -21,7 +21,7 @@ public static class QueryParser
             {
                 throw new QueryParseException("Dataset name is empty.");
             }
-            return new Query(bareName, [], promptColumn);
+            return new Query(bareName, [], promptColumns);
         }
         if (head.Length == 0 || head[^1] != ']')
         {
@@ -35,23 +35,23 @@ public static class QueryParser
             throw new QueryParseException(
                 $"Query '{data}' has an empty '[]' filter; remove the brackets or add a clause.");
         }
-        return new Query(name, clauses, promptColumn);
+        return new Query(name, clauses, promptColumns);
     }
 
-    private static (string head, string promptColumn) SplitPromptColumn(string data)
+    private static (string head, IReadOnlyList<string> promptColumns) SplitPromptColumns(string data)
     {
         int searchFrom = data.LastIndexOf(']') + 1;
         int colon = data.IndexOf(':', searchFrom);
         if (colon < 0)
         {
-            return (data, null);
+            return (data, []);
         }
-        string column = data[(colon + 1)..].Trim();
-        if (column.Length == 0)
+        string[] columns = data[(colon + 1)..].Split(',', StringSplitOptions.TrimEntries);
+        if (columns.Any(column => column.Length == 0))
         {
             throw new QueryParseException($"Query '{data}' has an empty prompt column after ':'.");
         }
-        return (data[..colon], column);
+        return (data[..colon], columns);
     }
 
     private static List<QueryClause> ParseClauses(string body, string original)

@@ -174,7 +174,7 @@ public static class PromptTagHandler
                     continue;
                 }
                 long totalRows = draft.Filter.IsEmpty ? count : DatasetManager.GetRowCount(draft.Entry, draft.PromptColumn);
-                plan = new MatchedDataset(draft.Entry, draft.PromptColumn, draft.Filter, count, totalRows);
+                plan = new MatchedDataset(draft.Entry, draft.OutputColumns, draft.Filter, count, totalRows);
             }
             catch (Exception ex) when (multi)
             {
@@ -235,7 +235,7 @@ public static class PromptTagHandler
                 if (value.Length == 0)
                 {
                     Logs.Warning(
-                        $"Quarry dataset '{m.Entry.Name}': blank result from prompt column '{m.PromptColumn}' near row {localIndex} (file '{m.Entry.Path}').");
+                        $"Quarry dataset '{m.Entry.Name}': blank result from prompt columns '{string.Join(", ", m.OutputColumns)}' near row {localIndex} (file '{m.Entry.Path}').");
                 }
                 else if (hit.Add(m.Entry.Name))
                 {
@@ -285,19 +285,26 @@ public static class PromptTagHandler
         }
     }
 
-    private sealed record PlanDraft(DatasetEntry Entry, string PromptColumn, SqlFilter Filter);
+    private sealed record PlanDraft(DatasetEntry Entry, string PromptColumn, IReadOnlyList<string> OutputColumns, SqlFilter Filter);
 
     private static PlanDraft DraftPlan(Query query, DatasetEntry entry, T2IPromptHandling.PromptTagContext context)
     {
         ColumnSchema schema = DatasetManager.GetSchema(entry);
         string promptColumn = PromptColumnResolver.Resolve(
-            query.PromptColumn, DatasetManager.GetConfiguredPromptColumn(entry.Name), schema);
+            query.PromptColumns.Count == 1 ? query.PromptColumns[0] : null,
+            DatasetManager.GetConfiguredPromptColumn(entry.Name), schema);
         if (promptColumn is null)
         {
             context.TrackWarning($"Quarry dataset '{entry.Name}' has no columns to read.");
             return null;
         }
         List<ColumnInfo> tagColumns = TagColumnResolver.Resolve(DatasetManager.GetConfiguredTagColumns(entry.Name), schema, promptColumn);
+        IReadOnlyList<string> outputColumns = PromptColumnResolver.ResolveOutputColumns(
+            query.PromptColumns, DatasetManager.GetConfiguredPromptColumn(entry.Name), schema);
+        if (outputColumns.Count == 0)
+        {
+            return null;
+        }
         SqlFilter filter;
         try
         {
@@ -308,7 +315,7 @@ public static class PromptTagHandler
             Logs.Warning($"Quarry dataset '{entry.Name}': {ex.Message} Skipping this dataset.");
             return null;
         }
-        return new PlanDraft(entry, promptColumn, filter);
+        return new PlanDraft(entry, promptColumn, outputColumns, filter);
     }
 
     private static long ResolveCount(PlanDraft draft, bool multi)

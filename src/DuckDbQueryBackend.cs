@@ -148,33 +148,60 @@ public sealed class DuckDbQueryBackend : IQueryBackend, IDisposable
             return Convert.ToInt64(cmd.ExecuteScalar());
         }
 
-        public string GetPromptAt(string datasetPath, string promptColumn, SqlFilter filter, long index)
+        public List<string> GetPrompts(string datasetPath, IReadOnlyList<string> promptColumns, SqlFilter filter, int limit, long offset)
         {
+            if (promptColumns.Count == 0)
+            {
+                return [];
+            }
             DatasetSource source = PrepareSource(datasetPath);
             using DuckDBCommand cmd = _connection.CreateCommand();
             cmd.CommandText =
-                $"SELECT {SqlText.QuoteIdentifier(promptColumn)} FROM {source.FromExpression}{Where(filter)} LIMIT 1 OFFSET {index};";
+                $"SELECT {string.Join(", ", promptColumns.Select(SqlText.QuoteIdentifier))} FROM {source.FromExpression}{Where(filter)} LIMIT {Math.Max(0, limit)} OFFSET {offset};";
             Bind(cmd, filter);
-            object result = cmd.ExecuteScalar();
-            return StringifyPrompt(result);
+            using DuckDBDataReader reader = cmd.ExecuteReader();
+            List<string> prompts = [];
+            while (reader.Read())
+            {
+                prompts.Add(ReadPrompt(reader, promptColumns.Count));
+            }
+            return prompts;
         }
 
-        public (string Value, bool Matches) GetCandidateAt(string datasetPath, string promptColumn, SqlFilter filter, long index)
+        public (string Value, bool Matches) GetCandidateAt(string datasetPath, IReadOnlyList<string> promptColumns, SqlFilter filter, long index)
         {
+            if (promptColumns.Count == 0)
+            {
+                return ("", false);
+            }
             DatasetSource source = PrepareSource(datasetPath);
             using DuckDBCommand cmd = _connection.CreateCommand();
             string matchExpr = filter.IsEmpty ? "TRUE" : $"({filter.WhereClause})";
             cmd.CommandText =
-                $"SELECT {SqlText.QuoteIdentifier(promptColumn)}, {matchExpr} FROM {source.FromExpression} LIMIT 1 OFFSET {index};";
+                $"SELECT {string.Join(", ", promptColumns.Select(SqlText.QuoteIdentifier))}, {matchExpr} FROM {source.FromExpression} LIMIT 1 OFFSET {index};";
             Bind(cmd, filter);
             using DuckDBDataReader reader = cmd.ExecuteReader();
             if (!reader.Read())
             {
                 return ("", false);
             }
-            string value = reader.IsDBNull(0) ? "" : StringifyPrompt(reader.GetValue(0));
-            bool matches = !reader.IsDBNull(1) && Convert.ToBoolean(reader.GetValue(1));
+            string value = ReadPrompt(reader, promptColumns.Count);
+            bool matches = !reader.IsDBNull(promptColumns.Count) && Convert.ToBoolean(reader.GetValue(promptColumns.Count));
             return (value, matches);
+        }
+
+        private static string ReadPrompt(DuckDBDataReader reader, int columnCount)
+        {
+            List<string> values = [];
+            for (int i = 0; i < columnCount; i++)
+            {
+                string value = StringifyPrompt(reader.GetValue(i)).Trim();
+                if (value.Length > 0)
+                {
+                    values.Add(value);
+                }
+            }
+            return string.Join(", ", values);
         }
 
         public (List<string> Columns, List<List<string>> Rows) GetSampleRows(string datasetPath, int limit)
@@ -422,19 +449,22 @@ public sealed class DuckDbQueryBackend : IQueryBackend, IDisposable
         }
     }
 
-    public string GetPromptAt(string datasetPath, string promptColumn, SqlFilter filter, long index)
+    public string GetPromptAt(string datasetPath, IReadOnlyList<string> promptColumns, SqlFilter filter, long index)
+        => GetPrompts(datasetPath, promptColumns, filter, 1, index).FirstOrDefault() ?? "";
+
+    public List<string> GetPrompts(string datasetPath, IReadOnlyList<string> promptColumns, SqlFilter filter, int limit, long offset)
     {
         lock (_lock)
         {
-            return _shared.GetPromptAt(datasetPath, promptColumn, filter, index);
+            return _shared.GetPrompts(datasetPath, promptColumns, filter, limit, offset);
         }
     }
 
-    public (string Value, bool Matches) GetCandidateAt(string datasetPath, string promptColumn, SqlFilter filter, long index)
+    public (string Value, bool Matches) GetCandidateAt(string datasetPath, IReadOnlyList<string> promptColumns, SqlFilter filter, long index)
     {
         lock (_lock)
         {
-            return _shared.GetCandidateAt(datasetPath, promptColumn, filter, index);
+            return _shared.GetCandidateAt(datasetPath, promptColumns, filter, index);
         }
     }
 

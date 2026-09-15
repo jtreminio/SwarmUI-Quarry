@@ -4,6 +4,28 @@ namespace Quarry.Tests;
 
 public class PromptColumnResolverTests
 {
+    [Fact]
+    public void OutputColumns_PreserveOrderAndCanonicalNames_SkipMissing()
+    {
+        Assert.Equal(new[] { "Pose", "Appearance" }, PromptColumnResolver.ResolveOutputColumns(
+            ["pose", "missing", "APPEARANCE"], "prompt", Schema("prompt", "Appearance", "Pose")));
+    }
+
+    [Fact]
+    public void OutputColumns_AllMissing_DoNotFallBack()
+    {
+        Assert.Empty(PromptColumnResolver.ResolveOutputColumns(["missing", "absent"], "prompt", Schema("prompt")));
+    }
+
+    [Fact]
+    public void OutputColumns_DefaultAndSingleOverrideKeepFallback()
+    {
+        ColumnSchema schema = Schema("prompt", "caption");
+        Assert.Equal(new[] { "caption" }, PromptColumnResolver.ResolveOutputColumns([], "caption", schema));
+        Assert.Equal(new[] { "caption" }, PromptColumnResolver.ResolveOutputColumns(["missing"], "caption", schema));
+        Assert.Equal(new[] { "prompt" }, PromptColumnResolver.ResolveOutputColumns(["prompt"], "caption", schema));
+    }
+
     private static ColumnSchema Schema(params string[] names)
     {
         return new ColumnSchema(names.Select(n => new ColumnInfo(n, ColumnKind.Scalar)));

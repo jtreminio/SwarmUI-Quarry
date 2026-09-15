@@ -233,12 +233,22 @@ const completePromptColumn = (
     if (named.length === 0) {
         return [];
     }
-    const frag = suffix
-        .slice(colonIdx + 1)
+    const columnsPart = suffix.slice(colonIdx + 1);
+    const commaIdx = columnsPart.lastIndexOf(",");
+    const chosen = new Set(
+        columnsPart
+            .slice(0, commaIdx + 1)
+            .split(",")
+            .map((s) => s.trim().toLowerCase()),
+    );
+    const frag = columnsPart
+        .slice(commaIdx + 1)
         .trim()
         .toLowerCase();
     const matches = filterByFragment(
-        orderColumnsForPrompt(named),
+        orderColumnsForPrompt(named).filter(
+            (c) => !chosen.has(c.name.toLowerCase()),
+        ),
         frag,
         (c) => c.name,
         false,
@@ -246,7 +256,7 @@ const completePromptColumn = (
     if (matches.length === 1 && matches[0].name.toLowerCase() === frag) {
         return [];
     }
-    const applyHead = `<q:${suffix.slice(0, colonIdx + 1)}`;
+    const applyHead = `<q:${suffix.slice(0, colonIdx + 1)}${columnsPart.slice(0, commaIdx + 1)}`;
     return matches.map((c) => ({
         apply: applyHead + c.name,
         label: c.name,

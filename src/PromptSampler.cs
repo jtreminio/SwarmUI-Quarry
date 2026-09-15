@@ -2,7 +2,7 @@ using SwarmUI.Text2Image;
 
 namespace Quarry;
 
-internal sealed record MatchedDataset(DatasetEntry Entry, string PromptColumn, SqlFilter Filter, long Count, long Total);
+internal sealed record MatchedDataset(DatasetEntry Entry, IReadOnlyList<string> OutputColumns, SqlFilter Filter, long Count, long Total);
 
 internal static class PromptSampler
 {
@@ -28,7 +28,7 @@ internal static class PromptSampler
         for (int probe = 0; probe < BlankProbeLimit && m.Count > 0; probe++)
         {
             long row = (localIndex + probe) % m.Count;
-            value = context.Parse(DatasetManager.Backend.GetPromptAt(m.Entry.Path, m.PromptColumn, m.Filter, row)).Trim();
+            value = context.Parse(DatasetManager.Backend.GetPromptAt(m.Entry.Path, m.OutputColumns, m.Filter, row)).Trim();
             if (value.Length > 0)
             {
                 break;
@@ -50,7 +50,7 @@ internal static class PromptSampler
         for (int attempt = 0; attempt < RejectionMaxAttempts; attempt++)
         {
             long candidate = random.NextInt64(m.Total);
-            (string raw, bool matches) = DatasetManager.Backend.GetCandidateAt(m.Entry.Path, m.PromptColumn, m.Filter, candidate);
+            (string raw, bool matches) = DatasetManager.Backend.GetCandidateAt(m.Entry.Path, m.OutputColumns, m.Filter, candidate);
             if (!matches)
             {
                 continue;
