@@ -1,18 +1,20 @@
 """`quarry hf` subcommands: fetch datasets from the Hugging Face Hub.
 
-download-range -- carried over from hf_download_range.py. huggingface_hub is
-imported lazily inside the command function.
+huggingface_hub is imported lazily inside the command functions.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import re
+import shutil
 import sys
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib.parse import unquote, urlsplit
 
 _DOWNLOAD_RANGE_DESC = """\
@@ -26,7 +28,8 @@ a time by default. The counter is reproduced in the start URL's format: zero-pad
 only when the start number itself is zero-padded.
 
 The access token is read from the HF_TOKEN environment variable (falling back to
-HUGGINGFACE_HUB_TOKEN). If neither is set, downloads proceed unauthenticated.
+HUGGINGFACE_HUB_TOKEN). Otherwise authentication is managed by the SDK, which can
+use a saved HF login or download anonymously.
 
 Existing, up-to-date files are skipped, so re-running resumes an interrupted batch.
 Files land under --output-dir preserving their in-repo path.
@@ -41,6 +44,24 @@ Usage:
 
 _URL_REPO_TYPE = {"datasets": "dataset", "spaces": "space"}
 _DEFAULT_ENDPOINT = "https://huggingface.co"
+
+_DOWNLOAD_FOLDER_DESC = """\
+Download all files in a Hugging Face folder, including its subfolders.
+
+Pass a .../tree/<revision>/<folder> URL. Omit the folder to download from the
+repository root. Use --ext parquet (or --ext .parquet) to select only files
+ending in that extension; matching is case-sensitive. Without --ext, all files
+are downloaded. Files land directly under --output-dir (default: ./<repo-name>),
+preserving only subfolders beneath the selected folder. Existing, up-to-date
+files are skipped.
+
+Authentication uses HF_TOKEN, then HUGGINGFACE_HUB_TOKEN, then the SDK's saved
+token. --dry-run lists matching files without downloading their contents.
+
+Example:
+    quarry hf download-folder \\
+        'https://huggingface.co/datasets/codeShare/chroma_prompts/tree/main/photoreal/raw' --ext=parquet
+"""
 
 
 class _ParsedUrl:
@@ -59,12 +80,17 @@ class _ParsedUrl:
 
 
 def _parse_resolve_url(url: str) -> _ParsedUrl:
+    return _parse_repo_url(url, "resolve")
+
+
+def _parse_repo_url(url: str, kind: str) -> _ParsedUrl:
     parts = urlsplit(url)
-    if not parts.scheme or not parts.netloc:
+    if parts.scheme not in ("http", "https") or not parts.netloc:
         raise SystemExit(f"error: not a valid URL: {url!r}")
-    if "/resolve/" not in parts.path:
-        raise SystemExit(f"error: not a HF resolve URL (no '/resolve/'): {url!r}")
-    left, right = parts.path.split("/resolve/", 1)
+    marker = f"/{kind}/"
+    if marker not in parts.path:
+        raise SystemExit(f"error: not a HF {kind} URL (no {marker!r}): {url!r}")
+    left, right = parts.path.split(marker, 1)
     left_segs = left.strip("/").split("/")
     repo_type = None
     if left_segs and left_segs[0] in _URL_REPO_TYPE:
@@ -72,13 +98,17 @@ def _parse_resolve_url(url: str) -> _ParsedUrl:
         repo_id = "/".join(left_segs[1:])
     else:
         repo_id = "/".join(left_segs)
-    if repo_id.count("/") < 1:
+    if len(repo_id.split("/")) != 2 or not all(repo_id.split("/")):
         raise SystemExit(f"error: could not parse repo id from URL: {url!r}")
 
     right_segs = right.split("/")
     revision = unquote(right_segs[0])
-    path = "/".join(right_segs[1:])
-    if not path:
+    if not revision:
+        raise SystemExit(f"error: no revision found in URL: {url!r}")
+    path = unquote("/".join(right_segs[1:]))
+    if kind == "tree":
+        path = path.rstrip("/")
+    if not path and kind == "resolve":
         raise SystemExit(f"error: no file path found in URL: {url!r}")
 
     endpoint = f"{parts.scheme}://{parts.netloc}"
@@ -137,11 +167,6 @@ def _resolve_token() -> str | None:
 
 
 def cmd_download_range(args) -> int:
-    # Keep per-file progress bars from 20 concurrent downloads off; we print ours.
-    os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
-    from huggingface_hub import hf_hub_download
-    from huggingface_hub.errors import EntryNotFoundError
-
     token = _resolve_token()
     start = _parse_resolve_url(args.url_start)
     end = _parse_resolve_url(args.url_end)
@@ -162,20 +187,95 @@ def cmd_download_range(args) -> int:
         return "".join(parts)
 
     files = [path_for(n) for n in range(start_num, end_num + 1)]
+    selection = (
+        f"Range:    {path_for(start_num)} .. {path_for(end_num)}  "
+        f"({len(files)} file(s), counter {start_num}->{end_num} width {width})"
+    )
+    return _download_files(args, start, files, token, selection)
+
+
+def cmd_download_folder(args) -> int:
+    folder = _parse_repo_url(args.url, "tree")
+    os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+    from huggingface_hub import HfApi, RepoFile
+
+    token = _resolve_token()
+    endpoint = None if folder.endpoint == _DEFAULT_ENDPOINT else folder.endpoint
+    api = HfApi(endpoint=endpoint, token=token)
+    print(f"Listing {folder.repo_id}/{folder.path} @ {folder.revision}...", file=sys.stderr)
+    try:
+        files = sorted(
+            entry.path
+            for entry in api.list_repo_tree(
+                repo_id=folder.repo_id,
+                path_in_repo=folder.path or None,
+                repo_type=folder.repo_type,
+                revision=folder.revision,
+                recursive=True,
+            )
+            if isinstance(entry, RepoFile)
+            and (args.ext is None or entry.path.endswith(args.ext))
+        )
+    except Exception as exc:
+        print(f"error: could not list folder: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+    if not files:
+        print("No matching files found; nothing downloaded.", file=sys.stderr)
+        return 0
+    selection = (
+        f"Folder:   {folder.path or '/'} (including subfolders)\n"
+        f"Filter:   {'*' + args.ext if args.ext else 'all files'} ({len(files)} file(s))"
+    )
+    return _download_files(args, folder, files, token, selection, path_prefix=folder.path)
+
+
+def _copy_atomic(source: Path, destination: Path) -> None:
+    """Seed staging without exposing a partially copied file to the SDK."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(dir=destination.parent, prefix=".quarry-copy-")
+    os.close(fd)
+    temporary = Path(name)
+    try:
+        shutil.copy2(source, temporary)
+        temporary.replace(destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _download_files(args, source: _ParsedUrl, files: list[str], token, selection: str, *, path_prefix: str = "") -> int:
+    # Keep per-file progress bars from concurrent downloads off; we print ours.
+    os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+    from huggingface_hub import hf_hub_download
+    from huggingface_hub.errors import EntryNotFoundError
+
     total = len(files)
 
-    repo_name = start.repo_id.split("/")[-1]
-    out_dir = Path(args.output_dir) if args.output_dir else Path(repo_name)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    endpoint = None if start.endpoint == _DEFAULT_ENDPOINT else start.endpoint
+    repo_name = source.repo_id.split("/")[-1]
+    out_dir = Path(args.output_dir).expanduser() if args.output_dir else Path(repo_name)
+    local_paths = {}
+    for filename in files:
+        relative = PurePosixPath(filename).relative_to(PurePosixPath(path_prefix))
+        if relative.is_absolute() or ".." in relative.parts:
+            raise SystemExit(f"error: invalid repository path: {filename!r}")
+        local_paths[filename] = out_dir / relative
+    # The SDK cannot rename remote paths. Keep its metadata and partial downloads
+    # in a staging root, moving completed files to the selected-folder layout.
+    # Scope staging by source so different folders/repos cannot reuse stale files.
+    download_dir = out_dir
+    if path_prefix:
+        identity = repr((source.key(), path_prefix)).encode()
+        download_dir = out_dir / ".cache" / "quarry" / hashlib.sha256(identity).hexdigest()[:16]
+    endpoint = None if source.endpoint == _DEFAULT_ENDPOINT else source.endpoint
     workers = max(1, min(args.workers, total))
+    token_source = (
+        "$HF_TOKEN" if os.environ.get("HF_TOKEN") else "$HUGGINGFACE_HUB_TOKEN"
+    ) if token else "SDK-managed (saved login or anonymous)"
 
     print(
-        f"Repo:     {start.repo_id} [{start.repo_type or 'model'}] @ {start.revision}\n"
-        f"Range:    {path_for(start_num)} .. {path_for(end_num)}  "
-        f"({total} file(s), counter {start_num}->{end_num} width {width})\n"
+        f"Repo:     {source.repo_id} [{source.repo_type or 'model'}] @ {source.revision}\n"
+        f"{selection}\n"
         f"Output:   {out_dir.resolve()}\n"
-        f"Token:    {'$HF_TOKEN' if token else 'none (unauthenticated / SDK cache)'}\n"
+        f"Token:    {token_source}\n"
         f"Workers:  {workers}",
         file=sys.stderr,
     )
@@ -184,24 +284,36 @@ def cmd_download_range(args) -> int:
         preview = files if total <= 12 else files[:6] + ["..."] + files[-6:]
         print("Dry run -- would download:", file=sys.stderr)
         for f in preview:
-            print(f"  {f}", file=sys.stderr)
+            target = f" -> {local_paths[f]}" if path_prefix and f != "..." else ""
+            print(f"  {f}{target}", file=sys.stderr)
         print(f"({total} file(s) total; nothing downloaded)", file=sys.stderr)
         return 0
+
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     def download_one(filename: str):
         last_err = None
         for attempt in range(1, args.retries + 1):
             try:
-                hf_hub_download(
-                    repo_id=start.repo_id,
+                destination = local_paths[filename]
+                staged = download_dir / filename
+                if path_prefix and destination.is_file() and not staged.exists() and not args.force:
+                    # copy2 retains mtime so SDK metadata still detects up-to-date
+                    # files. A separate copy protects the output if an update fails.
+                    _copy_atomic(destination, staged)
+                downloaded = hf_hub_download(
+                    repo_id=source.repo_id,
                     filename=filename,
-                    repo_type=start.repo_type,
-                    revision=start.revision,
-                    local_dir=str(out_dir),
+                    repo_type=source.repo_type,
+                    revision=source.revision,
+                    local_dir=str(download_dir),
                     token=token,
                     endpoint=endpoint,
                     force_download=args.force,
                 )
+                if path_prefix:
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    Path(downloaded).replace(destination)
                 return (filename, True, None)
             except EntryNotFoundError:
                 return (filename, False, "not found in repo")
@@ -244,25 +356,31 @@ def cmd_download_range(args) -> int:
     return 0
 
 
-def register(subparsers) -> None:
-    p = subparsers.add_parser(
-        "download-range",
-        help="download a sequential range of files from a HF repo",
-        description=_DOWNLOAD_RANGE_DESC,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    p.add_argument("url_start", help="resolve URL of the first file in the range")
-    p.add_argument("url_end", help="resolve URL of the last file (inclusive)")
+def _extension(value: str) -> str:
+    ext = value.removeprefix(".")
+    if not ext or any(char in ext for char in "/\\*?[]") or not ext.strip("."):
+        raise argparse.ArgumentTypeError("expected an extension such as parquet or .parquet")
+    return "." + ext
+
+
+def _positive_int(value: str) -> int:
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+    return number
+
+
+def _add_download_options(p) -> None:
     p.add_argument(
         "-o", "--output-dir", default=None,
         help="where to save files (default: ./<repo-name>)",
     )
     p.add_argument(
-        "-w", "--workers", type=int, default=20,
+        "-w", "--workers", type=_positive_int, default=20,
         help="concurrent downloads (default: 20)",
     )
     p.add_argument(
-        "--retries", type=int, default=3,
+        "--retries", type=_positive_int, default=3,
         help="attempts per file before giving up (default: 3)",
     )
     p.add_argument(
@@ -273,4 +391,27 @@ def register(subparsers) -> None:
         "--dry-run", action="store_true",
         help="print the planned file list and exit without downloading",
     )
+
+
+def register(subparsers) -> None:
+    p = subparsers.add_parser(
+        "download-range",
+        help="download a sequential range of files from a HF repo",
+        description=_DOWNLOAD_RANGE_DESC,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("url_start", help="resolve URL of the first file in the range")
+    p.add_argument("url_end", help="resolve URL of the last file (inclusive)")
+    _add_download_options(p)
     p.set_defaults(func=cmd_download_range)
+
+    p = subparsers.add_parser(
+        "download-folder",
+        help="download a HF folder, optionally filtered by file extension",
+        description=_DOWNLOAD_FOLDER_DESC,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("url", help="HF tree URL of the folder to download")
+    p.add_argument("--ext", type=_extension, help="file extension to include, e.g. parquet or .parquet")
+    _add_download_options(p)
+    p.set_defaults(func=cmd_download_folder)
