@@ -22,22 +22,20 @@ every file format below, so this just picks the correct loader and guards agains
 giant BLOB columns in parquet files (e.g. image datasets) that would otherwise
 load gigabytes into memory.
 
-A Lance dataset (a *.lance directory) has no native VisiData loader, so it is
-streamed to a temporary parquet file first -- with BLOB columns replaced by their
-byte size -- and that temp file is browsed.
-
 Usage:
     quarry browse FILE
     quarry browse DATASET.lance
-    quarry browse FILE --blobs   # keep raw blob bytes (risky)
 
 Navigation once open (VisiData):
     mouse wheel / j / k / arrows   scroll rows
     h / l / arrows                 move across columns
     /                              search in a column
     [ / ]                          sort by current column
-    Enter                          dive into a cell (structs, long text)
-    gq / q                         quit
+    z then Enter                   open current cell (lists, objects, text)
+    Enter                          open current row / page
+                                   text views wrap long lines automatically
+    q                              go back one screen (quit on last screen)
+    g then q                       quit all screens
 """
 
 # extension -> VisiData loader name
@@ -125,7 +123,7 @@ def _lance_blob_projection(field):
     return None
 
 
-def _make_lance_parquet(path, keep_blobs):
+def _make_lance_parquet(path):
     """Stream a Lance dataset to a temp parquet, shrinking BLOB columns to sizes."""
     import lance
     import pyarrow.parquet as pq
@@ -134,7 +132,7 @@ def _make_lance_parquet(path, keep_blobs):
     blob_cols = []
     columns = {}
     for field in ds.schema:
-        expr = None if keep_blobs else _lance_blob_projection(field)
+        expr = _lance_blob_projection(field)
         if expr is None:
             columns[field.name] = _lance_ident(field.name)  # pass through unchanged
         else:
@@ -154,6 +152,10 @@ def _make_lance_parquet(path, keep_blobs):
 
 
 def cmd_browse(args) -> int:
+    if args.file is None:
+        args._help_parser.print_help()
+        return 0
+
     path = Path(args.file).expanduser()
 
     loader = LOADERS.get(path.suffix.lower())
@@ -176,29 +178,40 @@ def cmd_browse(args) -> int:
     open_path = path
     tmp_path = None
     if loader == "lance":
-        tmp_path, cols = _make_lance_parquet(path, args.blobs)
+        tmp_path, cols = _make_lance_parquet(path)
         open_path = tmp_path
         loader = "parquet"  # VisiData browses the streamed temp parquet
-        if cols and not args.blobs:
+        if cols:
             print(
                 f"Note: {len(cols)} BLOB column(s) ({', '.join(cols)}) shown as "
-                f"byte sizes to avoid loading raw bytes. Use --blobs to override.",
+                "byte sizes to avoid loading raw bytes.",
                 file=sys.stderr,
             )
-    elif loader == "parquet" and not args.blobs:
+    elif loader == "parquet":
         cols = _blob_columns(path)
         if cols:
             print(
                 f"Note: {len(cols)} BLOB column(s) ({', '.join(cols)}) shown as "
-                f"byte sizes to avoid loading raw bytes. Use --blobs to override.",
+                "byte sizes to avoid loading raw bytes.",
                 file=sys.stderr,
             )
             tmp_path = _make_blobless_view(path, cols)
             open_path = tmp_path
 
     try:
+        print(
+            "VisiData navigation:\n"
+            "  q               Go back one screen (quit on the last screen).\n"
+            "  z then Enter    Open the current cell's contents (list, object, or text).\n"
+            "  Enter           Open the current row / page.\n"
+            "  For pages: highlight the pages cell, press z then Enter, then Enter on a page.\n"
+            "  Text views wrap long lines automatically.\n"
+            "  g then q        Quit all screens.",
+            file=sys.stderr,
+            flush=True,
+        )
         # Hand off to VisiData; it inherits the tty so scrolling works.
-        return subprocess.call(["vd", "-f", loader, str(open_path)])
+        return subprocess.call(["vd", "--wrap", "-f", loader, str(open_path)])
     except FileNotFoundError:
         print(
             "Error: 'vd' (VisiData) not found. Run it via the project env "
@@ -220,9 +233,5 @@ def register(subparsers) -> None:
         description=_BROWSE_DESC,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("file", help="path to the data file")
-    p.add_argument(
-        "--blobs", action="store_true",
-        help="load raw BLOB bytes for parquet (default: replace with byte size)",
-    )
-    p.set_defaults(func=cmd_browse)
+    p.add_argument("file", nargs="?", help="path to the data file")
+    p.set_defaults(func=cmd_browse, _help_parser=p)
