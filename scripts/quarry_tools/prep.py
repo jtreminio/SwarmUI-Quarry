@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import argparse
+import json
+import os
+import shlex
+import shutil
 import sys
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 
 from . import lance as lance_tools
+from .prep_clean import cleaned_reader
+from . import storage
 from .common import EXT_FORMAT_SHOW, FileError, detect_format, format_parent, quote_literal, read_relation_sql
 
 _FORMATS = ("parquet", "csv", "jsonl", "json", "lance")
@@ -60,9 +66,10 @@ def open_source(path: Path, fmt: str, batch_rows: int):
         import lance
 
         ds = lance.dataset(str(path))
-        yield ds.schema, ds.count_rows(), lambda names: ds.scanner(
-            columns=names, batch_size=batch_rows
-        ).to_batches()
+        logical = storage.logical_reader(ds, path, batch_rows=batch_rows)
+        yield logical.schema, ds.count_rows(), lambda names: storage.logical_reader(
+            ds, path, names=names, batch_rows=batch_rows
+        )
         return
 
     import duckdb
@@ -138,6 +145,10 @@ def selected_reader(schema, batches, selected):
 def cmd_prep(args) -> int:
     import lance
 
+    if args.resume:
+        return resume_prep(args)
+    if not args.input:
+        raise SystemExit("error: provide an input file or --resume CHECKPOINT")
     path = Path(args.input).resolve()
     fmt = detect_format(path, args.format, ext_map=EXT_FORMAT_SHOW, formats=_FORMATS)
     if not (path.is_dir() if fmt == "lance" else path.is_file()):
@@ -182,26 +193,35 @@ def cmd_prep(args) -> int:
             print(f"Keeping: {'; '.join(f'{old}={new}' for old, new in selected)}")
             print(f"Prompt column: {prompt_column}")
             output.parent.mkdir(parents=True, exist_ok=True)
-            # Only publish a fully prepared dataset. Failure or cancellation
-            # removes the staging directory and leaves the source untouched.
-            with tempfile.TemporaryDirectory(dir=output.parent, prefix=".quarry-prep-") as work:
-                staged = Path(work) / "dataset.lance"
-                ds = lance.write_dataset(reader, str(staged), mode="create")
-                print(f"Converted {ds.count_rows()} row(s); preparing…", flush=True)
-                lance_tools._build_one(
-                    staged, None, [], [], False, auto_btree=True,
-                    keep_history=False, emit=lambda line: print(line, flush=True),
-                    flatten=False, prompt_column=prompt_column,
-                )
-                rows = lance.dataset(str(staged)).count_rows()
-                # Reserve the destination so a concurrent creator is never
-                # replaced, even if it appeared while conversion was running.
-                output.mkdir()
-                try:
-                    staged.replace(output)
-                except BaseException:
-                    output.rmdir()
-                    raise
+            # Retain completed conversion on index failure. Incomplete conversion
+            # is still discarded, and only fully indexed data is published.
+            work = Path(tempfile.mkdtemp(dir=output.parent, prefix=".quarry-prep-"))
+            ready = published = False
+            try:
+                staged = work / "dataset.lance"
+                emit = lambda line: print(line, flush=True)
+                with tempfile.TemporaryDirectory(dir=work, prefix="clean-") as scratch:
+                    with cleaned_reader(
+                        reader, prompt_column, Path(scratch), batch_rows=args.batch_rows,
+                        memory_limit=args.memory_limit, emit=emit,
+                    ) as cleaned:
+                        expected = storage.LogicalDigest(cleaned.schema)
+                        encoded, pairs = storage.encoded_reader(cleaned, expected)
+                        ds = lance.write_dataset(encoded, str(staged), mode="create", data_storage_version="2.1")
+                        storage.write_descriptor(staged, pairs)
+                        storage.verify_dataset(staged, expected)
+                (work / "prep.json").write_text(json.dumps({
+                    "version": 2, "output": str(output), "prompt_column": prompt_column,
+                }), encoding="utf-8")
+                ready = True
+                print(f"Wrote {ds.count_rows():,} cleaned row(s); building search indices…", flush=True)
+                rows = index_and_publish(work, output, prompt_column, emit)
+                published = True
+            finally:
+                if published or not ready:
+                    shutil.rmtree(work)
+                else:
+                    report_checkpoint(work)
             print(f"Prepared {output} ({rows} row(s))")
         return 0
     except (EOFError, KeyboardInterrupt):
@@ -209,6 +229,87 @@ def cmd_prep(args) -> int:
         return 1
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+
+def report_checkpoint(work):
+    print(f"Cleaned dataset retained in: {work}", file=sys.stderr)
+    print(f"Resume indexing: ./quarry prep --resume {shlex.quote(str(work))}", file=sys.stderr)
+
+
+def index_and_publish(work, output, prompt_column, emit, *, resume=False):
+    import lance
+
+    staged = work / "dataset.lance"
+    if not (staged / storage.DESCRIPTOR).exists():
+        from .optimize import optimize_dataset
+        optimize_dataset(staged, emit, auto_btree=True)
+        return publish_dataset(staged, output)
+    # Rust's tempfile crate reads TMPDIR directly. Changing Python's cached
+    # tempfile.tempdir would not redirect Lance's spill files.
+    with tempfile.TemporaryDirectory(dir=work, prefix="index-") as scratch:
+        previous = os.environ.get("TMPDIR")
+        os.environ["TMPDIR"] = scratch
+        try:
+            emit(f"Index spill directory: {scratch}")
+            lance_tools._build_one(
+                staged, None, [], [], False, auto_btree=True,
+                keep_history=False, emit=emit, clean=False,
+                flatten=False, prompt_column=prompt_column,
+                reuse_companions=resume,
+            )
+        finally:
+            if previous is None:
+                os.environ.pop("TMPDIR", None)
+            else:
+                os.environ["TMPDIR"] = previous
+    return publish_dataset(staged, output)
+
+
+def publish_dataset(staged, output):
+    import lance
+
+    rows = lance.dataset(str(staged)).count_rows()
+    # Reserve the destination so a concurrent creator is never replaced.
+    output.mkdir()
+    try:
+        staged.replace(output)
+    except BaseException:
+        output.rmdir()
+        raise
+    return rows
+
+
+def resume_prep(args):
+    work = Path(args.resume).expanduser().resolve()
+    try:
+        if args.input or args.columns or args.prompt_column or args.format:
+            raise FileError("--resume uses the saved selection; do not supply input/column/format options")
+        if not work.name.startswith(".quarry-prep-") or work.is_symlink():
+            raise FileError("not a Quarry prep checkpoint directory")
+        checkpoint = json.loads((work / "prep.json").read_text(encoding="utf-8"))
+        staged = work / "dataset.lance"
+        if checkpoint.get("version") not in (1, 2) or staged.is_symlink() or not (staged / "_versions").is_dir():
+            raise FileError("not a completed Quarry conversion checkpoint")
+        if checkpoint.get("version") == 2 and not (staged / storage.DESCRIPTOR).is_file():
+            raise FileError("casing storage descriptor is missing from the checkpoint")
+        output = Path(args.output).expanduser().absolute() if args.output else Path(checkpoint["output"])
+        if output.suffix != ".lance" or output.exists() or output.is_symlink():
+            raise FileError("output must be a new .lance path; choose another path with -o")
+        if work == output.resolve() or work in output.resolve().parents or lance_tools._is_managed_internal(output.resolve()):
+            raise FileError("output cannot be inside the checkpoint or a Quarry-managed internal directory")
+        output.parent.mkdir(parents=True, exist_ok=True)
+        rows = index_and_publish(
+            work, output, checkpoint["prompt_column"],
+            lambda line: print(line, flush=True), resume=True,
+        )
+        shutil.rmtree(work)
+        print(f"Prepared {output} ({rows} row(s))")
+        return 0
+    except (Exception, KeyboardInterrupt) as exc:
+        print(f"error: {exc or 'Cancelled'}", file=sys.stderr)
+        if (work / "prep.json").is_file():
+            report_checkpoint(work)
         return 1
 
 
@@ -223,7 +324,8 @@ def register(subparsers) -> None:
         ),
         parents=[format_parent(_FORMATS)],
     )
-    p.add_argument("input", help="a supported data file or .lance dataset")
+    p.add_argument("input", nargs="?", help="a supported data file or .lance dataset")
+    p.add_argument("--resume", metavar="CHECKPOINT", help="resume indexing a retained prep checkpoint")
     p.add_argument(
         "-o", "--output", help="output dataset (default: <stem>.lance beside the input, "
         "or <stem>.prepared.lance for Lance input)",
@@ -237,4 +339,9 @@ def register(subparsers) -> None:
         "prompt/text/caption/description/value present, else the first selected column)",
     )
     p.add_argument("--batch-rows", type=int, default=50_000, help="rows per batch (default: 50000)")
+    p.add_argument(
+        "--memory-limit", default="32GB",
+        help="DuckDB cleanup memory budget (default: 32GB); larger operations spill "
+        "to temporary disk space beside the output",
+    )
     p.set_defaults(func=cmd_prep)

@@ -412,6 +412,7 @@ def _reorder_lance(path, front):
     import os
     import shutil
     import tempfile
+    from datetime import timedelta
 
     import lance  # imported lazily so non-Lance use needs no pylance
 
@@ -420,23 +421,53 @@ def _reorder_lance(path, front):
     except Exception as exc:  # corrupt / incomplete / not a Lance dataset
         raise FileError(f"could not open dataset: {exc}") from exc
 
+    from .storage import DESCRIPTOR
+    from .lowercase import SCALAR_TYPES
+
     existing = list(ds.schema.names)
     _, new_order = _plan_order(existing, front)
     if new_order == existing:
         return "lance", new_order, False
 
+    # Rewriting changes field IDs and row addresses, so rebuild indexes rather
+    # than copying their files. Reject unsupported types before touching data.
+    indexes = []
+    for index in ds.list_indices():
+        kind = SCALAR_TYPES.get(index["type"])
+        if kind is None or len(index["fields"]) != 1:
+            raise FileError(f"cannot reorder with unsupported index {index['name']!r}: {index['type']}")
+        field = ds.lance_schema.field(index["fields"][0]).name()
+        if field not in existing:
+            raise FileError(f"cannot reorder with nested index {index['name']!r}")
+        indexes.append((index["name"], field, kind))
+
     work = Path(tempfile.mkdtemp(dir=str(path.parent), prefix=f".{path.name}."))
     new_ds = work / path.name
     backup = work / (path.name + ".bak")
     try:
-        lance.write_dataset(ds.scanner(columns=new_order).to_reader(), str(new_ds))
+        rewritten = lance.write_dataset(
+            ds.scanner(columns=new_order, scan_in_order=True).to_reader(),
+            str(new_ds), data_storage_version="2.1",
+        )
+        descriptor = Path(path) / DESCRIPTOR
+        if descriptor.exists():
+            shutil.copy2(descriptor, new_ds / DESCRIPTOR)
+        for name, field, kind in indexes:
+            rewritten.create_scalar_index(field, kind, name=name, replace=True)
+        lance.dataset(str(new_ds)).cleanup_old_versions(
+            older_than=timedelta(0), delete_unverified=True,
+        )
+        if lance.dataset(str(path)).version != ds.version:
+            raise FileError("source changed during reordering; refusing replacement")
         os.replace(path, backup)  # move the original aside
         try:
             os.replace(new_ds, path)  # move the new dataset into place
         except BaseException:
             os.replace(backup, path)  # restore the original on failure
             raise
-    except BaseException:
+    except BaseException as exc:
+        if backup.exists() and not Path(path).exists():
+            raise FileError(f"could not restore original dataset; recover it from {backup}") from exc
         shutil.rmtree(work, ignore_errors=True)
         raise
     shutil.rmtree(work, ignore_errors=True)  # removes the leftover backup too

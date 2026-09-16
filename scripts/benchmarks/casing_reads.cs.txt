@@ -1,0 +1,76 @@
+using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using Quarry;
+using SwarmUI.Text2Image;
+
+string root = args[0], output = args[1];
+DatasetManager.ExtensionFolder = args[2];
+(string Name, string Query)[] queries = [
+    ("prompt_common", "bench[prompt=blue]"),
+    ("prompt_rare", "bench[prompt=steampunk]"),
+    ("full", "bench[full=steampunk]"),
+    ("tags", "bench[tags=blue]"),
+    ("general", "bench[general=blue]"),
+    ("character", "bench[character=hatsune miku]"),
+    ("copyright", "bench[copyright=vocaloid]"),
+    ("rating", "bench[rating=g]"),
+    ("short", "bench[prompt=xy]"),
+    ("no_match", "bench[prompt=quarrynomatch9z9z]"),
+];
+List<object> results = [];
+Dictionary<string, (long Count, string Hash)> expected = [];
+using DuckDbQueryBackend backend = new();
+string Hash(IEnumerable<string> values) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(values))));
+(T Value, double Ms) Timed<T>(Func<T> action)
+{
+    long start = Stopwatch.GetTimestamp();
+    T value = action();
+    return (value, Stopwatch.GetElapsedTime(start).TotalMilliseconds);
+}
+for (int repeat = -1; repeat < 5; repeat++)
+{
+    foreach (string variant in repeat % 2 == 0 ? new[] { "optimized", "baseline" } : new[] { "baseline", "optimized" })
+    {
+        string path = Path.Combine(root, variant + ".lance");
+        ColumnSchema schema = backend.GetSchema(path);
+        long total = backend.CountRows(path, SqlFilter.None);
+        foreach ((string name, string query) in queries)
+        {
+            SqlFilter filter = SqlFilterBuilder.Build(QueryParser.Parse(query), schema);
+            var count = Timed(() => backend.CountRows(path, filter));
+            var first = Timed(() => backend.GetPrompts(path, ["prompt", "full"], filter, 25, 0));
+            var offset = Timed(() => backend.GetPromptAt(path, ["prompt"], filter, count.Value / 2));
+            MatchedDataset matched = new(new DatasetEntry("bench", path, variant), ["prompt"], filter, count.Value, total);
+            T2IPromptHandling.PromptTagContext context = new() { Input = new T2IParamInput(null) };
+            var sample = Timed(() => PromptSampler.Fetch(matched, count.Value / 2, 20260916 + Math.Max(0, repeat), context));
+            string hash = Hash(first.Value.Concat(new[] { offset.Value, sample.Value }));
+            string key = $"{repeat}:{name}";
+            if (expected.TryGetValue(key, out var previous) && previous != (count.Value, hash))
+            {
+                throw new Exception($"Logical query mismatch: {key}, {variant}");
+            }
+            expected[key] = (count.Value, hash);
+            if (repeat >= 0)
+            {
+                results.Add(new { variant, repeat, query = name, matches = count.Value, count_ms = count.Ms,
+                    first25_ms = first.Ms, offset_ms = offset.Ms, sampler_ms = sample.Ms, hash });
+            }
+        }
+        var preview = Timed(() => backend.GetSampleRows(path, 25));
+        string previewHash = Hash(preview.Value.Rows.Select(row => string.Join("\0", row.Take(7))));
+        string previewKey = $"{repeat}:preview";
+        if (expected.TryGetValue(previewKey, out var prior) && prior.Hash != previewHash)
+        {
+            throw new Exception("Preview mismatch");
+        }
+        expected[previewKey] = (25, previewHash);
+        if (repeat >= 0)
+        {
+            results.Add(new { variant, repeat, query = "preview", preview_ms = preview.Ms, hash = previewHash });
+        }
+        Console.WriteLine($"{variant}, repeat {repeat}: counts and returned original text verified");
+    }
+}
+File.WriteAllText(output, JsonSerializer.Serialize(results, new JsonSerializerOptions { WriteIndented = true }));

@@ -30,6 +30,10 @@ public static class SqlFilterBuilder
                 throw new QueryException(
                     $"Column '{clause.Column}' does not exist in dataset '{query.Name}'.");
             }
+            if (column.IsCasingPatch)
+            {
+                throw new QueryException("Casing patches are internal storage columns.");
+            }
             string quoted = SqlText.QuoteIdentifier(column.Name);
             if (clause.Op is MatchOp.GreaterOrEqual or MatchOp.LessOrEqual)
             {
@@ -53,9 +57,19 @@ public static class SqlFilterBuilder
         for (int i = 0; i < clause.Values.Count; i++)
         {
             string value = MatchValue(clause.Values[i]);
-            string name = $"p{parameters.Count}";
-            parameters.Add(new QueryParameter(name, value));
-            string placeholder = $"${name}";
+            string placeholder = null, encodedPlaceholder = null;
+            if (tagColumns.Any(c => c.CasingColumn is null))
+            {
+                string name = $"p{parameters.Count}";
+                parameters.Add(new QueryParameter(name, value));
+                placeholder = $"${name}";
+            }
+            if (tagColumns.Any(c => c.CasingColumn is not null))
+            {
+                string name = $"p{parameters.Count}";
+                parameters.Add(new QueryParameter(name, clause.Values[i]));
+                encodedPlaceholder = $"lower(${name})";
+            }
             string[] perColumn = new string[tagColumns.Count];
             for (int c = 0; c < tagColumns.Count; c++)
             {
@@ -66,8 +80,9 @@ public static class SqlFilterBuilder
                 else
                 {
                     string indexed = SearchColumn(tagColumns[c], schema);
+                    bool encoded = tagColumns[c].CasingColumn is not null;
                     string scan = $"lower({SqlText.QuoteIdentifier(tagColumns[c].Name)})";
-                    perColumn[c] = ScalarContains(MatchExpr(value, indexed, scan), placeholder);
+                    perColumn[c] = ScalarContains(MatchExpr(value, indexed, scan), encoded ? encodedPlaceholder : placeholder);
                 }
             }
             valueMatches[i] = perColumn.Length == 1 ? perColumn[0] : $"({string.Join(" OR ", perColumn)})";
@@ -150,14 +165,16 @@ public static class SqlFilterBuilder
     private static string BuildContainsTerm(ColumnInfo column, ColumnSchema schema, QueryClause clause, List<QueryParameter> parameters)
     {
         string indexed = SearchColumn(column, schema);
+        bool encoded = column.CasingColumn is not null;
+        // Keep a scan path: the current NGRAM tokenizer cannot answer short or all Unicode terms.
         string scan = $"lower({SqlText.QuoteIdentifier(column.Name)})";
         string[] checks = new string[clause.Values.Count];
         for (int i = 0; i < clause.Values.Count; i++)
         {
             string value = MatchValue(clause.Values[i]);
             string name = $"p{parameters.Count}";
-            parameters.Add(new QueryParameter(name, value));
-            checks[i] = ScalarContains(MatchExpr(value, indexed, scan), $"${name}");
+            parameters.Add(new QueryParameter(name, encoded ? clause.Values[i] : value));
+            checks[i] = ScalarContains(MatchExpr(value, indexed, scan), encoded ? $"lower(${name})" : $"${name}");
         }
         return Combine(clause, checks);
     }
@@ -178,10 +195,15 @@ public static class SqlFilterBuilder
 
     internal const int NgramMinLength = 3;
     internal static string MatchExpr(string value, string indexedExpr, string scanExpr)
-        => value.Length < NgramMinLength ? scanExpr : indexedExpr;
+        => value.Length < NgramMinLength || value.Any(c => c > 127) ? scanExpr : indexedExpr;
 
     internal static string SearchColumn(ColumnInfo column, ColumnSchema schema)
     {
+        if (column.CasingColumn is not null)
+        {
+            return SqlText.QuoteIdentifier(column.Name);
+        }
+        // Deprecated __lc storage remains readable.
         if (schema.TryGet(column.Name + ColumnSchema.CompanionSuffix, out ColumnInfo companion)
             && companion.Kind == ColumnKind.Scalar && companion.HasNgramIndex)
         {

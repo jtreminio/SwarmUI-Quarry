@@ -29,6 +29,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Update="Fixtures/casing-v1.json" CopyToOutputDirectory="PreserveNewest" />
     <Compile Remove="bin/**/*.cs" />
     <Compile Remove="obj/**/*.cs" />
     <Compile Remove="**/._*" />

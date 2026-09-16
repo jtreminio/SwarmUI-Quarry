@@ -94,6 +94,16 @@ public sealed class DuckDbQueryBackend : IQueryBackend, IDisposable
             HashSet<string> ngram = source.RequiresLance
                 ? GetNgramIndexedColumns(source)
                 : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            Dictionary<string, string> casing = CasingStorage.Load(datasetPath);
+            foreach ((string original, string patch) in casing)
+            {
+                if (!described.Any(c => c.Name == original && c.Type == "VARCHAR")
+                    || !described.Any(c => c.Name == patch && c.Type == "BLOB"))
+                {
+                    throw new InvalidDataException($"Invalid casing columns for '{original}' in {datasetPath}.");
+                }
+            }
+            HashSet<string> patches = new(casing.Values, StringComparer.OrdinalIgnoreCase);
             List<ColumnInfo> columns = [];
             foreach ((string name, string type) in described)
             {
@@ -103,7 +113,8 @@ public sealed class DuckDbQueryBackend : IQueryBackend, IDisposable
                     DuckDbTypeMapper.MapKind(type),
                     numeric,
                     hasNgramIndex: ngram.Contains(name),
-                    numericType: numeric ? type : null));
+                    numericType: numeric ? type : null,
+                    casingColumn: casing.GetValueOrDefault(name), isCasingPatch: patches.Contains(name)));
             }
             return new ColumnSchema(columns);
         }
@@ -156,14 +167,16 @@ public sealed class DuckDbQueryBackend : IQueryBackend, IDisposable
             }
             DatasetSource source = PrepareSource(datasetPath);
             using DuckDBCommand cmd = _connection.CreateCommand();
+            Dictionary<string, string> casing = CasingStorage.Load(datasetPath);
+            List<string> projection = OutputProjection(promptColumns, casing);
             cmd.CommandText =
-                $"SELECT {string.Join(", ", promptColumns.Select(SqlText.QuoteIdentifier))} FROM {source.FromExpression}{Where(filter)} LIMIT {Math.Max(0, limit)} OFFSET {offset};";
+                $"SELECT {string.Join(", ", projection.Select(SqlText.QuoteIdentifier))} FROM {source.FromExpression}{Where(filter)} LIMIT {Math.Max(0, limit)} OFFSET {offset};";
             Bind(cmd, filter);
             using DuckDBDataReader reader = cmd.ExecuteReader();
             List<string> prompts = [];
             while (reader.Read())
             {
-                prompts.Add(ReadPrompt(reader, promptColumns.Count));
+                prompts.Add(ReadPrompt(reader, promptColumns, casing));
             }
             return prompts;
         }
@@ -176,26 +189,37 @@ public sealed class DuckDbQueryBackend : IQueryBackend, IDisposable
             }
             DatasetSource source = PrepareSource(datasetPath);
             using DuckDBCommand cmd = _connection.CreateCommand();
+            Dictionary<string, string> casing = CasingStorage.Load(datasetPath);
+            List<string> projection = OutputProjection(promptColumns, casing);
             string matchExpr = filter.IsEmpty ? "TRUE" : $"({filter.WhereClause})";
             cmd.CommandText =
-                $"SELECT {string.Join(", ", promptColumns.Select(SqlText.QuoteIdentifier))}, {matchExpr} FROM {source.FromExpression} LIMIT 1 OFFSET {index};";
+                $"SELECT {string.Join(", ", projection.Select(SqlText.QuoteIdentifier))}, {matchExpr} FROM {source.FromExpression} LIMIT 1 OFFSET {index};";
             Bind(cmd, filter);
             using DuckDBDataReader reader = cmd.ExecuteReader();
             if (!reader.Read())
             {
                 return ("", false);
             }
-            string value = ReadPrompt(reader, promptColumns.Count);
-            bool matches = !reader.IsDBNull(promptColumns.Count) && Convert.ToBoolean(reader.GetValue(promptColumns.Count));
+            string value = ReadPrompt(reader, promptColumns, casing);
+            bool matches = !reader.IsDBNull(projection.Count) && Convert.ToBoolean(reader.GetValue(projection.Count));
             return (value, matches);
         }
 
-        private static string ReadPrompt(DuckDBDataReader reader, int columnCount)
+        private static List<string> OutputProjection(IReadOnlyList<string> columns, Dictionary<string, string> casing)
+        {
+            if (columns.Any(c => casing.Values.Contains(c, StringComparer.OrdinalIgnoreCase)))
+            {
+                throw new QueryException("Casing patches are internal storage columns.");
+            }
+            return [.. columns.Concat(columns.Where(casing.ContainsKey).Select(c => casing[c])).Distinct(StringComparer.OrdinalIgnoreCase)];
+        }
+
+        private static string ReadPrompt(DuckDBDataReader reader, IReadOnlyList<string> columns, Dictionary<string, string> casing)
         {
             List<string> values = [];
-            for (int i = 0; i < columnCount; i++)
+            for (int i = 0; i < columns.Count; i++)
             {
-                string value = StringifyPrompt(reader.GetValue(i)).Trim();
+                string value = StringifyPrompt(ReadValue(reader, columns[i], casing)).Trim();
                 if (value.Length > 0)
                 {
                     values.Add(value);
@@ -210,7 +234,7 @@ public sealed class DuckDbQueryBackend : IQueryBackend, IDisposable
             using DuckDBCommand cmd = _connection.CreateCommand();
             cmd.CommandText = $"SELECT * FROM {source.FromExpression} LIMIT {Math.Max(0, limit)};";
             using DuckDBDataReader reader = cmd.ExecuteReader();
-            return Drain(reader);
+            return Drain(reader, CasingStorage.Load(datasetPath));
         }
 
         public void WriteImageHistory(string indexDir, string lancePath, IReadOnlyList<string> stagingJsonPaths, string livePathsJsonPath)
@@ -348,8 +372,9 @@ public sealed class DuckDbQueryBackend : IQueryBackend, IDisposable
         public (List<string> Columns, List<List<string>> Rows) GetFilteredRows(string lancePath, IReadOnlyList<string> selectColumns, SqlFilter filter, string sortColumn, bool sortDescending, int limit, int offset)
         {
             DatasetSource source = PrepareSource(lancePath);
+            Dictionary<string, string> casing = CasingStorage.Load(lancePath);
             string projection = selectColumns is { Count: > 0 }
-                ? string.Join(", ", selectColumns.Select(SqlText.QuoteIdentifier))
+                ? string.Join(", ", OutputProjection(selectColumns, casing).Select(SqlText.QuoteIdentifier))
                 : "*";
             string tiebreak = selectColumns is { Count: > 0 }
                 && !string.Equals(selectColumns[0], sortColumn, StringComparison.OrdinalIgnoreCase)
@@ -362,7 +387,7 @@ public sealed class DuckDbQueryBackend : IQueryBackend, IDisposable
             cmd.CommandText = $"SELECT {projection} FROM {source.FromExpression}{Where(filter)}{order} LIMIT {Math.Max(0, limit)} OFFSET {Math.Max(0, offset)};";
             Bind(cmd, filter);
             using DuckDBDataReader reader = cmd.ExecuteReader();
-            return Drain(reader);
+            return Drain(reader, casing);
         }
 
         public List<string> ListDiscoveredFields(string lancePath, string jsonColumn)
@@ -573,12 +598,40 @@ public sealed class DuckDbQueryBackend : IQueryBackend, IDisposable
         }
     }
 
-    private static (List<string> Columns, List<List<string>> Rows) Drain(DuckDBDataReader reader)
+    private static object ReadValue(DuckDBDataReader reader, string name, Dictionary<string, string> casing)
+    {
+        object value = reader.GetValue(reader.GetOrdinal(name));
+        if (!casing.TryGetValue(name, out string patch))
+        {
+            return value;
+        }
+        object patchValue = reader.GetValue(reader.GetOrdinal(patch));
+        byte[] bytes = null;
+        if (patchValue is Stream stream)
+        {
+            using (stream)
+            {
+                bytes = new byte[checked((int)stream.Length)];
+                stream.ReadExactly(bytes);
+            }
+        }
+        else if (patchValue is not DBNull)
+        {
+            bytes = (byte[])patchValue;
+        }
+        return CasingStorage.Restore(value is DBNull ? null : (string)value, bytes);
+    }
+
+    private static (List<string> Columns, List<List<string>> Rows) Drain(DuckDBDataReader reader, Dictionary<string, string> casing)
     {
         List<string> columns = [];
         for (int i = 0; i < reader.FieldCount; i++)
         {
-            columns.Add(reader.GetName(i));
+            string name = reader.GetName(i);
+            if (!casing.Values.Contains(name, StringComparer.OrdinalIgnoreCase))
+            {
+                columns.Add(name);
+            }
         }
         List<List<string>> rows = [];
         while (reader.Read())
@@ -586,7 +639,7 @@ public sealed class DuckDbQueryBackend : IQueryBackend, IDisposable
             List<string> row = new(columns.Count);
             for (int i = 0; i < columns.Count; i++)
             {
-                row.Add(Stringify(reader.GetValue(i)));
+                row.Add(Stringify(ReadValue(reader, columns[i], casing)));
             }
             rows.Add(row);
         }

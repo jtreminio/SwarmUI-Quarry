@@ -6,17 +6,20 @@ public enum ColumnKind
     List,
 }
 
-public sealed class ColumnInfo(string name, ColumnKind kind, bool isNumeric = false, bool hasNgramIndex = false, string numericType = null)
+public sealed class ColumnInfo(string name, ColumnKind kind, bool isNumeric = false, bool hasNgramIndex = false, string numericType = null, string casingColumn = null, bool isCasingPatch = false)
 {
     public string Name { get; } = name;
     public ColumnKind Kind { get; } = kind;
     public bool IsNumeric { get; } = isNumeric;
     public bool HasNgramIndex { get; } = hasNgramIndex;
     public string NumericType { get; } = numericType;
+    public string CasingColumn { get; } = casingColumn;
+    public bool IsCasingPatch { get; } = isCasingPatch;
 }
 
 public sealed class ColumnSchema
 {
+    // Deprecated storage format; retained for existing datasets and image history.
     public const string CompanionSuffix = "__lc";
     private readonly List<ColumnInfo> _ordered;
     private readonly Dictionary<string, ColumnInfo> _byName;
@@ -40,8 +43,9 @@ public sealed class ColumnSchema
             : _ordered;
 
     public bool IsCompanionName(string name)
-        => name.Length > CompanionSuffix.Length
-            && name.EndsWith(CompanionSuffix, StringComparison.OrdinalIgnoreCase);
+        => (_byName.TryGetValue(name, out ColumnInfo column) && column.IsCasingPatch)
+            || (name.Length > CompanionSuffix.Length
+                && name.EndsWith(CompanionSuffix, StringComparison.OrdinalIgnoreCase));
 
     public bool TryGet(string column, out ColumnInfo info) => _byName.TryGetValue(column, out info);
 

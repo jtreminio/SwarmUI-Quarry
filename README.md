@@ -19,7 +19,7 @@ Neat, right? Let's take the tour.
 
 Everything happens in the **Quarry** tab down in SwarmUI's bottom bar, right next to Wildcards. Open it and you get a table of every dataset Quarry found, each with its prompt column, its tag columns, a row count, and a Preview button (more on all of those below).
 
-The very first time you open the tab, Quarry will offer a one-time helper download (the DuckDB "lance" reader it uses to open datasets, around 235 MB). Click the button, give it a minute, and you are set. You only ever do this once.
+If Quarry asks to install its dataset reader, click the install button and wait for it to finish. You only need to do this once.
 
 ## Getting started
 
@@ -28,7 +28,7 @@ The very first time you open the tab, Quarry will offer a one-time helper downlo
 3. Drop some data files into that folder (or grab ready-made ones with the Download button described below), then click **Refresh**.
 4. Use them in any prompt: `<q:characters[tags=goth]>`.
 
-That is genuinely it. There is no "enable" switch to hunt for; set a folder, or just keep the default, and Quarry is on.
+That is it. There is no "enable" switch to hunt for; set a folder, or just keep the default, and Quarry is on.
 
 ## Ready-made datasets, one click away
 
@@ -74,7 +74,7 @@ Quarry prints the source row count and available columns, then asks which to kee
 Columns to keep: caption=prompt;tags;rating=score
 ```
 
-This keeps only those three columns, in that order. Quarry converts the selection to Lance, flattens list columns into text, removes empty and duplicate prompt rows, and builds search indices automatically. Search companion columns, when needed, follow your selected columns.
+This keeps only those three columns, in that order. Quarry converts the selection to Lance, flattens list columns into text, removes empty and duplicate prompt rows, and builds search indices automatically.
 
 Inputs can be CSV, TSV, JSON, JSONL, NDJSON, Parquet, or a `.lance` dataset directory. The result is `<stem>.lance` beside the input, or `<stem>.prepared.lance` for Lance input. The source stays intact, and an existing output is never overwritten. Use `-o` to choose an output path, or `--columns` to supply the selection without a prompt:
 
@@ -150,7 +150,7 @@ When you list several values, the operator decides how they have to match:
 
 Easy way to remember: **`=` one, `==` all, `!=` none**, and **`+=` up, `-=` down** — either the number itself or the text's character count.
 
-The last two, `+=` (at least) and `-=` (at most), compare **number columns** directly (a rating, a width, a year). On a **text column**, they compare its length in characters instead: `prompt+=100` means at least 100 characters, while `prompt-=500` means at most 500. They use `+`/`-` rather than the usual `>=`/`<=` because SwarmUI reads a `>` as the end of the tag, so `>=` would cut the tag short. List columns do not have a single character length, so Quarry skips a dataset when these operators target a list.
+The last two, `+=` (at least) and `-=` (at most), compare **number columns** directly (a rating, a width, a year). On a **text column**, they compare its length in characters instead: `prompt+=100` means at least 100 characters, while `prompt-=500` means at most 500. List columns do not have a single character length, so Quarry skips a dataset when these operators target a list.
 
 Want more than one condition? Stack filters with a semicolon and Quarry requires all of them at once:
 
@@ -251,6 +251,14 @@ These are the columns the `tags=` keyword searches. Tick whichever columns hold 
 
 Not sure what is in a dataset, or which column is which? Hit **Preview** on its row. A pop-up shows the first rows of the dataset in a plain table with every column on display, so you can eyeball the real data, spot which column holds the prompt, and see what your tag columns actually look like. Need more? **Load 500 more** pulls the next chunk. There is also a **Clear cache** button for when you have changed a file and want a fresh look.
 
+## Try a tag before generating
+
+Click **Run Query** in the Quarry tab and paste a Quarry tag, such as
+`<q:characters[tags=goth]:appearance,clothing>`. You can also enter the query
+without the surrounding `<q:...>`. The results show which datasets match, how
+many entries match, and example output, so you can adjust a filter before using
+it in a generation.
+
 ## Good to know
 
 - **Matching is "contains," not exact.** `prompt=girl` finds every entry whose prompt *contains* "girl" (exact matching would rather defeat the point of a wildcard). Capitalization does not matter.
@@ -258,7 +266,13 @@ Not sure what is in a dataset, or which column is which? Hit **Preview** on its 
 - Values can include spaces (`long hair`), but these characters are reserved and cannot appear inside a value: `; , = ! [ ] < >`
 - Need several picks from a single tag? SwarmUI's built-in count works: `<q[3]:characters>` gives you 3 different entries.
 
-## Under the hood
+## Development and dataset maintenance
+
+The sections below cover building the extension and managing dataset files from
+the command line. For everyday use in SwarmUI, use the Quarry tab and the prompt
+tags above.
+
+### Building and testing
 
 Quarry reads your data with [DuckDB](https://duckdb.org/) and its [LanceDB](https://lancedb.com/) reader. Building from source:
 
@@ -267,3 +281,89 @@ npm install
 npm run build      # build the UI
 ./run-tests        # run the test suite
 ```
+
+### Preparation resources and recovery
+
+Cleanup uses a default `32GB` DuckDB memory budget (`--memory-limit` overrides it).
+Cleanup and index spill files live beside the output, so large index builds use
+that filesystem rather than the system `/tmp`. The cleanup budget does not limit
+Lance's index-building memory.
+
+If indexing fails or is cancelled after conversion, Quarry keeps the cleaned
+dataset in a `.quarry-prep-*` checkpoint directory and prints a recovery command:
+
+```bash
+./quarry prep --resume /path/to/.quarry-prep-xxxxxxxx
+```
+
+Resume skips conversion and deduplication and reuses the completed casing representation. Older prep checkpoints are upgraded before publication. The final output is published only after indexing succeeds; the source
+and any existing output remain untouched. Temporary cleanup/index files are
+removed, while the checkpoint remains until a successful resume.
+
+### Optimize existing Lance datasets
+
+```bash
+./quarry lance optimize ~/data/AIConfigs/Quarry/nl --dry-run
+./quarry lance optimize ~/data/AIConfigs/Quarry/nl
+./quarry lance optimize /path/to/specific.lance
+```
+
+A dataset path processes only that dataset. A regular directory processes its
+immediate child datasets, without recursion, and errors if none are present.
+Datasets are processed sequentially; a failure is reported and the command
+continues with the remaining datasets, returning a nonzero exit status.
+At the end, a size summary shows the total before and after, plus bytes and
+percentage saved (or increased), for successfully optimized datasets. Dry runs
+do not estimate savings.
+
+The rewrite preserves live rows, row order, logical column order, nulls, and exact
+original text. It removes recognized `__lc` companions, stores lowercase text in
+the original columns, adds lossless binary `__case` patches, and rebuilds NGRAM
+indexes on every string column. Supported existing scalar indexes are retained;
+unsupported indexes and case-sensitive string BTREE/BITMAP indexes are rejected
+before replacement. Non-text columns keep their types and values.
+
+Only the current Lance version survives: deleted rows, obsolete physical columns,
+and previous versions are discarded. Index creation can advance the version
+number; it does not imply retained history. No permanent backup or audit copy is
+kept. The command verifies reconstructed values before replacing the original,
+and restores the original if publication fails. It needs temporary space beside
+the dataset for the rewritten data, indexes, and index spill files. Stop readers
+and writers before migrating; live concurrent replacement is not supported.
+
+Quarry automatically restores casing for prompts, search results, and previews.
+Short and non-ASCII search terms use a scan to avoid false negatives from the
+current NGRAM tokenizer; other terms retain indexed filtering.
+ASCII casing uses sparse UTF-8 byte positions or a bitmap; Unicode casing changes
+use the full original UTF-8 value when necessary. No Unicode normalization is
+applied. Keep `quarry-storage.json` with the dataset: it identifies the format and
+its casing columns. Other Lance readers see the physical lowercase values unless
+they implement this codec. See [the storage specification](docs/casing-storage.md).
+
+Use `./quarry prep` to select, rename, reorder, or clean encoded input into a new
+dataset. `./quarry columns reorder DATASET.lance score,prompt` reorders in place,
+preserving the casing JSON, companion columns, and supported scalar indexes.
+The rewrite rebuilds indexes before replacing the original dataset; unsupported
+index types are rejected before writing. `./quarry lance prep --no-clean` can
+rebuild indexes, while its legacy in-place cleaning pass rejects encoded datasets.
+
+The `__lc` format is **deprecated but remains supported** by C# search routing.
+Existing datasets work without migration. The separate image-history index still
+uses its existing format. New `./quarry prep` outputs use casing storage by default.
+
+### Destructive lowercase conversion (legacy)
+
+To permanently replace mixed-case text with its existing lowercase search companions:
+
+```bash
+./quarry lance lowercase ~/data/AIConfigs/Quarry
+```
+
+This processes only immediate child `.lance` datasets, or just one dataset if you
+pass its directory directly. Each `X` with a matching `X__lc` receives the companion's
+values, and `X__lc` is removed. Other columns and row/column order are preserved.
+Datasets without matching pairs are left alone. Scalar indexes are rebuilt, and old
+versions and replaced data files are deleted; original capitalization cannot be
+recovered afterward. The rewrite streams data, but needs temporary disk space for
+the new data and indexes before the old files can be removed. Run it while the
+datasets are not being edited or queried.

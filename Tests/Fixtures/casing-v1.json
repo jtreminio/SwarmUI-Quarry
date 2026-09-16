@@ -1,0 +1,62 @@
+[
+  {
+    "original": null,
+    "lower": null,
+    "patch": null
+  },
+  {
+    "original": "",
+    "lower": "",
+    "patch": ""
+  },
+  {
+    "original": "lowercase",
+    "lower": "lowercase",
+    "patch": ""
+  },
+  {
+    "original": "Café 🐈",
+    "lower": "café 🐈",
+    "patch": "5300"
+  },
+  {
+    "original": "Été",
+    "lower": "été",
+    "patch": "46c38974c3a9"
+  },
+  {
+    "original": "İstanbul",
+    "lower": "istanbul",
+    "patch": "46c4b07374616e62756c"
+  },
+  {
+    "original": "ΟΣ",
+    "lower": "οσ",
+    "patch": "46ce9fcea3"
+  },
+  {
+    "original": "ẞtraße",
+    "lower": "ßtraße",
+    "patch": "46e1ba9e747261c39f65"
+  },
+  {
+    "original": "NASA NASA NASA NASA NASA NASA NASA NASA NASA NASA NASA NASA ",
+    "lower": "nasa nasa nasa nasa nasa nasa nasa nasa nasa nasa nasa nasa ",
+    "patch": "42efbdf7de7befbd07"
+  },
+  {
+    "original": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxZ",
+    "lower": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxz",
+    "patch": "538201"
+  },
+  {
+    "original": "Á B",
+    "lower": "á b",
+    "patch": "4211"
+  },
+  {
+    "original": "\u0000A\nB",
+    "lower": "\u0000a\nb",
+    "patch": "420a"
+  }
+]

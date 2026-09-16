@@ -3,6 +3,7 @@
 import csv
 import io
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -20,6 +21,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from quarry_tools.cli import main
 from quarry_tools.common import FileError
 from quarry_tools.prep import plan_columns
+from quarry_tools.prep_clean import cleaned_reader
+from quarry_tools.lance import normalize_prompt
+from quarry_tools.storage import logical_reader
 
 
 class ColumnSelectionTests(unittest.TestCase):
@@ -107,13 +111,13 @@ class PrepTests(unittest.TestCase):
                 self.assertIn("Caption", stdout)
                 self.assertEqual(prompt.call_count, 1)
                 ds = lance.dataset(str(output))
-                self.assertEqual(ds.schema.names, ["prompt", "tags", "score", "prompt__lc", "tags__lc"])
-                self.assertEqual(ds.to_table(columns=["prompt", "score"]).to_pylist(), [
+                self.assertEqual(ds.schema.names, ["prompt", "tags", "score", "prompt__case", "tags__case"])
+                self.assertEqual(logical_reader(ds, output, ["prompt", "score"]).read_all().to_pylist(), [
                     {"prompt": "Hello!", "score": 1}, {"prompt": "World", "score": 4},
                 ])
                 self.assertEqual(
                     {tuple(index["fields"]) for index in ds.list_indices()},
-                    {("prompt__lc",), ("tags__lc",), ("score",)},
+                    {("prompt",), ("tags",), ("score",)},
                 )
                 after = source.read_bytes() if source.is_file() else lance.dataset(str(source)).version
                 self.assertEqual(before, after)
@@ -132,7 +136,7 @@ class PrepTests(unittest.TestCase):
         prompt.assert_not_called()
         ds = lance.dataset(str(source.with_suffix(".lance")))
         self.assertEqual(ds.schema.names[:3], ["prompt", "id", "tags"])
-        self.assertEqual(ds.to_table(columns=["prompt", "id"]).to_pylist(), [
+        self.assertEqual(logical_reader(ds, source.with_suffix(".lance"), ["prompt", "id"]).read_all().to_pylist(), [
             {"prompt": "Hello, world", "id": 1}, {"prompt": "Next", "id": 5},
         ])
 
@@ -191,13 +195,78 @@ class PrepTests(unittest.TestCase):
         self.assertEqual(result, 1)
         self.assertEqual(list(self.root.iterdir()), [source])
 
-    def test_failed_prep_does_not_publish_partial_output(self):
+    def test_failed_index_preserves_checkpoint_and_resume_skips_conversion(self):
         source = self.write_source(".csv")
         with patch("quarry_tools.lance._build_one", side_effect=RuntimeError("index failed")):
             result, _, stderr, _ = self.run_cli(["prep", str(source), "--columns", "Caption=prompt"])
         self.assertEqual(result, 1)
         self.assertIn("index failed", stderr)
-        self.assertEqual(list(self.root.iterdir()), [source])
+        checkpoints = list(self.root.glob(".quarry-prep-*"))
+        self.assertEqual(len(checkpoints), 1)
+        checkpoint = checkpoints[0]
+        self.assertIn(f"--resume {checkpoint}", stderr)
+        self.assertFalse(source.with_suffix(".lance").exists())
+        self.assertEqual(lance.dataset(str(checkpoint / "dataset.lance")).count_rows(), 2)
+        self.assertEqual(sorted(p.name for p in checkpoint.iterdir()), ["dataset.lance", "prep.json"])
+        with patch("quarry_tools.prep.open_source", side_effect=AssertionError("must not reread source")):
+            result, _, stderr, _ = self.run_cli(["prep", "--resume", str(checkpoint)])
+        self.assertEqual(result, 0, stderr)
+        self.assertEqual(lance.dataset(str(source.with_suffix(".lance"))).count_rows(), 2)
+        self.assertFalse(checkpoint.exists())
+
+    def test_index_spills_are_redirected_and_resume_reuses_casing_storage(self):
+        source = self.write_source(".parquet")
+        spill_roots = []
+
+        def fail_index(ds, *args, **kwargs):
+            scratch = Path(os.environ["TMPDIR"])
+            spill_roots.append(scratch)
+            self.assertTrue(scratch.is_relative_to(self.root))
+            self.assertTrue(scratch.is_dir())
+            (scratch / "unfinished-spill").write_text("partial")
+            raise RuntimeError("index failed after companion creation")
+
+        with patch.dict(os.environ, {"TMPDIR": str(self.root)}):
+            with patch.object(lance.LanceDataset, "create_scalar_index", fail_index):
+                result, _, stderr, _ = self.run_cli(["prep", str(source), "--columns", "Caption=prompt"])
+            self.assertEqual(os.environ["TMPDIR"], str(self.root))
+        self.assertEqual(result, 1)
+        self.assertIn("index failed after companion", stderr)
+        checkpoint = next(self.root.glob(".quarry-prep-*"))
+        self.assertIn("prompt__case", lance.dataset(str(checkpoint / "dataset.lance")).schema.names)
+        self.assertFalse(spill_roots[0].exists())
+        with patch.object(lance.LanceDataset, "add_columns", side_effect=AssertionError("must reuse companion")):
+            result, stdout, stderr, _ = self.run_cli(["prep", "--resume", str(checkpoint)])
+        self.assertEqual(result, 0, stderr)
+        self.assertIn("NGRAM in place", stdout)
+        ds = lance.dataset(str(source.with_suffix(".lance")))
+        self.assertEqual(ds.to_table(columns=["prompt"]).column(0).to_pylist(), ["hello!", "world"])
+        self.assertEqual({tuple(index["fields"]) for index in ds.list_indices()}, {("prompt",)})
+
+    def test_resume_rejects_existing_output_without_losing_checkpoint(self):
+        source = self.write_source(".csv")
+        with patch("quarry_tools.lance._build_one", side_effect=KeyboardInterrupt()):
+            result, _, _, _ = self.run_cli(["prep", str(source), "--columns", "Caption=prompt"])
+        self.assertEqual(result, 1)
+        checkpoint = next(self.root.glob(".quarry-prep-*"))
+        output = source.with_suffix(".lance")
+        output.mkdir()
+        (output / "keep-me").write_text("existing output")
+        result, _, stderr, _ = self.run_cli(["prep", "--resume", str(checkpoint)])
+        self.assertEqual(result, 1)
+        self.assertIn("new .lance path", stderr)
+        self.assertTrue((checkpoint / "dataset.lance").exists())
+        self.assertEqual((output / "keep-me").read_text(), "existing output")
+
+    def test_resume_failure_keeps_checkpoint(self):
+        source = self.write_source(".csv")
+        with patch("quarry_tools.lance._build_one", side_effect=RuntimeError("index failed")):
+            self.run_cli(["prep", str(source), "--columns", "Caption=prompt"])
+            checkpoint = next(self.root.glob(".quarry-prep-*"))
+            result, _, stderr, _ = self.run_cli(["prep", "--resume", str(checkpoint)])
+        self.assertEqual(result, 1)
+        self.assertIn("--resume", stderr)
+        self.assertTrue((checkpoint / "dataset.lance").exists())
 
     def test_lance_defaults_to_separate_prepared_dataset(self):
         source = self.write_source(".lance")
@@ -221,6 +290,57 @@ class PrepTests(unittest.TestCase):
         result, _, stderr, _ = self.run_cli(["prep", str(source), "--columns", "prompt;prompt__lc"])
         self.assertEqual(result, 1)
         self.assertIn("conflicts", stderr)
+        self.assertEqual(list(self.root.iterdir()), [source])
+
+    def test_cleanup_preserves_unicode_rules_first_rows_and_punctuation_only_rows(self):
+        values = [
+            "Hello!", "hello", "HéLLo", "h é l l o", "İ", "i\u0307", "I",
+            "ΟΣ", "ος", "οσ", "²", "2", "猫!", "猫", "!!!", "!!!",
+            None, "  ", "\t", "\u00a0", "\n", "_", "a_b", "ab", "A\x00B",
+        ]
+        table = pa.table({"prompt": values, "id": range(len(values)),
+                          "__quarry_order": range(len(values)), "__quarry_key": values})
+        seen, expected_ids = set(), []
+        for i, value in enumerate(values):
+            if value is None or not value.strip(" "):
+                continue
+            key = normalize_prompt(value)
+            if key and key in seen:
+                continue
+            seen.add(key)
+            expected_ids.append(i)
+        with cleaned_reader(
+            table.to_reader(max_chunksize=2), "prompt", self.root,
+            batch_rows=2, memory_limit="64MB", emit=lambda _: None,
+        ) as reader:
+            actual = reader.read_all()
+        self.assertEqual(actual, table.take(pa.array(expected_ids)))
+
+    def test_cleanup_handles_nontext_prompt_and_preserves_arrow_types(self):
+        table = pa.table({
+            "score": pa.array([1, None, 1, 2], type=pa.int16()),
+            "body": pa.array(["first", "null", "repeat", "last"], type=pa.large_string()),
+        })
+        with cleaned_reader(table.to_reader(), "score", self.root, emit=lambda _: None) as reader:
+            actual = reader.read_all()
+        self.assertEqual(actual, table.take(pa.array([0, 2, 3])))
+
+    def test_all_empty_source_can_be_prepared(self):
+        source = self.root / "empty.parquet"
+        pq.write_table(pa.table({"prompt": [None, "", "  "]}), source)
+        result, _, stderr, _ = self.run_cli(["prep", str(source), "--columns", "prompt"])
+        self.assertEqual(result, 0, stderr)
+        self.assertEqual(lance.dataset(str(source.with_suffix(".lance"))).count_rows(), 0)
+
+    def test_cleanup_failure_leaves_source_and_removes_staging(self):
+        source = self.write_source(".parquet")
+        before = source.read_bytes()
+        result, _, stderr, _ = self.run_cli([
+            "prep", str(source), "--columns", "Caption=prompt", "--memory-limit", "not-a-size",
+        ])
+        self.assertEqual(result, 1)
+        self.assertIn("error:", stderr)
+        self.assertEqual(source.read_bytes(), before)
         self.assertEqual(list(self.root.iterdir()), [source])
 
 

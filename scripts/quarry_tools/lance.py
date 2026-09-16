@@ -22,6 +22,7 @@ from pathlib import Path
 
 from .common import (
     EXT_FORMAT,
+    FileError,
     as_pool_results,
     detect_format,
     format_parent,
@@ -610,11 +611,11 @@ def _human(n: int) -> str:
 
 def _all_lowercase(path: str, col: str) -> bool:
     q = quote_ident(col)
-    n = _duck().execute(
-        f"SELECT count(*) FROM {quote_literal(path)} "
-        f"WHERE {q} IS NOT NULL AND {q} != lower({q})"
-    ).fetchone()[0]
-    return n == 0
+    row = _duck().execute(
+        f"SELECT 1 FROM {quote_literal(path)} "
+        f"WHERE {q} IS NOT NULL AND {q} != lower({q}) LIMIT 1"
+    ).fetchone()
+    return row is None
 
 
 def _find_datasets(root: Path) -> list[Path]:
@@ -664,11 +665,17 @@ def _clean_one(path, prompt_column, dry_run, flatten, dedup, compact, emit) -> N
 def _build_one(
     path, text_columns, bitmap, btree, always_companion, auto_btree, keep_history,
     emit, clean=True, flatten=True, dedup=True, compact=True, prompt_column=None,
-    dry_run=False,
+    dry_run=False, reuse_companions=False, ngram_names=None,
 ) -> None:
     import lance
     import pyarrow as pa
 
+    from .storage import read_descriptor
+    encoded = read_descriptor(path)
+    if encoded and clean:
+        raise FileError("encoded datasets must be cleaned with ./quarry prep to preserve original casing; use --no-clean to rebuild indexes")
+    if encoded and always_companion:
+        raise FileError("--always-companion is deprecated and incompatible with casing storage")
     emit(f"\n=== {path} ===")
     if clean:
         _clean_one(path, prompt_column, dry_run, flatten, dedup, compact, emit)
@@ -676,24 +683,32 @@ def _build_one(
         return  # preview only -- nothing was cleaned, so there's nothing to index
     ds = lance.dataset(str(path))
     before = _dir_size(path)
-    for col in _resolve_text_columns(ds, text_columns):
-        if not always_companion and _all_lowercase(str(path), col):
+    for col in _resolve_text_columns(ds, text_columns or list(encoded)):
+        emit(f"  {col!r}: checking whether a lowercase search column is needed…")
+        if col in encoded or (not always_companion and _all_lowercase(str(path), col)):
             t = time.time()
-            ds.create_scalar_index(col, "NGRAM", replace=True)
+            emit(f"  {col!r}: building NGRAM index…")
+            ds.create_scalar_index(col, "NGRAM", replace=True, **({"name": ngram_names[col]} if ngram_names and col in ngram_names else {}))
             emit(f"  {col!r}: already lowercase -> NGRAM in place in {time.time() - t:.1f}s")
             continue
         companion = col + LC_SUFFIX
         t = time.time()
-        if companion in ds.schema.names:
+        reuse = reuse_companions and companion in ds.schema.names
+        if reuse:
+            emit(f"  {col!r}: reusing completed companion {companion!r}")
+        elif companion in ds.schema.names:
             ds.drop_columns([companion])
             ds = lance.dataset(str(path))  # reopen without the stale column
             verb = "refreshed"
         else:
             verb = "added"
-        ds.add_columns({companion: f"lower({quote_ident_backtick(col)})"})
-        ds = lance.dataset(str(path))  # reopen to see the new column
-        emit(f"  {col!r}: {verb} companion {companion!r} in {time.time() - t:.1f}s")
+        if not reuse:
+            emit(f"  {col!r}: creating lowercase search column…")
+            ds.add_columns({companion: f"lower({quote_ident_backtick(col)})"})
+            ds = lance.dataset(str(path))  # reopen to see the new column
+            emit(f"  {col!r}: {verb} companion {companion!r} in {time.time() - t:.1f}s")
         t = time.time()
+        emit(f"  {col!r}: building NGRAM index on {companion!r}…")
         ds.create_scalar_index(companion, "NGRAM", replace=True)
         emit(f"  {col!r}: NGRAM index on {companion!r} built in {time.time() - t:.1f}s")
     btree_cols = list(
@@ -810,6 +825,10 @@ def cmd_prep(args) -> int:
 
 
 def register(subparsers) -> None:
+    from . import lowercase, optimize
+
+    lowercase.register(subparsers)
+    optimize.register(subparsers)
     raw = argparse.RawDescriptionHelpFormatter
 
     register_convert(subparsers, "convert", "quarry lance convert")

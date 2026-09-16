@@ -8,7 +8,7 @@ namespace Quarry;
 
 public static class DatasetCache
 {
-    private const int CacheVersion = 4;
+    private const int CacheVersion = 5;
     private static readonly ConcurrentDictionary<string, CacheEntry> Cache = new();
     private static readonly ConcurrentDictionary<string, long> FilteredCounts = new();
     private static readonly object CacheLock = new();
@@ -250,6 +250,8 @@ public static class DatasetCache
                         ["kind"] = column.Kind.ToString(),
                         ["numeric"] = column.IsNumeric,
                         ["ngram"] = column.HasNgramIndex,
+                        ["casingColumn"] = column.CasingColumn,
+                        ["isCasingPatch"] = column.IsCasingPatch,
                         ["numericType"] = column.NumericType,
                     });
                 }
@@ -359,7 +361,8 @@ public static class DatasetCache
             bool numeric = token.Value<bool?>("numeric") ?? false;
             bool ngram = token.Value<bool?>("ngram") ?? false;
             string numericType = token.Value<string>("numericType");
-            result.Add(new ColumnInfo(name, kind, numeric, hasNgramIndex: ngram, numericType: numericType));
+            result.Add(new ColumnInfo(name, kind, numeric, hasNgramIndex: ngram, numericType: numericType,
+                casingColumn: token.Value<string>("casingColumn"), isCasingPatch: token.Value<bool?>("isCasingPatch") ?? false));
         }
         return new ColumnSchema(result);
     }
