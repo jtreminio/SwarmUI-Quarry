@@ -7,6 +7,7 @@ import re
 import shutil
 import sys
 import tempfile
+from contextlib import ExitStack
 from datetime import timedelta
 from pathlib import Path
 
@@ -76,7 +77,7 @@ def index_plan(ds):
     return plan
 
 
-def optimize_dataset(path, emit=print, dry_run=False, *, auto_btree=False):
+def optimize_dataset(path, emit=print, dry_run=False, *, auto_btree=False, get_spill_directory=None):
     import lance
     from . import lance as lance_tools
 
@@ -111,7 +112,7 @@ def optimize_dataset(path, emit=print, dry_run=False, *, auto_btree=False):
     backup = work / "original.lance"
     previous = os.environ.get("TMPDIR")
     try:
-        os.environ["TMPDIR"] = str(work)
+        os.environ["TMPDIR"] = str(get_spill_directory() if get_spill_directory else work)
         attempts = ((65536, True), (1024, True), (1024, False))
         for attempt, (batch_rows, miniblock) in enumerate(attempts):
             if attempt:
@@ -191,22 +192,36 @@ def cmd_optimize(args):
     failures = []
     skipped = processed = 0
     total_before = total_after = 0
-    for path in targets:
-        print(f"\n=== {path} ===", flush=True)
-        try:
-            sizes = optimize_dataset(path, lambda line: print(line, flush=True), args.dry_run)
-            if sizes is _SKIPPED:
-                skipped += 1
-                continue
-            processed += 1
-            if sizes is not None:
-                before, after = sizes
-                total_before += before
-                total_after += after
-        except Exception as exc:
-            reason = " ".join(str(exc).split()) or type(exc).__name__
-            failures.append((path, reason))
-            print(f"  FAIL {path}: {reason}", file=sys.stderr, flush=True)
+    # Lance caches its spill directory across datasets, so keep it until the batch ends.
+    with ExitStack() as cleanup:
+        spill = None
+
+        def get_spill_directory():
+            nonlocal spill
+            if spill is None:
+                parent = root.parent if root in targets else root
+                spill = cleanup.enter_context(tempfile.TemporaryDirectory(
+                    dir=parent, prefix=".quarry-optimize-spill-",
+                ))
+            return spill
+
+        for path in targets:
+            print(f"\n=== {path} ===", flush=True)
+            try:
+                sizes = optimize_dataset(path, lambda line: print(line, flush=True), args.dry_run,
+                                         get_spill_directory=get_spill_directory)
+                if sizes is _SKIPPED:
+                    skipped += 1
+                    continue
+                processed += 1
+                if sizes is not None:
+                    before, after = sizes
+                    total_before += before
+                    total_after += after
+            except Exception as exc:
+                reason = " ".join(str(exc).split()) or type(exc).__name__
+                failures.append((path, reason))
+                print(f"  FAIL {path}: {reason}", file=sys.stderr, flush=True)
     print(f"\n{'Inspected' if args.dry_run else 'Optimized'} {processed}/{len(targets)} dataset(s); "
           f"{skipped} skipped; {len(failures)} failed.")
     if failures:

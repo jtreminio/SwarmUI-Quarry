@@ -1,6 +1,9 @@
 """Real dataset migrations plus the cross-language codec contract."""
 import io
 import json
+import os
+import random
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -173,6 +176,31 @@ class StorageTests(unittest.TestCase):
         self.assertIn('1/3 dataset(s); 1 skipped; 1 failed', report)
         self.assertIn(f'Failed datasets:\n  {paths[2]}: disk full retry later', report)
         self.assertIn('50.0%', report)
+
+    def test_batch_keeps_native_spill_directory_until_all_indexes_finish(self):
+        rng = random.Random(42)
+        table = pa.table({'score': [rng.randrange(100_000_000) for _ in range(500_000)]})
+        paths = [self.root / f'{i}.lance' for i in range(2)]
+        for path in paths:
+            ds = lance.write_dataset(table, str(path))
+            ds.create_scalar_index('score', 'BTREE')
+        # A fresh process gives Lance an empty session cache. The small pool
+        # forces both index rebuilds to spill, exposing stale directory reuse.
+        result = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve().parents[2] / 'quarry'),
+             'lance', 'optimize', str(self.root)],
+            env={**os.environ, 'LANCE_MEM_POOL_SIZE': str(16 * 1024 * 1024)},
+            capture_output=True, text=True, timeout=60,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('Optimized 2/2 dataset(s); 0 skipped; 0 failed', result.stdout)
+        for path in paths:
+            ds = lance.dataset(str(path))
+            self.assertEqual(ds.to_table(), table)
+            self.assertEqual(ds.count_rows('score < 50000000'),
+                             pa.compute.sum(pa.compute.less(table['score'], 50_000_000)).as_py())
+            self.assertEqual(len(ds.versions()), 1)
+        self.assertEqual(set(self.root.iterdir()), set(paths))
 
     def test_completion_marker_failure_keeps_existing_descriptor(self):
         path, _ = self.dataset()
