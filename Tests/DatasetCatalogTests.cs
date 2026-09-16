@@ -26,8 +26,9 @@ public class DatasetCatalogTests : IDisposable
     private string WriteDataset(string name, string extension = ".jsonl", string text = "{\"prompt\":\"a story\",\"text\":\"the story\"}")
     {
         string path = Path.Combine(_root, name + extension);
-        Directory.CreateDirectory(Path.GetDirectoryName(path));
-        File.WriteAllText(path, text);
+        string dataPath = extension == ".lance" ? Path.Combine(path, "data", "original.bin") : path;
+        Directory.CreateDirectory(Path.GetDirectoryName(dataPath));
+        File.WriteAllText(dataPath, text);
         return path;
     }
 
@@ -82,14 +83,64 @@ public class DatasetCatalogTests : IDisposable
     }
 
     [Theory]
+    [InlineData(".jsonl", ".jsonl")]
+    [InlineData(".jsonl", ".csv")]
+    [InlineData(".lance", ".lance")]
+    [InlineData(".lance", ".jsonl")]
+    [InlineData(".jsonl", ".lance")]
+    public void Migration_CollisionRemovesLegacyCopy_PreservesCanonicalContentsAndCache(string oldExtension, string newExtension)
+    {
+        string oldPath = WriteDataset(Old, oldExtension, "old data");
+        string newPath = WriteDataset(New, newExtension, "new data");
+        DatasetCache.StoreRowCount(Old.ToLowerInvariant(), "old hash", "prompt", 42);
+        DatasetCache.StoreRowCount(New.ToLowerInvariant(), "new hash", "prompt", 99);
+        int resets = 0;
+        Assert.Equal(1, DatasetMigrator.RenameKnownDatasets(_root, () =>
+        {
+            Assert.True(File.Exists(oldPath) || Directory.Exists(oldPath));
+            resets++;
+        }));
+        Assert.Equal(1, resets);
+        Assert.False(File.Exists(oldPath));
+        Assert.False(Directory.Exists(oldPath));
+        string dataPath = newExtension == ".lance" ? Path.Combine(newPath, "data", "original.bin") : newPath;
+        Assert.Equal("new data", File.ReadAllText(dataPath));
+        Assert.False(DatasetCache.TryGetRowCount(Old.ToLowerInvariant(), "old hash", "prompt", out _));
+        Assert.True(DatasetCache.TryGetRowCount(New.ToLowerInvariant(), "new hash", "prompt", out long count));
+        Assert.Equal(99, count);
+        Assert.Equal(0, DatasetMigrator.RenameKnownDatasets(_root));
+    }
+
+    [Theory]
     [InlineData(".jsonl")]
-    [InlineData(".csv")]
-    public void Migration_CollisionKeepsBothCopiesIncludingDifferentFormats(string extension)
+    [InlineData(".lance")]
+    public void Migration_NonDatasetDestinationDoesNotCauseDeletion(string extension)
+    {
+        string oldPath = WriteDataset(Old, extension, "old data");
+        string destination = Path.Combine(_root, New + extension);
+        if (extension == ".lance")
+        {
+            File.WriteAllText(destination, "obstruction");
+        }
+        else
+        {
+            Directory.CreateDirectory(destination);
+        }
+        Assert.Equal(0, DatasetMigrator.RenameKnownDatasets(_root));
+        string dataPath = extension == ".lance" ? Path.Combine(oldPath, "data", "original.bin") : oldPath;
+        Assert.Equal("old data", File.ReadAllText(dataPath));
+    }
+
+    [Fact]
+    public void Migration_FailedResetPreservesBothCopies_AndRetriesLater()
     {
         string oldPath = WriteDataset(Old, text: "old data");
-        string newPath = WriteDataset(New, extension, "new data");
-        Assert.Equal(0, DatasetMigrator.RenameKnownDatasets(_root));
+        string newPath = WriteDataset(New, text: "new data");
+        Assert.Equal(0, DatasetMigrator.RenameKnownDatasets(_root, () => throw new IOException("Cannot release dataset")));
         Assert.Equal("old data", File.ReadAllText(oldPath));
+        Assert.Equal("new data", File.ReadAllText(newPath));
+        Assert.Equal(1, DatasetMigrator.RenameKnownDatasets(_root));
+        Assert.False(File.Exists(oldPath));
         Assert.Equal("new data", File.ReadAllText(newPath));
     }
 
@@ -104,17 +155,24 @@ public class DatasetCatalogTests : IDisposable
         Assert.False(DatasetCache.TryGetRowCount(Old.ToLowerInvariant(), "hash", "prompt", out _));
     }
 
-    [Fact]
-    public void SyncAndQuery_OldQualifiedAndRootTagsResolveCanonicalDataset_WithoutDuplicates()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void SyncAndQuery_OldQualifiedAndRootTagsResolveCanonicalDataset_WithoutDuplicates(bool canonicalAlreadyDownloaded)
     {
         WriteDataset(Old);
+        if (canonicalAlreadyDownloaded)
+        {
+            WriteDataset(New, text: "{\"prompt\":\"downloaded story\"}");
+        }
         DatasetManager.Sync();
+        Assert.Equal(New, Assert.Single(DatasetManager.AllDatasets).Name);
         Assert.Equal(New, DatasetManager.Resolve(Old).Name);
         Assert.Equal(New, DatasetManager.Resolve("CHAT-ERROR-TINYSTORIES-GPT4-TRAIN").Name);
         Assert.Equal(New, DatasetManager.Resolve(New).Name);
         QueryRunResult result = QueryRunner.Run($"<q:{Old},Chat-Error-tinystories-gpt4-train,{New}>", 25);
         Assert.Null(result.Invalid);
-        Assert.Equal("a story", Assert.Single(result.Rows).Prompt);
+        Assert.Equal(canonicalAlreadyDownloaded ? "downloaded story" : "a story", Assert.Single(result.Rows).Prompt);
         Assert.Equal(new[] { New }, PromptTagHandler.ResolveReferencedDatasetNames($"<q:{Old}>"));
     }
 

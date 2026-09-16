@@ -9,11 +9,11 @@ public static class DatasetMigrator
     private const string MarkerName = ".quarry-nl-tags-migrated";
 
     // Run on every sync: users may install an older collection after their first upgrade.
-    public static int RenameKnownDatasets(string folder, Action beforeMove = null)
+    public static int RenameKnownDatasets(string folder, Action beforeChange = null)
     {
         string[] paths = [.. DatasetScanner.Enumerate(folder)];
         HashSet<string> names = new(paths.Select(path => DatasetNaming.ToName(Path.GetRelativePath(folder, path))), StringComparer.OrdinalIgnoreCase);
-        int moved = 0;
+        int changed = 0;
         foreach (string path in paths)
         {
             string oldName = DatasetNaming.ToName(Path.GetRelativePath(folder, path));
@@ -23,15 +23,31 @@ public static class DatasetMigrator
                 continue;
             }
             string destination = Path.Combine(folder, newName + Path.GetExtension(path));
-            if (names.Contains(newName) || File.Exists(destination) || Directory.Exists(destination))
+            bool canonicalExists = names.Contains(newName);
+            if (!canonicalExists && (File.Exists(destination) || Directory.Exists(destination)))
             {
-                Logs.Warning($"Quarry: cannot rename '{oldName}' to '{newName}' — destination already exists; keeping both copies.");
+                Logs.Warning($"Quarry: cannot rename '{oldName}' to '{newName}' — destination is occupied by a non-dataset path.");
                 continue;
             }
             try
             {
-                beforeMove?.Invoke();
-                beforeMove = null;
+                beforeChange?.Invoke();
+                beforeChange = null;
+                if (canonicalExists)
+                {
+                    if (Directory.Exists(path))
+                    {
+                        Directory.Delete(path, recursive: true);
+                    }
+                    else
+                    {
+                        File.Delete(path);
+                    }
+                    DatasetCache.Remove(oldName.ToLowerFast());
+                    changed++;
+                    Logs.Info($"Quarry: removed legacy dataset '{oldName}'; keeping existing '{newName}'.");
+                    continue;
+                }
                 Directory.CreateDirectory(Path.GetDirectoryName(destination));
                 if (Directory.Exists(path))
                 {
@@ -43,15 +59,15 @@ public static class DatasetMigrator
                 }
                 names.Add(newName);
                 DatasetCache.Rename(oldName.ToLowerFast(), newName.ToLowerFast());
-                moved++;
+                changed++;
                 Logs.Info($"Quarry: renamed dataset '{oldName}' -> '{newName}'.");
             }
             catch (Exception ex)
             {
-                Logs.Warning($"Quarry: failed to rename '{oldName}' -> '{newName}': {ex.Message}");
+                Logs.Warning($"Quarry: failed to migrate '{oldName}' -> '{newName}': {ex.Message}");
             }
         }
-        return moved;
+        return changed;
     }
 
     public static void RunInBackground()

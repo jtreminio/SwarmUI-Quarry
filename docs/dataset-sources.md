@@ -40,7 +40,7 @@ The JSON is embedded/bundled into the extension. After changing it, run `npm run
 
 - Startup and refresh rename installed datasets. Lance directories and supported single-file formats retain their contents and format.
 - Missing datasets are skipped, and later installations are checked again.
-- Existing destination datasets are preserved, including destinations using a different format. A collision leaves both copies in place and logs a warning. Exact old names still select the old copy in that case.
+- If the corrected dataset already exists, it is preserved and the legacy copy is deleted, including when the copies use different formats. Failed deletions are logged and retried on the next startup or refresh.
 - Old exact query names resolve to the corrected name, including names without a category prefix. The compatibility mapping does not rewrite arbitrary glob patterns.
 - Column preferences and disabled state use the corrected names; existing preferences under the corrected name take priority.
 - Remote paths remain separate from local names, so downloads work before and after the collection is renamed. If both remote spellings exist, the corrected one is preferred.
