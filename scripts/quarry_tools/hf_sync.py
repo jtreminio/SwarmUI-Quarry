@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 from dataclasses import dataclass
@@ -7,9 +8,11 @@ from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
 from .common import EXT_FORMAT_SHOW, atomic_output
+from .storage import DESCRIPTOR, read_descriptor
 
 DEFAULT_CATALOG = Path(__file__).resolve().parents[2] / "dataset-sources.json"
 DEFAULT_REPO = "jtreminio/prompt-dataset"
+UPLOAD_IGNORES = [".*", "**/.*", "**/.*/**"]
 
 
 @dataclass(frozen=True)
@@ -138,6 +141,32 @@ def remote_datasets(files: list[str]) -> set[str]:
     return datasets
 
 
+def write_dataset_hash(directory: Path) -> str:
+    descriptor = directory / DESCRIPTOR
+    read_descriptor(directory)
+    metadata = json.loads(descriptor.read_text(encoding="utf-8")) if descriptor.exists() else {"version": 1, "columns": {}}
+    previous_hash = metadata.pop("datasetHash", None)
+    entries = []
+    for path in sorted(directory.rglob("*")):
+        relative = path.relative_to(directory)
+        if not path.is_file() or path == descriptor or any(part.startswith(".") for part in relative.parts):
+            continue
+        with path.open("rb") as file:
+            digest = hashlib.file_digest(file, "sha256").hexdigest()
+        entries.append([relative.as_posix(), digest])
+    # Include storage metadata, but not the hash field itself.
+    metadata_bytes = json.dumps(metadata, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    entries.append([DESCRIPTOR, hashlib.sha256(metadata_bytes).hexdigest()])
+    digest = hashlib.sha256(json.dumps(sorted(entries), separators=(",", ":")).encode("utf-8")).hexdigest()
+    if previous_hash == digest:
+        return digest
+    metadata["datasetHash"] = digest
+    with atomic_output(descriptor) as temporary:
+        temporary.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+        temporary.chmod(descriptor.stat().st_mode & 0o777 if descriptor.exists() else 0o644)
+    return digest
+
+
 def infer_repo(name: str) -> str | None:
     source = next((part for part in name.split("/") if "." in part), "")
     parts = source.split(".")
@@ -211,11 +240,13 @@ def cmd_sync(args) -> int:
         snapshot = api.repo_info(repo_id=args.repo, repo_type="dataset", revision=args.revision).sha
         local_paths = {d.repo_path for d in datasets}
         print(f"Sync {root} -> {args.repo} @ {args.revision}: {len(datasets)} dataset(s)", file=sys.stderr)
-        for dataset in datasets:
-            print(f"  Upload {dataset.repo_path}", file=sys.stderr)
         if args.dry_run:
+            remote = remote_datasets(api.list_repo_files(repo_id=args.repo, repo_type="dataset", revision=snapshot))
+            for dataset in datasets:
+                status = "NEW" if dataset.repo_path not in remote else "EXISTING"
+                print(f"  Upload [{status}] {dataset.repo_path}", file=sys.stderr)
+            print(f"New datasets: {len(local_paths - remote)}; already on HF: {len(local_paths & remote)}", file=sys.stderr)
             if args.prune:
-                remote = remote_datasets(api.list_repo_files(repo_id=args.repo, repo_type="dataset", revision=snapshot))
                 for path in sorted(remote - local_paths):
                     print(f"  Prune {path}", file=sys.stderr)
             known = catalog_lookup(entries)
@@ -225,10 +256,14 @@ def cmd_sync(args) -> int:
             print("Dry run: no uploads, deletions, catalog edits, or prompts.", file=sys.stderr)
             return 0
         for dataset in datasets:
+            print(f"  Upload {dataset.repo_path}", file=sys.stderr)
             kwargs = dict(repo_id=args.repo, repo_type="dataset", revision=args.revision,
                           commit_message=f"Sync {dataset.name}")
             if dataset.path.is_dir():
-                api.upload_folder(folder_path=str(dataset.path), path_in_repo=dataset.repo_path, **kwargs)
+                print(f"  Hashing {dataset.repo_path}", file=sys.stderr)
+                write_dataset_hash(dataset.path)
+                api.upload_folder(folder_path=str(dataset.path), path_in_repo=dataset.repo_path,
+                                  ignore_patterns=UPLOAD_IGNORES, **kwargs)
             else:
                 api.upload_file(path_or_fileobj=str(dataset.path), path_in_repo=dataset.repo_path, **kwargs)
         print("All dataset uploads completed.", file=sys.stderr)

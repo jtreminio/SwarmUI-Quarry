@@ -1,6 +1,7 @@
-import { describe, expect, it } from "@jest/globals";
+import { afterEach, describe, expect, it, jest } from "@jest/globals";
 import datasetSources from "../dataset-sources.json";
 import {
+    openDownloadModal,
     progressPercent,
     renderProgressInfo,
     renderRemoteDatasetName,
@@ -21,6 +22,22 @@ const makeRemote = (name: string, installed = false): RemoteDatasetDto => ({
 });
 
 describe("renderRemoteDatasetRow", () => {
+    it("shows update messaging only for installed datasets with an update", () => {
+        const dataset = {
+            ...makeRemote("org.repo", true),
+            updateAvailable: true,
+        };
+        const html = renderRemoteDatasetRow(dataset);
+        expect(html).toContain("Update available!");
+        expect(html).toContain('data-update="true"');
+        expect(html).toContain("quarry-remote-check");
+        expect(
+            renderRemoteDatasetRow({ ...dataset, installed: false }),
+        ).not.toContain("Update available!");
+        expect(
+            renderRemoteDatasetRow(makeRemote("org.repo", true)),
+        ).not.toContain("Update available!");
+    });
     it("renders a not-installed dataset with an unchecked selection checkbox", () => {
         const html = renderRemoteDatasetRow({
             name: "Gustavosta.Stable-Diffusion-Prompts",
@@ -78,6 +95,21 @@ describe("renderRemoteDatasetRow", () => {
 });
 
 describe("renderRemoteDatasets", () => {
+    it("counts updates in collapsed categories including nested folders", () => {
+        const html = renderRemoteDatasets([
+            { ...makeRemote("nl/org.one", true), updateAvailable: true },
+            { ...makeRemote("nl/sub/org.two", true), updateAvailable: true },
+            makeRemote("nl/org.three", true),
+        ]);
+        const container = document.createElement("div");
+        container.innerHTML = html;
+        expect(
+            container.querySelector('[data-folder="nl"]')?.textContent,
+        ).toContain("2 updates available!");
+        expect(
+            container.querySelector('[data-folder="nl/sub"]')?.textContent,
+        ).toContain("1 update available!");
+    });
     it("shows a hint when empty", () => {
         expect(renderRemoteDatasets([])).toContain("No datasets available");
     });
@@ -369,5 +401,105 @@ describe("formatBytes", () => {
         expect(formatBytes(null)).toBe("—");
         expect(formatBytes(undefined)).toBe("—");
         expect(formatBytes(-1)).toBe("—");
+    });
+});
+
+describe("download update selection", () => {
+    afterEach(() => {
+        Reflect.deleteProperty(globalThis, "genericRequest");
+    });
+
+    const setup = (outcome: "done" | "error" | "cancelled" = "done") => {
+        const datasets = [
+            { ...makeRemote("nl/org.update", true), updateAvailable: true },
+            makeRemote("nl/org.installed", true),
+            makeRemote("nl/org.new"),
+        ];
+        const downloads: Record<string, unknown>[] = [];
+        let active = false;
+        let refresh: unknown = false;
+        globalThis.genericRequest = <T>(
+            endpoint: string,
+            data: Record<string, unknown>,
+            callback: (data: T) => void,
+        ) => {
+            let response: unknown;
+            if (endpoint === "QuarryListAvailableDatasets") {
+                refresh = data.refresh;
+                response = { success: true, datasets, tokenSet: true };
+            } else if (endpoint === "QuarryDownloadDataset") {
+                downloads.push(data);
+                active = true;
+                response = { success: true, id: 1 };
+            } else {
+                response = {
+                    success: true,
+                    active: false,
+                    id: 1,
+                    state: active ? outcome : "idle",
+                    error: outcome === "error" ? "Download failed" : undefined,
+                };
+            }
+            callback(response as T);
+        };
+        const changed = jest.fn();
+        openDownloadModal(changed);
+        return { downloads, changed, refreshed: () => refresh };
+    };
+
+    it("selects only updates in collapsed folders and clears badges after success", () => {
+        const { downloads, changed, refreshed } = setup();
+        document
+            .querySelector<HTMLButtonElement>(".quarry-select-updates")
+            ?.click();
+        const selected = document.querySelectorAll<HTMLInputElement>(
+            ".quarry-remote-select:checked",
+        );
+        expect(selected).toHaveLength(1);
+        expect(selected[0].dataset.dataset).toBe("nl/org.update");
+        const start = document.getElementById(
+            "quarry-download-start",
+        ) as HTMLButtonElement;
+        expect(start.textContent).toBe("Update selected");
+        expect(start.disabled).toBe(false);
+        start.click();
+        expect(downloads).toEqual([
+            { dataset: "nl/org.update", redownload: true },
+        ]);
+        expect(document.querySelector(".quarry-remote-update")).toBeNull();
+        expect(changed).toHaveBeenCalledTimes(1);
+        document.getElementById("quarry-download-refresh")?.click();
+        expect(refreshed()).toBe(true);
+    });
+
+    it("uses Download selected for a mixture of new datasets and updates", () => {
+        setup();
+        document
+            .querySelector<HTMLButtonElement>(".quarry-select-updates")
+            ?.click();
+        document
+            .querySelector<HTMLInputElement>(
+                '.quarry-remote-select[data-dataset="nl/org.new"]',
+            )
+            ?.click();
+        expect(
+            document.getElementById("quarry-download-start")?.textContent,
+        ).toBe("Download selected");
+    });
+
+    it.each([
+        "error",
+        "cancelled",
+    ] as const)("retains update badges after %s", (outcome) => {
+        const { changed } = setup(outcome);
+        document
+            .querySelector<HTMLButtonElement>(".quarry-select-updates")
+            ?.click();
+        document.getElementById("quarry-download-start")?.click();
+        expect(
+            document.querySelector(".quarry-remote-row .quarry-remote-update")
+                ?.textContent,
+        ).toBe("Update available!");
+        expect(changed).not.toHaveBeenCalled();
     });
 });

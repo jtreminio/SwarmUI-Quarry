@@ -61,6 +61,7 @@ export interface RemoteDatasetDto {
     sizeBytes: number;
     fileCount: number;
     installed: boolean;
+    updateAvailable?: boolean;
 }
 
 export interface AvailableDatasetsResponse {

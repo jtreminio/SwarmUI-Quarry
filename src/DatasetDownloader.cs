@@ -2,13 +2,18 @@ using System.IO;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using FreneticUtilities.FreneticToolkit;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using SwarmUI.Core;
 using SwarmUI.Utils;
 
 namespace Quarry;
 
-public sealed record RemoteDataset(string Name, string RepoPath, long SizeBytes, int FileCount, bool Installed);
+public sealed record RemoteDataset(string Name, string RepoPath, long SizeBytes, int FileCount, bool Installed,
+    string ContentHash = null, string Revision = null, bool UpdateAvailable = false)
+{
+    public bool HasDescriptor { get; init; }
+}
 
 public sealed record RemoteFile(string RepoPath, string RelativePath, long SizeBytes);
 
@@ -16,8 +21,7 @@ public static class DatasetDownloader
 {
     public const string RepoId = "jtreminio/prompt-dataset";
     public static string RepoUrl => $"https://huggingface.co/datasets/{RepoId}";
-    private const string TreeApiBase = "https://huggingface.co/api/datasets/" + RepoId + "/tree/main";
-    private const string ResolveBase = "https://huggingface.co/datasets/" + RepoId + "/resolve/main";
+    private const string ApiBase = "https://huggingface.co/api/datasets/" + RepoId;
     private static readonly AsciiMatcher TokenCleaner = new(AsciiMatcher.BothCaseLetters + AsciiMatcher.Digits + "-_.");
     private static readonly SemaphoreSlim ListLock = new(1, 1);
     private static List<RemoteDataset> _listCache;
@@ -27,7 +31,14 @@ public static class DatasetDownloader
     public static async Task<List<RemoteDataset>> ListAvailableAsync(string token, bool forceRefresh = false)
     {
         List<RemoteDataset> remote = await GetRemoteListAsync(token, forceRefresh);
-        return [.. remote.Select(d => d with { Installed = IsInstalled(d.RepoPath) })];
+        List<RemoteDataset> result = [];
+        foreach (RemoteDataset dataset in remote)
+        {
+            string path = InstalledPath(dataset.RepoPath);
+            bool updateAvailable = path is not null && DatasetDownloadHash.HasUpdate(path, dataset.ContentHash);
+            result.Add(dataset with { Installed = path is not null, UpdateAvailable = updateAvailable });
+        }
+        return result;
     }
 
     private static async Task<List<RemoteDataset>> GetRemoteListAsync(string token, bool forceRefresh)
@@ -39,8 +50,36 @@ public static class DatasetDownloader
             {
                 return _listCache;
             }
-            JArray tree = await FetchTreeAsync($"{TreeApiBase}?recursive=true", token);
-            _listCache = ParseAvailableDatasets(tree, _ => false);
+            JObject info = JObject.Parse(await FetchJsonAsync(ApiBase + "/revision/main", token));
+            string revision = info.Value<string>("sha");
+            if (string.IsNullOrEmpty(revision))
+            {
+                throw new SwarmReadableErrorException("HuggingFace did not return the collection revision.");
+            }
+            JArray tree = await FetchTreeAsync($"{ApiBase}/tree/{Uri.EscapeDataString(revision)}?recursive=true", token);
+            RemoteDataset[] datasets = [.. ParseAvailableDatasets(tree, _ => false).Select(d => d with { Revision = revision })];
+            await Parallel.ForEachAsync(Enumerable.Range(0, datasets.Length), new ParallelOptions
+            {
+                MaxDegreeOfParallelism = 4,
+                CancellationToken = Program.GlobalProgramCancel,
+            }, async (index, cancel) =>
+            {
+                RemoteDataset dataset = datasets[index];
+                if (!dataset.HasDescriptor)
+                {
+                    return;
+                }
+                try
+                {
+                    string json = await FetchJsonAsync(ResolveUrl(dataset.RepoPath + "/" + CasingStorage.DescriptorName, revision), token);
+                    datasets[index] = dataset with { ContentHash = DatasetDownloadHash.Parse(json) };
+                }
+                catch (Exception ex) when (ex is HttpRequestException or JsonException)
+                {
+                    Logs.Debug($"Quarry: could not check published hash for '{dataset.Name}': {ex.Message}");
+                }
+            });
+            _listCache = [.. datasets];
             _listCacheUtc = DateTime.UtcNow;
             return _listCache;
         }
@@ -54,7 +93,7 @@ public static class DatasetDownloader
 
     public static List<RemoteDataset> ParseAvailableDatasets(JArray tree, Func<string, bool> isInstalled)
     {
-        Dictionary<string, (long Size, int Count)> byFolder = new(StringComparer.Ordinal);
+        Dictionary<string, (long Size, int Count, bool HasDescriptor)> byFolder = new(StringComparer.Ordinal);
         foreach (JToken entry in tree)
         {
             if (entry.Value<string>("type") != "file")
@@ -71,17 +110,20 @@ public static class DatasetDownloader
             {
                 continue;
             }
-            long size = entry.Value<long?>("size") ?? 0;
-            (long Size, int Count) acc = byFolder.TryGetValue(folder, out (long Size, int Count) cur) ? cur : (0L, 0);
-            byFolder[folder] = (acc.Size + size, acc.Count + 1);
+            byFolder.TryGetValue(folder, out var current);
+            byFolder[folder] = (current.Size + (entry.Value<long?>("size") ?? 0), current.Count + 1,
+                current.HasDescriptor || path == folder + "/" + CasingStorage.DescriptorName);
         }
         List<RemoteDataset> result = [];
-        foreach (KeyValuePair<string, (long Size, int Count)> kv in byFolder)
+        foreach (KeyValuePair<string, (long Size, int Count, bool HasDescriptor)> kv in byFolder)
         {
             string name = DatasetCatalog.CanonicalName(DatasetNaming.ToName(kv.Key));
             string localPath = DatasetCatalog.LocalPath(kv.Key);
             result.Add(new RemoteDataset(name, kv.Key, kv.Value.Size, kv.Value.Count,
-                isInstalled(kv.Key) || (localPath != kv.Key && isInstalled(localPath))));
+                isInstalled(kv.Key) || (localPath != kv.Key && isInstalled(localPath)))
+            {
+                HasDescriptor = kv.Value.HasDescriptor,
+            });
         }
         // The collection may publish both legacy and canonical names during the transition.
         result = [.. result.GroupBy(d => d.Name, StringComparer.OrdinalIgnoreCase).Select(group =>
@@ -132,6 +174,26 @@ public static class DatasetDownloader
         return files;
     }
 
+    private static HttpRequestMessage CreateRequest(string url, string token)
+    {
+        HttpRequestMessage request = new(HttpMethod.Get, url);
+        request.Headers.UserAgent.ParseAdd("SwarmUI-Quarry");
+        string bearer = CleanToken(token);
+        if (!string.IsNullOrEmpty(bearer))
+        {
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
+        }
+        return request;
+    }
+
+    private static async Task<string> FetchJsonAsync(string url, string token)
+    {
+        using HttpRequestMessage request = CreateRequest(url, token);
+        using HttpResponseMessage response = await Utilities.UtilWebClient.SendAsync(request, Program.GlobalProgramCancel);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadAsStringAsync(Program.GlobalProgramCancel);
+    }
+
     private static async Task<JArray> FetchTreeAsync(string url, string token)
     {
         JArray all = [];
@@ -139,13 +201,7 @@ public static class DatasetDownloader
         int guard = 0;
         while (next is not null && guard++ < 1000)
         {
-            using HttpRequestMessage request = new(HttpMethod.Get, next);
-            request.Headers.UserAgent.ParseAdd("SwarmUI-Quarry");
-            string bearer = CleanToken(token);
-            if (!string.IsNullOrEmpty(bearer))
-            {
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
-            }
+            using HttpRequestMessage request = CreateRequest(next, token);
             using HttpResponseMessage response = await Utilities.UtilWebClient.SendAsync(request, Program.GlobalProgramCancel);
             if (!response.IsSuccessStatusCode)
             {
@@ -157,6 +213,10 @@ public static class DatasetDownloader
                 all.Add(token2);
             }
             next = ParseNextLink(response.Headers);
+        }
+        if (next is not null)
+        {
+            throw new SwarmReadableErrorException("HuggingFace returned an incomplete dataset listing.");
         }
         return all;
     }
@@ -188,23 +248,24 @@ public static class DatasetDownloader
 
     private static string CleanToken(string token) => string.IsNullOrEmpty(token) ? "" : TokenCleaner.TrimToMatches(token);
     private static string EncodeRepoPath(string repoPath) => string.Join('/', repoPath.Split('/').Select(Uri.EscapeDataString));
-    private static string ResolveUrl(string repoPath) => $"{ResolveBase}/{EncodeRepoPath(repoPath)}?download=true";
+    private static string ResolveUrl(string repoPath, string revision) => $"{RepoUrl}/resolve/{Uri.EscapeDataString(revision)}/{EncodeRepoPath(repoPath)}?download=true";
 
-    private static bool IsInstalled(string repoPath)
+    private static string InstalledPath(string repoPath)
     {
         string folder = DatasetManager.DatasetsFolder;
         if (string.IsNullOrWhiteSpace(folder))
         {
-            return false;
+            return null;
         }
         try
         {
-            return Directory.Exists(Path.Combine(folder, DatasetCatalog.LocalPath(repoPath)))
-                || Directory.Exists(Path.Combine(folder, repoPath));
+            string canonicalPath = Path.Combine(folder, DatasetCatalog.LocalPath(repoPath));
+            string originalPath = Path.Combine(folder, repoPath);
+            return Directory.Exists(canonicalPath) ? canonicalPath : Directory.Exists(originalPath) ? originalPath : null;
         }
         catch
         {
-            return false;
+            return null;
         }
     }
 
@@ -308,7 +369,7 @@ public static class DatasetDownloader
                 return;
             }
             Directory.CreateDirectory(parentDir);
-            List<RemoteFile> files = await ListDatasetFilesAsync(target.RepoPath, token);
+            List<RemoteFile> files = await ListDatasetFilesAsync(target.RepoPath, target.Revision, token);
             if (files.Count == 0)
             {
                 throw new SwarmReadableErrorException("HuggingFace returned no files for this dataset.");
@@ -329,7 +390,7 @@ public static class DatasetDownloader
             {
                 cancel.ThrowIfCancellationRequested();
                 string dest = Path.Combine(tempDir, file.RelativePath.Replace('/', Path.DirectorySeparatorChar));
-                string url = ResolveUrl(file.RepoPath);
+                string url = ResolveUrl(file.RepoPath, target.Revision);
                 using CancellationTokenSource fileCancel = CancellationTokenSource.CreateLinkedTokenSource(cancel);
                 long fileBase = completed;
                 await Utilities.DownloadFile(url, dest, (progress, _, perSec) =>
@@ -340,6 +401,7 @@ public static class DatasetDownloader
                 doneFiles++;
                 SetState(id, s => { s.BytesDone = completed; s.FilesDone = doneFiles; s.PerSecond = 0; });
             }
+            cancel.ThrowIfCancellationRequested();
             SetState(id, s => s.State = "finalizing");
             SafeDeleteDir(trashDir);
             bool hadOld = Directory.Exists(finalDir);
@@ -383,9 +445,9 @@ public static class DatasetDownloader
         }
     }
 
-    private static async Task<List<RemoteFile>> ListDatasetFilesAsync(string repoPath, string token)
+    private static async Task<List<RemoteFile>> ListDatasetFilesAsync(string repoPath, string revision, string token)
     {
-        JArray tree = await FetchTreeAsync($"{TreeApiBase}/{EncodeRepoPath(repoPath)}?recursive=true", token);
+        JArray tree = await FetchTreeAsync($"{ApiBase}/tree/{Uri.EscapeDataString(revision)}/{EncodeRepoPath(repoPath)}?recursive=true", token);
         return ParseDatasetFiles(tree, repoPath);
     }
 

@@ -10,7 +10,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from quarry_tools.cli import main
-from quarry_tools.hf_sync import catalog_lookup, load_catalog, remote_datasets
+from quarry_tools.hf_sync import UPLOAD_IGNORES, catalog_lookup, load_catalog, remote_datasets, write_dataset_hash
+from quarry_tools.storage import DESCRIPTOR, read_descriptor
 
 
 class SyncTests(unittest.TestCase):
@@ -87,8 +88,56 @@ class SyncTests(unittest.TestCase):
         self.assertFalse(self.input.called)
         self.api.upload_folder.assert_called_with(
             folder_path=str(self.local / "tags/org.repo.two.lance"),
+            ignore_patterns=UPLOAD_IGNORES,
             path_in_repo="tags/org.repo.two.lance", repo_id="owner/collection", repo_type="dataset",
             revision="main", commit_message="Sync tags/org.repo.two")
+
+    def test_sync_publishes_hash_in_existing_storage_metadata(self):
+        part = self.dataset()
+        directory = part.parent.parent
+        metadata = {"version": 1, "columns": {"prompt": "prompt__case"},
+                    "optimized": {"version": 1, "lance_version": 3}}
+        (directory / DESCRIPTOR).write_text(json.dumps(metadata))
+        uploaded = []
+        self.api.upload_folder.side_effect = lambda **kw: uploaded.append(
+            json.loads((Path(kw["folder_path"]) / DESCRIPTOR).read_text()))
+        result, output = self.run_cli()
+        self.assertEqual(result, 0, output)
+        self.assertEqual(len(uploaded[0]["datasetHash"]), 64)
+        self.assertEqual({k: v for k, v in uploaded[0].items() if k != "datasetHash"}, metadata)
+        self.assertEqual(read_descriptor(directory), metadata["columns"])
+
+    def test_hash_is_stable_across_reruns_renames_and_hidden_cache_changes(self):
+        part = self.dataset()
+        directory = part.parent.parent
+        original = write_dataset_hash(directory)
+        self.assertEqual(write_dataset_hash(directory), original)
+        hidden = directory / ".cache" / "huggingface" / "upload.json"
+        hidden.parent.mkdir(parents=True)
+        hidden.write_text("local cache")
+        self.assertEqual(write_dataset_hash(directory), original)
+        renamed = directory.with_name("org.renamed.lance")
+        directory.rename(renamed)
+        self.assertEqual(write_dataset_hash(renamed), original)
+        metadata = json.loads((renamed / DESCRIPTOR).read_text())
+        metadata["datasetHash"] = "ignored old hash"
+        (renamed / DESCRIPTOR).write_text(json.dumps(metadata, indent=4))
+        self.assertEqual(write_dataset_hash(renamed), original)
+
+    def test_hash_changes_with_contents_paths_and_storage_metadata(self):
+        part = self.dataset()
+        directory = part.parent.parent
+        original = write_dataset_hash(directory)
+        part.write_text("DATA")
+        modified = write_dataset_hash(directory)
+        self.assertNotEqual(modified, original)
+        part.rename(part.with_name("optimized.lance"))
+        renamed = write_dataset_hash(directory)
+        self.assertNotEqual(renamed, modified)
+        metadata = json.loads((directory / DESCRIPTOR).read_text())
+        metadata["optimized"] = {"version": 1, "lance_version": 3}
+        (directory / DESCRIPTOR).write_text(json.dumps(metadata))
+        self.assertNotEqual(write_dataset_hash(directory), renamed)
 
     def test_existing_null_empty_and_missing_urls_never_prompt_or_infer(self):
         entries = [{"name": "tags/org.one", "sourceUrl": None},
@@ -201,7 +250,38 @@ class SyncTests(unittest.TestCase):
         self.assertIn("New source to check: tags/org.repo", output)
         self.assertFalse(self.catalog.exists())
         self.assertEqual(self.events, [])
+        self.assertFalse((self.local / "tags/org.repo.lance" / DESCRIPTOR).exists())
         self.api.upload_folder.assert_not_called()
+        self.api.create_commit.assert_not_called()
+        self.input.assert_not_called()
+
+    def test_dry_run_marks_new_remote_paths_independently_of_source_catalog(self):
+        self.dataset("tags/org.new.lance")
+        self.dataset("tags/org.existing.lance")
+        self.dataset("nl/org.existing.csv")
+        self.write_catalog([{"name": "tags/org.new", "sourceUrl": None}])
+        self.api.list_repo_files.return_value = [
+            "tags/org.existing.lance/data/part.lance", "tags/org.existing.lance/_versions/1.manifest",
+            "nl/org.existing.csv", "old.lance/data/part.lance", "README.md",
+        ]
+        before = self.catalog.read_bytes()
+        for prune in (False, True):
+            with self.subTest(prune=prune):
+                self.api.list_repo_files.reset_mock()
+                options = ["--dry-run", "--prune"] if prune else ["--dry-run"]
+                result, output = self.run_cli(*options)
+                self.assertEqual(result, 0, output)
+                self.assertIn("Upload [NEW] tags/org.new.lance", output)
+                self.assertIn("Upload [EXISTING] tags/org.existing.lance", output)
+                self.assertIn("Upload [EXISTING] nl/org.existing.csv", output)
+                self.assertIn("New datasets: 1; already on HF: 2", output)
+                self.assertEqual("Prune old.lance" in output, prune)
+                self.api.list_repo_files.assert_called_once_with(
+                    repo_id="owner/collection", repo_type="dataset", revision="snapshot-sha")
+        self.assertEqual(self.catalog.read_bytes(), before)
+        self.assertEqual(self.events, [])
+        self.api.upload_folder.assert_not_called()
+        self.api.upload_file.assert_not_called()
         self.api.create_commit.assert_not_called()
         self.input.assert_not_called()
 

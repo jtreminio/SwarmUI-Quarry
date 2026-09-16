@@ -1844,6 +1844,8 @@
   var START_ID = "quarry-download-start";
   var REFRESH_ID = "quarry-download-refresh";
   var POLL_MS2 = 800;
+  var hasUpdate = (dataset) => dataset.installed && dataset.updateAvailable === true;
+  var folderUpdateCount = (node) => node.items.filter(hasUpdate).length + node.folders.reduce((count, child) => count + folderUpdateCount(child), 0);
   var sourceOverrides = /* @__PURE__ */ new Map();
   var sourceLeaves = /* @__PURE__ */ new Map();
   for (const source of dataset_sources_default) {
@@ -1892,16 +1894,18 @@
   var renderRemoteDatasetRow = (dataset, displayName = dataset.name, depth = 0, container = null, hidden = false) => {
     const name = escapeHtml(dataset.name);
     const installed = dataset.installed;
+    const updateAvailable = hasUpdate(dataset);
     const rowClass = installed ? "quarry-remote-row quarry-remote-installed" : "quarry-remote-row";
     const hiddenClass = hidden ? " quarry-row-hidden" : "";
     const parentAttr = container ? ` data-parent="${escapeHtml(container)}"` : "";
     const check = installed ? `<span class="quarry-remote-check" title="Installed">✓</span> ` : "";
-    const title = installed ? "Already installed — select to redownload" : "Select to download";
+    const update = updateAvailable ? ' <span class="quarry-remote-update">Update available!</span>' : "";
+    const title = updateAvailable ? "Update available! Select to update" : installed ? "Already installed — select to redownload" : "Select to download";
     return `<tr class="${rowClass}${hiddenClass}" data-dataset="${name}"${parentAttr} style="--quarry-depth: ${depth}">
         <td class="quarry-remote-selcell">
-            <input type="checkbox" class="quarry-remote-select" data-dataset="${name}" data-installed="${installed}" title="${title}" />
+            <input type="checkbox" class="quarry-remote-select" data-dataset="${name}" data-installed="${installed}" data-update="${updateAvailable}" title="${title}" />
         </td>
-        <td class="quarry-remote-name">${check}${renderRemoteDatasetName(dataset.name, displayName)}</td>
+        <td class="quarry-remote-name">${check}${renderRemoteDatasetName(dataset.name, displayName)}${update}</td>
         <td class="quarry-remote-size">${formatBytes(dataset.sizeBytes)}</td>
     </tr>`;
   };
@@ -1910,6 +1914,7 @@
     const collapsed = !expanded.has(node.path);
     const container = datasetFolder(node.path);
     const count = folderDatasetCount(node);
+    const updates = folderUpdateCount(node);
     const hiddenClass = allAncestorsExpanded(container, expanded) ? "" : " quarry-row-hidden";
     const collapsedClass = collapsed ? " quarry-collapsed" : "";
     const parentAttr = container ? ` data-parent="${escapeHtml(container)}"` : "";
@@ -1919,6 +1924,7 @@
                 <span class="quarry-folder-caret" aria-hidden="true"></span>
                 <span class="quarry-folder-name">${escapeHtml(node.name)}</span>
                 <span class="quarry-folder-count" title="${count} dataset(s)">${count}</span>
+                ${updates ? `<span class="quarry-remote-update">${updates} update${updates === 1 ? "" : "s"} available!</span>` : ""}
             </button>
         </td>
     </tr>`;
@@ -1997,7 +2003,9 @@
   var renderNote = () => {
     const repo = repoUrl ? `<a href="${escapeHtml(repoUrl)}" target="_blank" rel="noreferrer noopener">the official collection</a>` : "the official collection";
     const tokenHint = tokenSet ? "" : ` <span class="quarry-download-tokenhint">No HuggingFace token set — this public collection still downloads fine; set a token under the User tab for authenticated downloads.</span>`;
-    return `<div class="quarry-download-note">${currentList.length} dataset(s) from ${repo}. Tick one or more and click Download.${tokenHint}</div>`;
+    const updates = currentList.filter(hasUpdate).length;
+    const updateNotice = updates ? `<div class="quarry-download-updates"><span class="quarry-remote-update">${updates} update${updates === 1 ? "" : "s"} available!</span> <button type="button" class="basic-button quarry-select-updates">Select updates</button></div>` : "";
+    return `<div class="quarry-download-note">${currentList.length} dataset(s) from ${repo}. Select datasets to download or update.${tokenHint}</div>${updateNotice}`;
   };
   var renderList = () => {
     const body2 = document.getElementById(BODY_ID);
@@ -2029,7 +2037,9 @@
   var updateStartButtonState = () => {
     const start = document.getElementById(START_ID);
     if (start) {
-      start.disabled = downloadingName !== null || selectedDatasets().length === 0;
+      const selected = rowCheckboxes().filter((cb) => cb.checked);
+      start.disabled = downloadingName !== null || selected.length === 0;
+      start.textContent = selected.length > 0 && selected.every((cb) => cb.dataset.update === "true") ? "Update selected" : "Download selected";
     }
   };
   var updateSelectAllState = () => {
@@ -2047,7 +2057,7 @@
     if (body2) {
       for (const cb of Array.from(
         body2.querySelectorAll(
-          ".quarry-remote-select, .quarry-remote-selectall"
+          ".quarry-remote-select, .quarry-remote-selectall, .quarry-select-updates"
         )
       )) {
         cb.disabled = downloading;
@@ -2175,7 +2185,10 @@
       const entry = currentList.find((d) => d.name === name);
       if (entry) {
         entry.installed = true;
+        entry.updateAvailable = false;
       }
+      renderList();
+      setControlsDownloading(true);
       completedCount++;
     } else if (status.state === "error") {
       failedNames.push(
@@ -2354,6 +2367,16 @@
   };
   var bodyClickHandler = (event) => {
     const target = event.target;
+    const selectUpdates = target?.closest(
+      ".quarry-select-updates"
+    );
+    if (selectUpdates && !selectUpdates.disabled) {
+      for (const cb of rowCheckboxes()) {
+        cb.checked = cb.dataset.update === "true";
+      }
+      updateSelectAllState();
+      updateStartButtonState();
+    }
     const folderToggle = target?.closest(".quarry-folder-toggle");
     if (folderToggle) {
       toggleFolder(folderToggle);

@@ -468,6 +468,22 @@
     font-weight: 700;
 }
 
+.quarry-remote-update {
+    display: inline-block;
+    margin-left: 0.5em;
+    color: var(--yellow);
+    font-family: var(--bs-body-font-family, sans-serif);
+    font-size: 0.85em;
+    font-weight: 600;
+}
+
+.quarry-download-updates {
+    display: flex;
+    align-items: center;
+    gap: 0.5em;
+    margin-bottom: 0.5em;
+}
+
 .quarry-remote-name {
     font-family: monospace;
     font-weight: 600;

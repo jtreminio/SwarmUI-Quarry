@@ -410,6 +410,7 @@ public class QuarryExtension : Extension
                     ["sizeBytes"] = dataset.SizeBytes,
                     ["fileCount"] = dataset.FileCount,
                     ["installed"] = dataset.Installed,
+                    ["updateAvailable"] = dataset.UpdateAvailable,
                 });
             }
             return new JObject

@@ -32,9 +32,17 @@ Each automatic result and prompt answer is saved atomically as it is recorded. I
 
 `--prune` deletes whole remote datasets that have no matching local path, after uploads succeed. It preserves the README, `.gitattributes`, the source catalog, and hidden trees. It does not remove old files or Lance versions inside datasets that remain locally, and it does not remove source records. A remote commit change between the deletion plan and its commit causes pruning to fail rather than silently applying a stale plan. Without `--prune`, no remote datasets are deleted.
 
-`--dry-run` prints upload candidates, any proposed deletions, and newly discovered source names without uploading, deleting, editing JSON, or prompting. `--catalog /path/to/sources.json` overrides the default checked-in file, whose location is anchored to this extension rather than the current working directory.
+`--dry-run` labels upload candidates `[NEW]` when their destination path is absent from HF, or `[EXISTING]` when it is already present, and prints totals for both. This checks the remote repository independently of the source catalog and works with or without `--prune`. It also prints any proposed deletions and newly discovered source names without uploading, deleting, editing JSON, or prompting. `--catalog /path/to/sources.json` overrides the default checked-in file, whose location is anchored to this extension rather than the current working directory.
 
 The JSON is embedded/bundled into the extension. After changing it, run `npm run build`, review its diff, and include it with the extension update. Rebuild/restart SwarmUI to load backend catalog changes. Sync does not commit changes to this Git repository.
+
+## Dataset updates
+
+The download dialog shows **Update available!** when an installed dataset's `datasetHash` differs from the published hash in `quarry-storage.json`, or when its local descriptor/hash is missing. **Select updates** selects those datasets, including ones in collapsed folders. Opening the dialog uses a five-minute listing cache; **Refresh** checks Hugging Face again. A remote descriptor without a published hash cannot advertise updates yet.
+
+`hf sync` hashes each Lance dataset before upload and writes `datasetHash` into its existing storage descriptor. The hash covers relative file names, file contents, and storage metadata, excluding the hash field itself and hidden local files. A dataset without a descriptor receives a valid descriptor with an empty column mapping. Renaming the dataset directory does not change the hash. Dry runs do not hash or modify datasets. Keep contents stable during sync; rerun sync after modifying a published dataset.
+
+Clients compare only the small JSON descriptors and do not scan or hash installed data. Downloads use a fixed repository commit and include that commit's descriptor. No hashes or version numbers are displayed. To enable updates for existing installations, publish the collection through `hf sync`; older local copies then receive the update badge without needing a preliminary download.
 
 ## Rename behavior
 
