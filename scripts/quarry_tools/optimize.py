@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import os
+import json
+import re
 import shutil
 import sys
 import tempfile
@@ -11,6 +13,49 @@ from pathlib import Path
 from .common import FileError
 from .lowercase import find_datasets, SCALAR_TYPES
 from . import storage
+
+OPTIMIZATION_VERSION = 1
+_SKIPPED = object()
+
+
+def completion_marker(ds):
+    return {"version": OPTIMIZATION_VERSION, "lance_version": ds.version}
+
+
+def _already_optimized(ds, path, *, dry_run):
+    descriptor = path / storage.DESCRIPTOR
+    if not descriptor.exists():
+        return False
+    pairs = storage.read_descriptor(path, ds.schema)
+    marker = json.loads(descriptor.read_text(encoding="utf-8")).get("optimized")
+    if marker is not None and marker != completion_marker(ds):
+        return False
+    text = {f.name for f in ds.schema if storage.is_text(f.type)}
+    if set(pairs) != text or storage.legacy_pairs(ds.schema) or len(ds.versions()) != 1:
+        return False
+    fragments = {f.fragment_id for f in ds.get_fragments()}
+    indexed = {i["fields"][0] for i in ds.list_indices()
+               if i["type"] == "NGram" and len(i["fields"]) == 1
+               and fragments <= set(i["fragment_ids"] or [])}
+    if not text <= indexed:
+        return False
+    # Older completed datasets have the codec descriptor but no completion marker.
+    if marker is None and not dry_run:
+        storage.write_descriptor(path, pairs, optimized=completion_marker(ds))
+    return True
+
+
+def _native_panic(exc):
+    return type(exc).__module__ == "pyo3_runtime" and type(exc).__name__ == "PanicException"
+
+
+def _retryable_write_error(exc):
+    message = str(exc)
+    panic = _native_panic(exc)
+    if re.search(r"Mini-block chunk size \d+ bytes exceeds the 32768 byte metadata limit", message):
+        return isinstance(exc, Exception) or panic
+    # Lance 7 can surface an encoder worker panic instead of the size error.
+    return panic and ("RecvError(())" in message or "assertion failed: chunk_bytes <= max_chunk_size" in message)
 
 
 def index_plan(ds):
@@ -39,6 +84,9 @@ def optimize_dataset(path, emit=print, dry_run=False, *, auto_btree=False):
     if path.is_symlink() or lance_tools._is_managed_internal(path.resolve()):
         raise FileError(f"not a standalone dataset: {path}")
     source = lance.dataset(str(path))
+    if _already_optimized(source, path, dry_run=dry_run):
+        emit(f"  skipped: already optimized (Lance version {source.version})")
+        return _SKIPPED
     plan = index_plan(source)
     reader = storage.logical_reader(source, path)
     expected = storage.LogicalDigest(reader.schema)
@@ -64,7 +112,29 @@ def optimize_dataset(path, emit=print, dry_run=False, *, auto_btree=False):
     previous = os.environ.get("TMPDIR")
     try:
         os.environ["TMPDIR"] = str(work)
-        lance.write_dataset(encoded, str(staged), mode="create", data_storage_version="2.1")
+        attempts = ((65536, True), (1024, True), (1024, False))
+        for attempt, (batch_rows, miniblock) in enumerate(attempts):
+            if attempt:
+                layout = "1,024-row write batches (miniblock)" if miniblock else "Lance's default layout"
+                emit(f"  retrying dataset with {layout}…")
+                reader = storage.logical_reader(source, path, batch_rows=batch_rows)
+                expected = storage.LogicalDigest(reader.schema)
+                encoded, pairs = storage.encoded_reader(reader, expected, miniblock=miniblock)
+            try:
+                lance.write_dataset(encoded, str(staged), mode="create", data_storage_version="2.1")
+                break
+            except BaseException as exc:
+                if not _retryable_write_error(exc):
+                    if _native_panic(exc):
+                        raise FileError(f"Lance writer panicked: {exc}") from exc
+                    raise
+                if attempt == len(attempts) - 1:
+                    raise FileError(f"Lance write failed after layout retries: {exc}") from exc
+                emit(f"  Lance write failed: {exc}")
+            finally:
+                encoded.close()
+            if staged.exists():
+                shutil.rmtree(staged)
         storage.write_descriptor(staged, pairs)
         # Build each index once; prune only after every index is complete.
         lance_tools._build_one(staged, None, [], extra_btree, False, False, True,
@@ -86,6 +156,7 @@ def optimize_dataset(path, emit=print, dry_run=False, *, auto_btree=False):
             raise FileError("rewrite retained unexpected historical versions")
         if lance.dataset(str(path)).version != source.version:
             raise FileError("source changed during migration; refusing replacement")
+        storage.write_descriptor(staged, pairs, optimized=completion_marker(ds))
         path.rename(backup)
         try:
             staged.rename(path)
@@ -117,23 +188,34 @@ def cmd_optimize(args):
         targets = find_datasets(root)
     except FileError as exc:
         raise SystemExit(f"error: {exc}") from exc
-    failed = 0
+    failures = []
+    skipped = processed = 0
     total_before = total_after = 0
     for path in targets:
         print(f"\n=== {path} ===", flush=True)
         try:
             sizes = optimize_dataset(path, lambda line: print(line, flush=True), args.dry_run)
+            if sizes is _SKIPPED:
+                skipped += 1
+                continue
+            processed += 1
             if sizes is not None:
                 before, after = sizes
                 total_before += before
                 total_after += after
         except Exception as exc:
-            failed += 1
-            print(f"  FAIL {path}: {exc}", file=sys.stderr, flush=True)
-    print(f"\n{'Inspected' if args.dry_run else 'Processed'} {len(targets) - failed}/{len(targets)} dataset(s); {failed} failed.")
+            reason = " ".join(str(exc).split()) or type(exc).__name__
+            failures.append((path, reason))
+            print(f"  FAIL {path}: {reason}", file=sys.stderr, flush=True)
+    print(f"\n{'Inspected' if args.dry_run else 'Optimized'} {processed}/{len(targets)} dataset(s); "
+          f"{skipped} skipped; {len(failures)} failed.")
+    if failures:
+        print("Failed datasets:")
+        for path, reason in failures:
+            print(f"  {path}: {reason}")
     if args.dry_run:
         print("Dry run: no datasets changed; size savings not measured.")
-    elif failed == len(targets):
+    elif processed == 0:
         print("No datasets optimized; size savings not measured.")
     else:
         saved = total_before - total_after
@@ -142,7 +224,7 @@ def cmd_optimize(args):
         print(f"  Before:   {_human(total_before)}")
         print(f"  After:    {_human(total_after)}")
         print(f"  {'Saved:' if saved >= 0 else 'Increase:':9} {_human(abs(saved))} ({percentage})")
-    return int(failed > 0)
+    return int(bool(failures))
 
 
 def register(subparsers):

@@ -263,6 +263,9 @@ def index_and_publish(work, output, prompt_column, emit, *, resume=False):
                 os.environ.pop("TMPDIR", None)
             else:
                 os.environ["TMPDIR"] = previous
+    from .optimize import completion_marker
+    ds = lance.dataset(str(staged))
+    storage.write_descriptor(staged, storage.read_descriptor(staged, ds.schema), optimized=completion_marker(ds))
     return publish_dataset(staged, output)
 
 

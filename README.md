@@ -312,6 +312,8 @@ A dataset path processes only that dataset. A regular directory processes its
 immediate child datasets, without recursion, and errors if none are present.
 Datasets are processed sequentially; a failure is reported and the command
 continues with the remaining datasets, returning a nonzero exit status.
+Already-optimized datasets are skipped. The final report counts optimized,
+skipped, and failed datasets and lists each failure with its reason.
 At the end, a size summary shows the total before and after, plus bytes and
 percentage saved (or increased), for successfully optimized datasets. Dry runs
 do not estimate savings.

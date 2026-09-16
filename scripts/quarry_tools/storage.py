@@ -108,11 +108,23 @@ def read_descriptor(path, schema=None):
         raise FileError(f"invalid {file}: {exc}") from exc
 
 
-def write_descriptor(path, pairs):
-    (Path(path) / DESCRIPTOR).write_text(
-        json.dumps({"version": 1, "columns": pairs}, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+def write_descriptor(path, pairs, *, optimized=None):
+    import uuid
+
+    value = {"version": 1, "columns": pairs}
+    if optimized is not None:
+        value["optimized"] = optimized
+    descriptor = Path(path) / DESCRIPTOR
+    temporary = Path(path) / f".{DESCRIPTOR}.{uuid.uuid4().hex}.tmp"
+    with temporary.open("x", encoding="utf-8") as file:
+        try:
+            file.write(json.dumps(value, ensure_ascii=False, indent=2) + "\n")
+            file.close()
+            if descriptor.exists():
+                temporary.chmod(descriptor.stat().st_mode & 0o777)
+            temporary.replace(descriptor)
+        finally:
+            temporary.unlink(missing_ok=True)
 
 
 def is_text(dtype):
@@ -173,7 +185,7 @@ class LogicalDigest:
         return self.rows, [h.hexdigest() for h in self.hashes]
 
 
-def encoded_reader(reader, digest=None):
+def encoded_reader(reader, digest=None, *, miniblock=True):
     """One streaming pass, using DuckDB's lowercase semantics for indexed search."""
     import duckdb
     import pyarrow as pa
@@ -190,7 +202,7 @@ def encoded_reader(reader, digest=None):
     fields = []
     for field in reader.schema:
         metadata = {k: v for k, v in (field.metadata or {}).items() if not k.startswith(b"lance-encoding:")}
-        if field.name in pairs:
+        if miniblock and field.name in pairs:
             metadata[b"lance-encoding:structural-encoding"] = b"miniblock"
         fields.append(field.with_metadata(metadata or None))
     schema = pa.schema(fields + [pa.field(p, pa.binary()) for p in pairs.values()], metadata=reader.schema.metadata)

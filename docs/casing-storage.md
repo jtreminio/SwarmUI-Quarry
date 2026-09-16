@@ -14,7 +14,10 @@ their original names/order. Companions follow the logical columns and are intern
 The text is lowercased using DuckDB `lower`; encoded search also applies DuckDB
 `lower` to the query parameter. Text fields request
 `lance-encoding:structural-encoding = miniblock`, with default compression in Lance
-format 2.1. Binary patches use default encoding. All text fields get NGRAM indexes;
+format 2.1. If optimization hits the miniblock size limit or its known native writer panic,
+it retries with 1,024-row input batches, then with Lance's default layout if needed.
+Each retry restarts the temporary dataset; casing and index guarantees are unchanged.
+Binary patches use default encoding. All text fields get NGRAM indexes;
 short and non-ASCII queries use scanning because the installed NGRAM tokenizer
 cannot reliably answer them (for example, it returns no matches for a CJK-only
 term). ASCII terms of three or more characters retain indexed filtering. Reconstruction happens only for returned
@@ -45,6 +48,16 @@ retained only through publication/rollback. A process or machine crash can leave
 `.quarry-optimize-*` work directories; if publication was interrupted, the original
 may be at `original.lance` inside that directory. Do not remove it until recovery.
 There is no concurrent reader/writer guarantee during directory replacement.
+
+Completed optimization and prep also write an `optimized` object to the descriptor:
+`{"version":1,"lance_version":3}` (the Lance version varies per dataset).
+This records the optimization policy version separately from the casing codec version.
+Optimize skips matching versions after checking the schema, complete text indexes,
+and absence of history, without scanning rows or measuring directory size.
+Older descriptors without this marker are recognized using those metadata checks
+and upgraded atomically without rewriting the dataset. Dry runs do not update JSON.
+Changed Lance versions or optimization policies trigger a rewrite. Default-layout
+fallbacks count as completed optimization too.
 
 Copy or move the entire dataset directory, including the descriptor. Editing its
 physical strings or patches with an unaware Lance client can invalidate the

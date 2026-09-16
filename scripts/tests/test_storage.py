@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout, redirect_stderr
+from datetime import timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -84,6 +85,152 @@ class StorageTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.cli('lance', 'optimize', str(empty))
 
+    def test_completed_dataset_skips_without_reading_rows_or_measuring_size(self):
+        path, _ = self.dataset()
+        optimize_dataset(path, emit=lambda _: None)
+        descriptor = json.loads((path / storage.DESCRIPTOR).read_text())
+        self.assertEqual(descriptor['optimized'], {'version': 1, 'lance_version': lance.dataset(str(path)).version})
+        output = io.StringIO()
+        with patch.object(storage, 'logical_reader', side_effect=AssertionError('read rows')), \
+             patch('quarry_tools.lance._dir_size', side_effect=AssertionError('measured size')), \
+             patch.object(lance, 'write_dataset', side_effect=AssertionError('rewrote data')), \
+             redirect_stdout(output):
+            self.assertEqual(main(['lance', 'optimize', str(path)]), 0)
+        self.assertIn('0/1 dataset(s); 1 skipped; 0 failed', output.getvalue())
+        self.assertNotIn('Size summary', output.getvalue())
+
+    def test_older_completed_descriptor_is_adopted_without_rewrite(self):
+        path, _ = self.dataset()
+        optimize_dataset(path, emit=lambda _: None)
+        ds = lance.dataset(str(path))
+        storage.write_descriptor(path, storage.read_descriptor(path))
+        before = (path / storage.DESCRIPTOR).read_bytes()
+        with patch.object(lance, 'write_dataset', side_effect=AssertionError('rewrote data')):
+            self.assertEqual(self.cli('lance', 'optimize', str(path), '--dry-run'), 0)
+            self.assertEqual((path / storage.DESCRIPTOR).read_bytes(), before)
+            self.assertEqual(self.cli('lance', 'optimize', str(path)), 0)
+        self.assertEqual(json.loads((path / storage.DESCRIPTOR).read_text())['optimized']['lance_version'], ds.version)
+        self.assertEqual(lance.dataset(str(path)).version, ds.version)
+
+    def test_changed_lance_or_optimizer_version_requires_optimization(self):
+        path, _ = self.dataset()
+        optimize_dataset(path, emit=lambda _: None)
+        ds = lance.dataset(str(path))
+        ds.delete('score = 6')
+        expected = storage.logical_reader(lance.dataset(str(path)), path).read_all()
+        self.assertIsInstance(optimize_dataset(path, emit=lambda _: None), tuple)
+        self.assertEqual(storage.logical_reader(lance.dataset(str(path)), path).read_all(), expected)
+        descriptor = json.loads((path / storage.DESCRIPTOR).read_text())
+        descriptor['optimized']['version'] = 0
+        (path / storage.DESCRIPTOR).write_text(json.dumps(descriptor))
+        self.assertIsInstance(optimize_dataset(path, emit=lambda _: None), tuple)
+
+    def test_unfinished_encoding_is_not_skipped(self):
+        path = self.root / 'unindexed.lance'
+        table = pa.table({'prompt': ['Blue CAT'], 'tags': ['CAT']})
+        reader, pairs = storage.encoded_reader(table.to_reader())
+        ds = lance.write_dataset(reader, str(path), data_storage_version='2.1')
+        storage.write_descriptor(path, pairs)
+        ds.create_scalar_index('prompt', 'NGRAM')
+        ds.cleanup_old_versions(older_than=timedelta(0), delete_unverified=True)
+        self.assertIsInstance(optimize_dataset(path, emit=lambda _: None), tuple)
+        self.assertEqual({tuple(i['fields']) for i in lance.dataset(str(path)).list_indices()}, {('prompt',), ('tags',)})
+
+    def test_final_report_lists_failures_and_excludes_skips_from_savings(self):
+        from quarry_tools.optimize import _SKIPPED
+        paths = [self.root / name for name in ('good.lance', 'done.lance', 'bad.lance')]
+        output = io.StringIO()
+        with patch('quarry_tools.optimize.find_datasets', return_value=paths), \
+             patch('quarry_tools.optimize.optimize_dataset', side_effect=[(1000, 500), _SKIPPED, OSError('disk full\nretry later')]), \
+             redirect_stdout(output), redirect_stderr(io.StringIO()):
+            self.assertEqual(main(['lance', 'optimize', str(self.root)]), 1)
+        report = output.getvalue()
+        self.assertIn('1/3 dataset(s); 1 skipped; 1 failed', report)
+        self.assertIn(f'Failed datasets:\n  {paths[2]}: disk full retry later', report)
+        self.assertIn('50.0%', report)
+
+    def test_completion_marker_failure_keeps_existing_descriptor(self):
+        path, _ = self.dataset()
+        storage.write_descriptor(path, {})
+        before = (path / storage.DESCRIPTOR).read_bytes()
+        with patch.object(Path, 'replace', side_effect=OSError('marker failure')), self.assertRaises(OSError):
+            storage.write_descriptor(path, {}, optimized={'version': 1, 'lance_version': 1})
+        self.assertEqual((path / storage.DESCRIPTOR).read_bytes(), before)
+        self.assertFalse(list(path.glob('.*.tmp')))
+
+    def test_descriptor_replacement_preserves_file_permissions(self):
+        reference = self.root / 'reference.json'
+        reference.write_text('{}')
+        storage.write_descriptor(self.root, {})
+        descriptor = self.root / storage.DESCRIPTOR
+        self.assertEqual(descriptor.stat().st_mode & 0o777, reference.stat().st_mode & 0o777)
+        descriptor.chmod(0o640)
+        storage.write_descriptor(self.root, {}, optimized={'version': 1, 'lance_version': 1})
+        self.assertEqual(descriptor.stat().st_mode & 0o777, 0o640)
+
+    def test_write_retries_preserve_values_indexes_and_discard_partial_output(self):
+        size_error = RuntimeError('Mini-block chunk size 35760 bytes exceeds the 32768 byte metadata limit')
+        panic_type = type('PanicException', (BaseException,), {'__module__': 'pyo3_runtime'})
+        for case, failures in enumerate(([size_error], [size_error, size_error],
+                                         [panic_type('RecvError(())'), size_error],
+                                         [panic_type(str(size_error))],
+                                         [panic_type('assertion failed: chunk_bytes <= max_chunk_size')])):
+            with self.subTest(failures=len(failures), first=type(failures[0]).__name__):
+                path, expected = self.dataset(f'retry-{case}.lance')
+                real_write = lance.write_dataset
+                attempts = []
+                messages = []
+
+                def write(reader, destination, **kwargs):
+                    self.assertFalse(Path(destination).exists())
+                    attempts.append(reader.schema.field('prompt').metadata or {})
+                    if len(attempts) <= len(failures):
+                        # Consume data so a stale reader/digest would fail verification.
+                        real_write(reader, destination, **kwargs)
+                        raise failures[len(attempts) - 1]
+                    return real_write(reader, destination, **kwargs)
+
+                with patch.object(lance, 'write_dataset', side_effect=write), patch.object(
+                    storage, 'logical_reader', wraps=storage.logical_reader,
+                ) as readers:
+                    optimize_dataset(path, emit=messages.append)
+                ds = lance.dataset(str(path))
+                self.assertEqual(storage.logical_reader(ds, path).read_all(), expected)
+                self.assertEqual(len(ds.versions()), 1)
+                self.assertEqual({(tuple(i['fields']), i['type']) for i in ds.list_indices()},
+                                 {(('prompt',), 'NGram'), (('tags',), 'NGram'), (('score',), 'Bitmap')})
+                self.assertEqual(len(attempts), len(failures) + 1)
+                key = b'lance-encoding:structural-encoding'
+                self.assertEqual([m.get(key) for m in attempts],
+                                 [b'miniblock', b'miniblock'] + ([None] if len(failures) == 2 else []))
+                self.assertEqual([c.kwargs['batch_rows'] for c in readers.call_args_list if 'batch_rows' in c.kwargs],
+                                 [1024] * len(failures))
+                self.assertTrue(any('1,024-row' in m for m in messages))
+                self.assertEqual(any('default layout' in m for m in messages), len(failures) == 2)
+                self.assertFalse(list(self.root.glob('.quarry-optimize-*')))
+                with patch.object(lance, 'write_dataset', side_effect=AssertionError('rewrote fallback')):
+                    self.assertEqual(self.cli('lance', 'optimize', str(path)), 0)
+
+    def test_write_failure_and_cancellation_keep_original(self):
+        path, _ = self.dataset()
+        before = lance.dataset(str(path)).to_table()
+        version = lance.dataset(str(path)).version
+        panic_type = type('PanicException', (BaseException,), {'__module__': 'pyo3_runtime'})
+        for error, attempts, raised in [
+            (OSError('disk full'), 1, OSError),
+            (KeyboardInterrupt(), 1, KeyboardInterrupt),
+            (panic_type('unrelated native failure'), 1, FileError),
+            (RuntimeError('Mini-block chunk size 35760 bytes exceeds the 32768 byte metadata limit'), 3, FileError),
+        ]:
+            with self.subTest(error=type(error).__name__), patch.object(
+                lance, 'write_dataset', side_effect=error,
+            ) as writer, self.assertRaises(raised):
+                optimize_dataset(path, emit=lambda _: None)
+            self.assertEqual(writer.call_count, attempts)
+            self.assertEqual(lance.dataset(str(path)).to_table(), before)
+            self.assertEqual(lance.dataset(str(path)).version, version)
+            self.assertEqual(list(self.root.iterdir()), [path])
+
     def test_failure_before_publish_keeps_original(self):
         path, _ = self.dataset()
         before = lance.dataset(str(path)).to_table()
@@ -133,6 +280,7 @@ class StorageTests(unittest.TestCase):
         output = self.root / 'prepared.lance'
         self.assertEqual(self.cli('prep', str(path), '-o', str(output), '--columns', 'tags=prompt;score'), 0)
         ds = lance.dataset(str(output))
+        self.assertEqual(json.loads((output / storage.DESCRIPTOR).read_text())['optimized']['lance_version'], ds.version)
         self.assertEqual(storage.logical_reader(ds, output).read_all()['prompt'].to_pylist(), ['Art', 'ÉCOLE', 'City', 'SPACE'])
         self.assertEqual(self.cli('columns', 'reorder', str(output), 'score,prompt'), 0)
         self.assertEqual(self.cli('lance', 'prep', str(output)), 1)
