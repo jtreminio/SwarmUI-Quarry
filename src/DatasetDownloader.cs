@@ -78,9 +78,18 @@ public static class DatasetDownloader
         List<RemoteDataset> result = [];
         foreach (KeyValuePair<string, (long Size, int Count)> kv in byFolder)
         {
-            string name = DatasetNaming.ToName(kv.Key);
-            result.Add(new RemoteDataset(name, kv.Key, kv.Value.Size, kv.Value.Count, isInstalled(kv.Key)));
+            string name = DatasetCatalog.CanonicalName(DatasetNaming.ToName(kv.Key));
+            string localPath = DatasetCatalog.LocalPath(kv.Key);
+            result.Add(new RemoteDataset(name, kv.Key, kv.Value.Size, kv.Value.Count,
+                isInstalled(kv.Key) || (localPath != kv.Key && isInstalled(localPath))));
         }
+        // The collection may publish both legacy and canonical names during the transition.
+        result = [.. result.GroupBy(d => d.Name, StringComparer.OrdinalIgnoreCase).Select(group =>
+        {
+            RemoteDataset preferred = group.OrderBy(d => d.RepoPath != DatasetCatalog.LocalPath(d.RepoPath))
+                .ThenBy(d => d.RepoPath, StringComparer.Ordinal).First();
+            return preferred with { Installed = group.Any(d => d.Installed) };
+        })];
         result.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
         return result;
     }
@@ -190,7 +199,8 @@ public static class DatasetDownloader
         }
         try
         {
-            return Directory.Exists(Path.Combine(folder, repoPath));
+            return Directory.Exists(Path.Combine(folder, DatasetCatalog.LocalPath(repoPath)))
+                || Directory.Exists(Path.Combine(folder, repoPath));
         }
         catch
         {
@@ -252,7 +262,8 @@ public static class DatasetDownloader
         {
             return (false, $"Could not reach HuggingFace: {ex.Message}", 0);
         }
-        RemoteDataset target = available.FirstOrDefault(d => string.Equals(d.Name, datasetName, StringComparison.OrdinalIgnoreCase));
+        string canonicalName = DatasetCatalog.CanonicalName(datasetName);
+        RemoteDataset target = available.FirstOrDefault(d => string.Equals(d.Name, canonicalName, StringComparison.OrdinalIgnoreCase));
         if (target is null)
         {
             return (false, $"Unknown dataset '{datasetName}'.", 0);
@@ -284,7 +295,7 @@ public static class DatasetDownloader
     private static async Task RunDownloadAsync(RemoteDataset target, bool redownload, string token, int id, CancellationToken cancel)
     {
         string folder = DatasetManager.DatasetsFolder;
-        string finalDir = Path.Combine(folder, target.RepoPath);
+        string finalDir = Path.Combine(folder, DatasetCatalog.LocalPath(target.RepoPath));
         string parentDir = Path.GetDirectoryName(finalDir);
         string leaf = Path.GetFileName(finalDir);
         string tempDir = Path.Combine(parentDir, $".{leaf}.swarmdl-tmp");

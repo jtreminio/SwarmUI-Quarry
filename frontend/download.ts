@@ -1,3 +1,4 @@
+import datasetSources from "../dataset-sources.json";
 import type {
     AvailableDatasetsResponse,
     DownloadStatusResponse,
@@ -24,19 +25,47 @@ const START_ID = "quarry-download-start";
 const REFRESH_ID = "quarry-download-refresh";
 const POLL_MS = 800;
 
+const sourceOverrides = new Map<string, string | null>();
+const sourceLeaves = new Map<
+    string,
+    { name: string; url: string | null } | null
+>();
+for (const source of datasetSources) {
+    for (const name of [source.name, source.alias]) {
+        if (name == null) {
+            continue;
+        }
+        const url = source.sourceUrl || null;
+        sourceOverrides.set(name.toLowerCase(), url);
+        const leaf = datasetLeafName(name).toLowerCase();
+        if (!sourceLeaves.has(leaf)) {
+            sourceLeaves.set(leaf, { name: source.name, url });
+        } else if (sourceLeaves.get(leaf)?.name !== source.name) {
+            sourceLeaves.set(leaf, null);
+        }
+    }
+}
+for (const [leaf, source] of sourceLeaves) {
+    if (source && !sourceOverrides.has(leaf)) {
+        sourceOverrides.set(leaf, source.url);
+    }
+}
+
 export const sourceRepoUrl = (name: string): string | null => {
-    const top = name.split("/")[0];
-    if (top.length === 0) {
+    const key = name.toLowerCase();
+    if (sourceOverrides.has(key)) {
+        return sourceOverrides.get(key) ?? null;
+    }
+    // Category folders precede the org.repo segment; later dots name subsets.
+    const source = name.split("/").find((segment) => segment.includes("."));
+    if (!source) {
         return null;
     }
-    const dot = top.indexOf(".");
-    if (dot < 0) {
-        return `https://huggingface.co/${top}`;
-    }
-    if (dot === 0 || dot >= top.length - 1) {
+    const [org, repo] = source.split(".");
+    if (!org || !repo) {
         return null;
     }
-    return `https://huggingface.co/datasets/${top.slice(0, dot)}/${top.slice(dot + 1)}`;
+    return `https://huggingface.co/datasets/${encodeURIComponent(org)}/${encodeURIComponent(repo)}`;
 };
 
 export const renderRemoteDatasetName = (
@@ -48,7 +77,7 @@ export const renderRemoteDatasetName = (
     if (!url) {
         return label;
     }
-    return `<a class="quarry-remote-link" href="${escapeHtml(url)}" target="_blank" rel="noreferrer noopener" title="Open ${escapeHtml(name)} on HuggingFace">${label}</a>`;
+    return `<a class="quarry-remote-link" href="${escapeHtml(url)}" target="_blank" rel="noreferrer noopener" title="Open source for ${escapeHtml(name)}">${label}</a>`;
 };
 
 export const renderRemoteDatasetRow = (

@@ -1187,6 +1187,655 @@
     });
   };
 
+  // dataset-sources.json
+  var dataset_sources_default = [
+    {
+      name: "music/webshart.suno-various-94k",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/webshart/suno-various-94k"
+    },
+    {
+      name: "nl/Aconexx.CivitAI-Flux-Prompts",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/Aconexx/CivitAI-Flux-Prompts"
+    },
+    {
+      name: "nl/agentlans.stock-photos-asian-people",
+      alias: "nl/agentlans-stock-photos-asian-people",
+      sourceUrl: "https://huggingface.co/datasets/agentlans/stock-photos-asian-people"
+    },
+    {
+      name: "nl/akba08.ultra-realistic-cinematic-photography",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/akba08/ultra-realistic-cinematic-photography"
+    },
+    {
+      name: "nl/AlekseyKorshuk.midjourney-prompts-text-dedup",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/AlekseyKorshuk/midjourney-prompts-text-dedup"
+    },
+    {
+      name: "nl/AlekseyKorshuk.product-photography-v1-tiny-prompts-tasks-collage-filtered",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/AlekseyKorshuk/product-photography-v1-tiny-prompts-tasks-collage-filtered"
+    },
+    {
+      name: "nl/AliN96.midjourney-prompts-embeddings",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/AliN96/midjourney-prompts-embeddings"
+    },
+    {
+      name: "nl/BaiqiL.GenAI-Bench",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/BaiqiL/GenAI-Bench"
+    },
+    {
+      name: "nl/CaptionEmporium.flickr-megalith-10m-internvl2-multi-caption",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/CaptionEmporium/flickr-megalith-10m-internvl2-multi-caption"
+    },
+    {
+      name: "nl/CaptionEmporium.laion-pop-llama3.2-11b",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/CaptionEmporium/laion-pop-llama3.2-11b"
+    },
+    {
+      name: "nl/CaptionEmporium.midjourney-niji-1m-llavanext",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/CaptionEmporium/midjourney-niji-1m-llavanext"
+    },
+    {
+      name: "nl/caqlayan.prompts2",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/caqlayan/prompts2"
+    },
+    {
+      name: "nl/chinoll.Danbooru2024-Webp-4MPixel-NL",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/chinoll/Danbooru2024-Webp-4MPixel-NL"
+    },
+    {
+      name: "nl/ChrisGoringe.flux_prompts",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/ChrisGoringe/flux_prompts"
+    },
+    {
+      name: "nl/CodeGoat24.UniGenBench",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/CodeGoat24/UniGenBench"
+    },
+    {
+      name: "nl/codeShare.chroma_prompts.anime_captions",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/codeShare/chroma_prompts"
+    },
+    {
+      name: "nl/codeShare.chroma_prompts.photoreal",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/codeShare/chroma_prompts"
+    },
+    {
+      name: "nl/codeShare.chroma_prompts.reddit_captions",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/codeShare/chroma_prompts"
+    },
+    {
+      name: "nl/csuhan.midjourney-prompts-FLUX",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/csuhan/midjourney-prompts-FLUX"
+    },
+    {
+      name: "nl/DamarJati.mj-disney",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/DamarJati/mj-disney"
+    },
+    {
+      name: "nl/DamarJati.SD-Prompts",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/DamarJati/SD-Prompts"
+    },
+    {
+      name: "nl/dartags.danbooru-2408-blind-captions",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/dartags/danbooru-2408-blind-captions"
+    },
+    {
+      name: "nl/dnkdnk.CVTG-2K",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/dnkdnk/CVTG-2K"
+    },
+    {
+      name: "nl/Doub7e.ArtBench-2-gpt4o-captions",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/Doub7e/ArtBench-2-gpt4o-captions"
+    },
+    {
+      name: "nl/dvilasuero.awesome_hunyuanImage_prompts",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/dvilasuero/awesome_hunyuanImage_prompts"
+    },
+    {
+      name: "nl/Falah.new_photorealistic_prompts",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/Falah/new_photorealistic_prompts"
+    },
+    {
+      name: "nl/Falah.varied_portrait_prompts",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/Falah/varied_portrait_prompts"
+    },
+    {
+      name: "nl/Felldude.84k_40GB_Captioned_2k_XXX_Images",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/Felldude/84k_40GB_Captioned_2k_XXX_Images"
+    },
+    {
+      name: "nl/Felldude.Human_Corpus_Small",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/Felldude/Human_Corpus_Small"
+    },
+    {
+      name: "nl/Felldude.xxx_hdr_13GB",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/Felldude/xxx_hdr_13GB"
+    },
+    {
+      name: "nl/gaodrew.midjourney-prompts-highquality",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/gaodrew/midjourney-prompts-highquality"
+    },
+    {
+      name: "nl/Geonmo.midjourney-prompts-only",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/Geonmo/midjourney-prompts-only"
+    },
+    {
+      name: "nl/GHonem.fashion_image_caption-3500",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/GHonem/fashion_image_caption-3500"
+    },
+    {
+      name: "nl/isidentical.random-stable-diffusion-prompts",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/isidentical/random-stable-diffusion-prompts"
+    },
+    {
+      name: "nl/jgreely.c1ga",
+      alias: "nl/jgreely-c1ga",
+      sourceUrl: "https://github.com/jgreely/c1ga"
+    },
+    {
+      name: "nl/jorgevipo.image_prompts_dataset",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/jorgevipo/image_prompts_dataset"
+    },
+    {
+      name: "nl/juliaturc.captioned-cartoons",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/juliaturc/captioned-cartoons"
+    },
+    {
+      name: "nl/k-mktr.improved-flux-prompts",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/k-mktr/improved-flux-prompts"
+    },
+    {
+      name: "nl/k-mktr.improved-flux-prompts-photoreal-portrait",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/k-mktr/improved-flux-prompts-photoreal-portrait"
+    },
+    {
+      name: "nl/k-mktr.trending-text-to-image",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/k-mktr/trending-text-to-image"
+    },
+    {
+      name: "nl/k-mktr.z-image-ethnicity-test",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/k-mktr/z-image-ethnicity-test"
+    },
+    {
+      name: "nl/k-mktr.z-image-examples",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/k-mktr/z-image-examples"
+    },
+    {
+      name: "nl/kaupane.vintage-photography-captions",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/kaupane/vintage-photography-captions"
+    },
+    {
+      name: "nl/KBlueLeaf.danbooru2023-florence2-caption",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/KBlueLeaf/danbooru2023-florence2-caption"
+    },
+    {
+      name: "nl/lioooox.T2I-CoReBench",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/lioooox/T2I-CoReBench"
+    },
+    {
+      name: "nl/Mediocreatmybest.Miscellany_of_Australian_Historical_Photography",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/Mediocreatmybest/Miscellany_of_Australian_Historical_Photography"
+    },
+    {
+      name: "nl/mnemic.200k-random-prompts",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/mnemic/200k-random-prompts"
+    },
+    {
+      name: "nl/MohamedRashad.midjourney-detailed-prompts",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/MohamedRashad/midjourney-detailed-prompts"
+    },
+    {
+      name: "nl/nixiieee.wikiart_captions",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/nixiieee/wikiart_captions"
+    },
+    {
+      name: "nl/opendiffusionai.pexels-woman-croppable",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/opendiffusionai/pexels-woman-croppable"
+    },
+    {
+      name: "nl/ossaili.archdaily_30k_captioned",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/ossaili/archdaily_30k_captioned"
+    },
+    {
+      name: "nl/Owen777.9M_77Token_SDXL_Prompts",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/Owen777/9M_77Token_SDXL_Prompts"
+    },
+    {
+      name: "nl/Pratofeitoo.fashion_photography_prompts_SDXL",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/Pratofeitoo/fashion_photography_prompts_SDXL"
+    },
+    {
+      name: "nl/quarterturn.danbooru-1024-eq-captioned",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/quarterturn/danbooru-1024-eq-captioned"
+    },
+    {
+      name: "nl/quik-models.captions-100k",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/quik-models/captions-100k"
+    },
+    {
+      name: "nl/RicemanT.Anime-Background-Finetuning-V1.1.screencap",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/RicemanT/Anime-Background-Finetuning-V1.1"
+    },
+    {
+      name: "nl/RicemanT.booru-essence-2026.danbooru",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/RicemanT/booru-essence-2026"
+    },
+    {
+      name: "nl/RicemanT.booru-essence-2026.e621",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/RicemanT/booru-essence-2026"
+    },
+    {
+      name: "nl/roborovski.upsampled-prompts-parti",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/roborovski/upsampled-prompts-parti"
+    },
+    {
+      name: "nl/sengunsipahi.civitai_top10k",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/sengunsipahi/civitai_top10k"
+    },
+    {
+      name: "nl/SilentAntagonist.vintage-artworks-60k-captioned",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/SilentAntagonist/vintage-artworks-60k-captioned"
+    },
+    {
+      name: "nl/SilentAntagonist.vintage-photography-450k-high-quality-captions",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/SilentAntagonist/vintage-photography-450k-high-quality-captions"
+    },
+    {
+      name: "nl/svjack.conceptual_captions_3m_en_tiny",
+      alias: "nl/svjack-conceptual_captions_3m_en_tiny",
+      sourceUrl: "https://huggingface.co/datasets/svjack/conceptual_captions_3m_en_tiny"
+    },
+    {
+      name: "nl/taoki.stair-captions-prompts",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/taoki/stair-captions-prompts"
+    },
+    {
+      name: "nl/tommmyhug.concept-art-female-anime-realism-fantasy-cyberpunk-steampunk-post-apocalypse-art-prompts",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/tommmyhug/concept-art-female-anime-realism-fantasy-cyberpunk-steampunk-post-apocalypse-art-prompts"
+    },
+    {
+      name: "nl/unography.shopify-stock-images-2048-captioned",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/unography/shopify-stock-images-2048-captioned"
+    },
+    {
+      name: "nl/victorzarzu.interior-design-edit-captions",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/victorzarzu/interior-design-edit-captions"
+    },
+    {
+      name: "nl/visheratin.unsplash-caption-questions-init",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/visheratin/unsplash-caption-questions-init"
+    },
+    {
+      name: "nl/webshart.pseudo-camera-10k-structured",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/webshart/pseudo-camera-10k-structured"
+    },
+    {
+      name: "nl/webshart.terminusresearch-photo-aesthetics",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/webshart/terminusresearch-photo-aesthetics"
+    },
+    {
+      name: "nl/webshart.terminusresearch-photo-anatomy",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/webshart/terminusresearch-photo-anatomy"
+    },
+    {
+      name: "nl/webshart.terminusresearch-photo-typography",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/webshart/terminusresearch-photo-typography"
+    },
+    {
+      name: "short-stories/agentlans.Gemma-2-Ataraxy-9B-short-stories",
+      alias: "short-stories/agentlans-Gemma-2-Ataraxy-9B-short-stories",
+      sourceUrl: "https://huggingface.co/datasets/agentlans/Gemma-2-Ataraxy-9B-short-stories"
+    },
+    {
+      name: "short-stories/agentlans.lemonilia-LimaRP",
+      alias: "short-stories/agentlans-lemonilia-LimaRP",
+      sourceUrl: "https://huggingface.co/datasets/agentlans/lemonilia-LimaRP"
+    },
+    {
+      name: "short-stories/agentlans.lemonilia-LimaRP.scenario",
+      alias: "short-stories/agentlans-lemonilia-LimaRP-scenario",
+      sourceUrl: "https://huggingface.co/datasets/agentlans/lemonilia-LimaRP"
+    },
+    {
+      name: "short-stories/agentlans.lemonilia-LimaRP.user_description",
+      alias: "short-stories/agentlans-lemonilia-LimaRP-user_description",
+      sourceUrl: "https://huggingface.co/datasets/agentlans/lemonilia-LimaRP"
+    },
+    {
+      name: "short-stories/agentlans.literary-genre-examples",
+      alias: "short-stories/agentlans-literary-genre-examples",
+      sourceUrl: "https://huggingface.co/datasets/agentlans/literary-genre-examples"
+    },
+    {
+      name: "short-stories/agentlans.literary-reasoning",
+      alias: "short-stories/agentlans-literary-reasoning",
+      sourceUrl: "https://huggingface.co/datasets/agentlans/literary-reasoning"
+    },
+    {
+      name: "short-stories/agentlans.prompt-difficulty",
+      alias: "short-stories/agentlans-prompt-difficulty",
+      sourceUrl: "https://huggingface.co/datasets/agentlans/prompt-difficulty"
+    },
+    {
+      name: "short-stories/allura-org.r_shortstories_24k",
+      alias: "short-stories/allura-org-r_shortstories_24k",
+      sourceUrl: "https://huggingface.co/datasets/allura-org/r_shortstories_24k"
+    },
+    {
+      name: "short-stories/allura-org.SynthRP-RpR-converted",
+      alias: "short-stories/allura-org-SynthRP-RpR-converted",
+      sourceUrl: "https://huggingface.co/datasets/allura-org/SynthRP-RpR-converted"
+    },
+    {
+      name: "short-stories/athena-ml.gpt4_short_stories_with_tokens",
+      alias: "short-stories/athena-ml-gpt4_short_stories_with_tokens",
+      sourceUrl: "https://huggingface.co/datasets/athena-ml/gpt4_short_stories_with_tokens"
+    },
+    {
+      name: "short-stories/Chat-Error.tinystories-gpt4.eval",
+      alias: "short-stories/Chat-Error-tinystories-gpt4-eval",
+      sourceUrl: "https://huggingface.co/datasets/Chat-Error/tinystories-gpt4"
+    },
+    {
+      name: "short-stories/Chat-Error.tinystories-gpt4.train",
+      alias: "short-stories/Chat-Error-tinystories-gpt4-train",
+      sourceUrl: "https://huggingface.co/datasets/Chat-Error/tinystories-gpt4"
+    },
+    {
+      name: "short-stories/DataMajin.Data-Majin_Short-Stories",
+      alias: "short-stories/DataMajin-Data-Majin_Short-Stories",
+      sourceUrl: "https://huggingface.co/datasets/DataMajin/Data-Majin_Short-Stories"
+    },
+    {
+      name: "short-stories/dltdojo.park-tinystories-533k",
+      alias: "short-stories/dltdojo-park-tinystories-533k",
+      sourceUrl: "https://huggingface.co/datasets/dltdojo/park-tinystories-533k"
+    },
+    {
+      name: "short-stories/lordgrim18.short-stories",
+      alias: "short-stories/lordgrim18-short-stories",
+      sourceUrl: "https://huggingface.co/datasets/lordgrim18/short-stories"
+    },
+    {
+      name: "short-stories/NewEden-Forge.Erebus-R_ShortStories-Combined",
+      alias: "short-stories/NewEden-Forge-Erebus-R_ShortStories-Combined",
+      sourceUrl: "https://huggingface.co/datasets/NewEden-Forge/Erebus-R_ShortStories-Combined"
+    },
+    {
+      name: "short-stories/roneneldan.TinyStories",
+      alias: "short-stories/roneneldan-TinyStories",
+      sourceUrl: "https://huggingface.co/datasets/roneneldan/TinyStories"
+    },
+    {
+      name: "short-stories/roneneldan.TinyStories.TinyStoriesV2-GPT4-train",
+      alias: "short-stories/TinyStoriesV2-GPT4-train",
+      sourceUrl: "https://huggingface.co/datasets/roneneldan/TinyStories"
+    },
+    {
+      name: "short-stories/SicariusSicariiStuff.No_Robots_ShareGPT",
+      alias: "short-stories/SicariusSicariiStuff-No_Robots_ShareGPT",
+      sourceUrl: "https://huggingface.co/datasets/SicariusSicariiStuff/No_Robots_ShareGPT"
+    },
+    {
+      name: "short-stories/SicariusSicariiStuff.Reddit_Dirty_Writing_Prompts_ShareGPT",
+      alias: "short-stories/SicariusSicariiStuff-Reddit_Dirty_Writing_Prompts_ShareGPT",
+      sourceUrl: "https://huggingface.co/datasets/SicariusSicariiStuff/Reddit_Dirty_Writing_Prompts_ShareGPT"
+    },
+    {
+      name: "short-stories/SicariusSicariiStuff.Short_Stories_ShareGPT.Short_Stories_ShareGPT1",
+      alias: "short-stories/SicariusSicariiStuff-Short_Stories_ShareGPT1",
+      sourceUrl: "https://huggingface.co/datasets/SicariusSicariiStuff/Short_Stories_ShareGPT"
+    },
+    {
+      name: "short-stories/skeskinen.TinyStories-hf",
+      alias: "short-stories/skeskinen-TinyStories-hf",
+      sourceUrl: "https://huggingface.co/datasets/skeskinen/TinyStories-hf"
+    },
+    {
+      name: "tags/chengli-thu.anime-character-prompt-15k",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/chengli-thu/anime-character-prompt-15k"
+    },
+    {
+      name: "tags/civitai",
+      alias: null,
+      sourceUrl: null
+    },
+    {
+      name: "tags/civitai.author_prompts",
+      alias: null,
+      sourceUrl: null
+    },
+    {
+      name: "tags/CyberHarem",
+      alias: null,
+      sourceUrl: "https://huggingface.co/CyberHarem"
+    },
+    {
+      name: "tags/daspartho.stable-diffusion-prompts",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/daspartho/stable-diffusion-prompts"
+    },
+    {
+      name: "tags/deepghs.sankaku_full",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/deepghs/sankaku_full"
+    },
+    {
+      name: "tags/Falah.anime_arabic_style_prompts",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/Falah/anime_arabic_style_prompts"
+    },
+    {
+      name: "tags/FredZhang7.anime-prompts-180K",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/FredZhang7/anime-prompts-180K"
+    },
+    {
+      name: "tags/gnokit.stable-diffusion-prompts",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/gnokit/stable-diffusion-prompts"
+    },
+    {
+      name: "tags/Gustavosta.Stable-Diffusion-Prompts",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/Gustavosta/Stable-Diffusion-Prompts"
+    },
+    {
+      name: "tags/huzaib.stable-diffusion-prompts",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/huzaib/stable-diffusion-prompts"
+    },
+    {
+      name: "tags/jtatman.stable-diffusion-prompts-stats-full-uncensored",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/jtatman/stable-diffusion-prompts-stats-full-uncensored"
+    },
+    {
+      name: "tags/jtatman.stable-diffusion-prompts-uncensored",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/jtatman/stable-diffusion-prompts-uncensored"
+    },
+    {
+      name: "tags/llaa33219.danbooru-anime-screenshot",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/llaa33219/danbooru-anime-screenshot"
+    },
+    {
+      name: "tags/MingSafeR.anime_porn_image_prompts",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/MingSafeR/anime_porn_image_prompts"
+    },
+    {
+      name: "tags/MingSafeR.photo_porn_image_prompts",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/MingSafeR/photo_porn_image_prompts"
+    },
+    {
+      name: "tags/moescape",
+      alias: null,
+      sourceUrl: null
+    },
+    {
+      name: "tags/Nelis.Midjourney_Stable_Diffusion_prompts",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/Nelis/Midjourney_Stable_Diffusion_prompts"
+    },
+    {
+      name: "tags/Nelis.prompts",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/Nelis/prompts"
+    },
+    {
+      name: "tags/NewEden.CivitAI-SD-Prompts",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/NewEden/CivitAI-SD-Prompts"
+    },
+    {
+      name: "tags/poloclub.diffusiondb",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/poloclub/diffusiondb"
+    },
+    {
+      name: "tags/succinctly.midjourney-prompts",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/succinctly/midjourney-prompts"
+    },
+    {
+      name: "tags/suriyagunasekar.midjourney-prompts",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/suriyagunasekar/midjourney-prompts"
+    },
+    {
+      name: "tags/ThetaCursed.danbooru-2026-clean-metadata",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/ThetaCursed/danbooru-2026-clean-metadata"
+    },
+    {
+      name: "tags/WoWoWoWololo.stable_diffusion_female_prompts",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/WoWoWoWololo/stable_diffusion_female_prompts"
+    },
+    {
+      name: "tags/wtcherr.midjourney-prompts",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/wtcherr/midjourney-prompts"
+    },
+    {
+      name: "tags/X779.Danbooruwildcards.characters_str_tags_danbooru_full",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/X779/Danbooruwildcards"
+    },
+    {
+      name: "tags/X779.Danbooruwildcards/characters_str_tags_danbooru_full",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/X779/Danbooruwildcards"
+    },
+    {
+      name: "video/AdwolfCzar.bouncing_body_jiggle_dataset_captioned_30-07",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/AdwolfCzar/bouncing_body_jiggle_dataset_captioned_30-07"
+    },
+    {
+      name: "video/DSULT-Core.i-love-anime-sakuga.aesthetic",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/DSULT-Core/i-love-anime-sakuga"
+    },
+    {
+      name: "video/DSULT-Core.i-love-anime-sakuga.full",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/DSULT-Core/i-love-anime-sakuga"
+    },
+    {
+      name: "video/GokuScraper.seedance-2-prompts-datasets",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/GokuScraper/seedance-2-prompts-datasets"
+    },
+    {
+      name: "video/MultimodalFriends.AcitvityNet-Captions-bootstrapped-5K",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/MultimodalFriends/AcitvityNet-Captions-bootstrapped-5K"
+    },
+    {
+      name: "video/svjack.Goku_MovieGenBench_Videos_Captioned",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/svjack/Goku_MovieGenBench_Videos_Captioned"
+    },
+    {
+      name: "video/webshart.OpenVid-1M-webshart-indices",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/webshart/OpenVid-1M-webshart-indices"
+    }
+  ];
+
   // frontend/download.ts
   var MODAL_ID = "quarry-download-modal";
   var BODY_ID = "quarry-download-body";
@@ -1195,19 +1844,42 @@
   var START_ID = "quarry-download-start";
   var REFRESH_ID = "quarry-download-refresh";
   var POLL_MS2 = 800;
+  var sourceOverrides = /* @__PURE__ */ new Map();
+  var sourceLeaves = /* @__PURE__ */ new Map();
+  for (const source of dataset_sources_default) {
+    for (const name of [source.name, source.alias]) {
+      if (name == null) {
+        continue;
+      }
+      const url = source.sourceUrl || null;
+      sourceOverrides.set(name.toLowerCase(), url);
+      const leaf = datasetLeafName(name).toLowerCase();
+      if (!sourceLeaves.has(leaf)) {
+        sourceLeaves.set(leaf, { name: source.name, url });
+      } else if (sourceLeaves.get(leaf)?.name !== source.name) {
+        sourceLeaves.set(leaf, null);
+      }
+    }
+  }
+  for (const [leaf, source] of sourceLeaves) {
+    if (source && !sourceOverrides.has(leaf)) {
+      sourceOverrides.set(leaf, source.url);
+    }
+  }
   var sourceRepoUrl = (name) => {
-    const top = name.split("/")[0];
-    if (top.length === 0) {
+    const key = name.toLowerCase();
+    if (sourceOverrides.has(key)) {
+      return sourceOverrides.get(key) ?? null;
+    }
+    const source = name.split("/").find((segment) => segment.includes("."));
+    if (!source) {
       return null;
     }
-    const dot = top.indexOf(".");
-    if (dot < 0) {
-      return `https://huggingface.co/${top}`;
-    }
-    if (dot === 0 || dot >= top.length - 1) {
+    const [org, repo] = source.split(".");
+    if (!org || !repo) {
       return null;
     }
-    return `https://huggingface.co/datasets/${top.slice(0, dot)}/${top.slice(dot + 1)}`;
+    return `https://huggingface.co/datasets/${encodeURIComponent(org)}/${encodeURIComponent(repo)}`;
   };
   var renderRemoteDatasetName = (name, displayName = name) => {
     const label = escapeHtml(displayName);
@@ -1215,7 +1887,7 @@
     if (!url) {
       return label;
     }
-    return `<a class="quarry-remote-link" href="${escapeHtml(url)}" target="_blank" rel="noreferrer noopener" title="Open ${escapeHtml(name)} on HuggingFace">${label}</a>`;
+    return `<a class="quarry-remote-link" href="${escapeHtml(url)}" target="_blank" rel="noreferrer noopener" title="Open source for ${escapeHtml(name)}">${label}</a>`;
   };
   var renderRemoteDatasetRow = (dataset, displayName = dataset.name, depth = 0, container = null, hidden = false) => {
     const name = escapeHtml(dataset.name);

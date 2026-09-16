@@ -1,7 +1,4 @@
-"""`quarry hf` subcommands: fetch datasets from the Hugging Face Hub.
-
-huggingface_hub is imported lazily inside the command functions.
-"""
+"""huggingface_hub is imported lazily inside the command functions."""
 
 from __future__ import annotations
 
@@ -394,6 +391,9 @@ def _add_download_options(p) -> None:
 
 
 def register(subparsers) -> None:
+    from . import hf_sync
+
+    hf_sync.register(subparsers)
     p = subparsers.add_parser(
         "download-range",
         help="download a sequential range of files from a HF repo",

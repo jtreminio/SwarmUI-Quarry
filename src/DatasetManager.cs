@@ -14,6 +14,7 @@ public static class DatasetManager
     public static string CacheFolder => DatasetCache.CacheFolder;
     public static bool IsActive => !string.IsNullOrWhiteSpace(DatasetsFolder);
     private static readonly ConcurrentDictionary<string, DatasetEntry> Datasets = new();
+    private static readonly object SyncLock = new();
     public const int DefaultPreviewLimit = 100;
     public const int MaxPreviewLimit = 10000;
     private static DuckDbQueryBackend _backend;
@@ -78,7 +79,13 @@ public static class DatasetManager
         {
             return entry;
         }
-        string moved = DatasetNameMatching.MatchMissingDirectory(name, AllDatasetNames);
+        string canonical = DatasetCatalog.CanonicalName(name);
+        if (Datasets.TryGetValue(canonical.ToLowerFast(), out entry))
+        {
+            return entry;
+        }
+        string moved = DatasetNameMatching.MatchMissingDirectory(name, AllDatasetNames)
+            ?? DatasetNameMatching.MatchMissingDirectory(canonical, AllDatasetNames);
         return moved is not null && Datasets.TryGetValue(moved.ToLowerFast(), out DatasetEntry movedEntry) ? movedEntry : null;
     }
 
@@ -318,6 +325,14 @@ public static class DatasetManager
 
     public static void Sync()
     {
+        lock (SyncLock)
+        {
+            SyncCore();
+        }
+    }
+
+    private static void SyncCore()
+    {
         if (!IsActive)
         {
             Datasets.Clear();
@@ -331,6 +346,7 @@ public static class DatasetManager
                 Logs.Warning($"Quarry: datasets folder does not exist: '{root}'");
                 return;
             }
+            DatasetMigrator.RenameKnownDatasets(root, () => _backend?.Reset());
             HashSet<string> seen = [];
             bool contentChanged = false;
             foreach (string datasetPath in DatasetScanner.Enumerate(root))

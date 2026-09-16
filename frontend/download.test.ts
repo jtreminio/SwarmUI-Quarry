@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@jest/globals";
+import datasetSources from "../dataset-sources.json";
 import {
     progressPercent,
     renderProgressInfo,
@@ -147,6 +148,10 @@ describe("renderRemoteDatasets", () => {
             'data-dataset="tags/X779.Danbooruwildcards/DTR2024_1girl" data-parent="tags/X779.Danbooruwildcards"',
         );
         expect(html).toContain(">DTR2024_1girl</a>");
+        expect(html).toContain(
+            'href="https://huggingface.co/datasets/X779/Danbooruwildcards"',
+        );
+        expect(html).not.toContain('href="https://huggingface.co/tags"');
     });
 });
 
@@ -175,48 +180,60 @@ describe("renderRemoteFolderHeaderRow", () => {
 });
 
 describe("sourceRepoUrl", () => {
-    it("maps a dataset name to its source repo by replacing the first dot with a slash", () => {
-        expect(sourceRepoUrl("Gustavosta.Stable-Diffusion-Prompts")).toBe(
-            "https://huggingface.co/datasets/Gustavosta/Stable-Diffusion-Prompts",
-        );
-        expect(sourceRepoUrl("succinctly.midjourney-prompts")).toBe(
-            "https://huggingface.co/datasets/succinctly/midjourney-prompts",
-        );
+    it.each(
+        datasetSources,
+    )("uses verified attribution for $name and its optional alias", (entry) => {
+        for (const name of [entry.name, entry.alias]) {
+            if (name == null) {
+                continue;
+            }
+            expect(sourceRepoUrl(name)).toBe(entry.sourceUrl);
+            expect(sourceRepoUrl(name.toUpperCase())).toBe(entry.sourceUrl);
+            expect(sourceRepoUrl(name.split("/").pop())).toBe(entry.sourceUrl);
+        }
     });
 
-    it("splits on the first dot only, leaving later dots in the repo name", () => {
-        // HuggingFace org/user names never contain a dot, so the first dot is always the `/` separator;
-        // any further dots belong to the repo name and are preserved.
-        expect(sourceRepoUrl("org.repo.v2")).toBe(
-            "https://huggingface.co/datasets/org/repo.v2",
+    it("credits jgreely on GitHub and keeps sources without URLs unlinked", () => {
+        expect(sourceRepoUrl("nl/jgreely-c1ga")).toBe(
+            "https://github.com/jgreely/c1ga",
         );
-    });
-
-    it("derives the source repo from the top-level folder for a nested dataset", () => {
-        // Nested datasets carry a "parent/leaf" name; the source repo is named by the parent folder only.
-        expect(sourceRepoUrl("X779.Danbooruwildcards/DTR2024_1boy")).toBe(
-            "https://huggingface.co/datasets/X779/Danbooruwildcards",
+        expect(sourceRepoUrl("nl/jgreely.c1ga")).toBe(
+            "https://github.com/jgreely/c1ga",
         );
-        expect(sourceRepoUrl("org.repo.v2/sub/leaf")).toBe(
-            "https://huggingface.co/datasets/org/repo.v2",
-        );
-    });
-
-    it("links a dot-less folder to its HuggingFace org/user page", () => {
-        // A bare folder name (no org.repo dot) is a HuggingFace org/user; link to its page, preserving case.
-        expect(sourceRepoUrl("CyberHarem")).toBe(
+        expect(sourceRepoUrl("tags/CyberHarem")).toBe(
             "https://huggingface.co/CyberHarem",
         );
-        // The org is taken from the top-level folder, even when the leaf carries a dot.
-        expect(sourceRepoUrl("noseparator/leaf.v2")).toBe(
-            "https://huggingface.co/noseparator",
+        expect(sourceRepoUrl("tags/civitai.author_prompts")).toBeNull();
+        expect(sourceRepoUrl("tags/civitai")).toBeNull();
+        expect(sourceRepoUrl("tags/moescape")).toBeNull();
+    });
+
+    it("infers an uncataloged dataset's source repo", () => {
+        expect(sourceRepoUrl("example-org.example-repo")).toBe(
+            "https://huggingface.co/datasets/example-org/example-repo",
         );
     });
 
-    it("returns null when the top-level folder can't name an org", () => {
-        expect(sourceRepoUrl("")).toBeNull();
-        expect(sourceRepoUrl(".leading")).toBeNull();
-        expect(sourceRepoUrl("trailing.")).toBeNull();
+    it.each([
+        ["org.repo.foldername", "org/repo"],
+        ["tags/org.repo/leaf", "org/repo"],
+        ["short-stories/org.repo", "org/repo"],
+        ["category/subcategory/org.repo.folder/leaf", "org/repo"],
+        ["org.repo/leaf.with.dots", "org/repo"],
+    ])("derives the source repo from %s, ignoring categories and subset details", (name, repo) => {
+        expect(sourceRepoUrl(name)).toBe(
+            `https://huggingface.co/datasets/${repo}`,
+        );
+    });
+
+    it.each([
+        "",
+        ".leading",
+        "trailing.",
+        "org..folder",
+        "short-stories/unknown-story",
+    ])("returns null for %s without an org.repo name", (name) => {
+        expect(sourceRepoUrl(name)).toBeNull();
     });
 });
 
@@ -240,10 +257,22 @@ describe("renderRemoteDatasetName", () => {
         expect(html).toContain(">X779.Danbooruwildcards/DTR2024_1boy</a>");
     });
 
-    it("links a dot-less name to its HuggingFace org/user page", () => {
-        const html = renderRemoteDatasetName("CyberHarem");
-        expect(html).toContain('href="https://huggingface.co/CyberHarem"');
-        expect(html).toContain(">CyberHarem</a>");
+    it("leaves dot-less names as plain text instead of guessing an org page", () => {
+        expect(renderRemoteDatasetName("tags/moescape", "moescape")).toBe(
+            "moescape",
+        );
+    });
+
+    it("links a categorized subset to its original repo while preserving the display name", () => {
+        const html = renderRemoteDatasetName(
+            "nl/codeShare.chroma_prompts.anime_captions",
+            "codeShare.chroma_prompts.anime_captions",
+        );
+        expect(html).toContain(
+            'href="https://huggingface.co/datasets/codeShare/chroma_prompts"',
+        );
+        expect(html).toContain('rel="noreferrer noopener"');
+        expect(html).toContain(">codeShare.chroma_prompts.anime_captions</a>");
     });
 
     it("escapes the name in both the link and its title", () => {

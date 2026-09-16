@@ -13,7 +13,7 @@ public static class DatasetEnabledConfig
         }
         lock (Lock)
         {
-            return !Disabled.Contains(name);
+            return !Disabled.Contains(DatasetCatalog.CanonicalName(name));
         }
     }
 
@@ -27,11 +27,11 @@ public static class DatasetEnabledConfig
         {
             if (enabled)
             {
-                Disabled.Remove(name.Trim());
+                Disabled.Remove(DatasetCatalog.CanonicalName(name.Trim()));
             }
             else
             {
-                Disabled.Add(name.Trim());
+                Disabled.Add(DatasetCatalog.CanonicalName(name.Trim()));
             }
         }
     }
@@ -49,7 +49,7 @@ public static class DatasetEnabledConfig
             {
                 if (!string.IsNullOrWhiteSpace(name))
                 {
-                    Disabled.Add(name.Trim());
+                    Disabled.Add(DatasetCatalog.CanonicalName(name.Trim()));
                 }
             }
         }

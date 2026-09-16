@@ -10,7 +10,7 @@ public static class ColumnConfig
     {
         lock (Lock)
         {
-            return PromptColumns.TryGetValue(name, out string column) ? column : null;
+            return PromptColumns.TryGetValue(DatasetCatalog.CanonicalName(name), out string column) ? column : null;
         }
     }
 
@@ -19,11 +19,11 @@ public static class ColumnConfig
         lock (Lock)
         {
             PromptColumns.Clear();
-            foreach ((string name, string column) in columns)
+            foreach ((string name, string column) in columns.OrderBy(kv => string.Equals(kv.Key, DatasetCatalog.CanonicalName(kv.Key), StringComparison.OrdinalIgnoreCase)))
             {
                 if (!string.IsNullOrWhiteSpace(column))
                 {
-                    PromptColumns[name] = column;
+                    PromptColumns[DatasetCatalog.CanonicalName(name)] = column;
                 }
             }
         }
@@ -41,7 +41,7 @@ public static class ColumnConfig
     {
         lock (Lock)
         {
-            return TagColumns.TryGetValue(name, out List<string> columns) ? [.. columns] : [];
+            return TagColumns.TryGetValue(DatasetCatalog.CanonicalName(name), out List<string> columns) ? [.. columns] : [];
         }
     }
 
@@ -50,12 +50,12 @@ public static class ColumnConfig
         lock (Lock)
         {
             TagColumns.Clear();
-            foreach ((string name, IReadOnlyList<string> cols) in columns)
+            foreach ((string name, IReadOnlyList<string> cols) in columns.OrderBy(kv => string.Equals(kv.Key, DatasetCatalog.CanonicalName(kv.Key), StringComparison.OrdinalIgnoreCase)))
             {
                 List<string> kept = cols is null ? [] : [.. cols.Where(c => !string.IsNullOrWhiteSpace(c))];
                 if (kept.Count > 0)
                 {
-                    TagColumns[name] = kept;
+                    TagColumns[DatasetCatalog.CanonicalName(name)] = kept;
                 }
             }
         }

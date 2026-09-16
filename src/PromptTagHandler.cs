@@ -126,8 +126,15 @@ public static class PromptTagHandler
             }
             else
             {
-                string card = T2IParamTypes.GetBestInList(part, DatasetManager.AllDatasetNames);
-                if (card is not null && DatasetManager.Resolve(card) is DatasetEntry entry && seen.Add(entry.Name.ToLowerFast()))
+                DatasetEntry entry = DatasetManager.Resolve(part);
+                string canonical = DatasetCatalog.CanonicalName(part);
+                // An explicit legacy alias must not select a different subset when its dataset is absent.
+                if (entry is null && string.Equals(canonical, part, StringComparison.OrdinalIgnoreCase))
+                {
+                    string card = T2IParamTypes.GetBestInList(part, DatasetManager.AllDatasetNames);
+                    entry = DatasetManager.Resolve(card);
+                }
+                if (entry is not null && seen.Add(entry.Name.ToLowerFast()))
                 {
                     targets.Add(entry);
                 }

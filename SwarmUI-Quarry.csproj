@@ -80,6 +80,7 @@
   </Target>
 
   <ItemGroup>
+    <EmbeddedResource Include="dataset-sources.json" LogicalName="Quarry.DatasetSources.json" />
     <Compile Remove="bin/**/*.cs" />
     <Compile Remove="obj/**/*.cs" />
     <Compile Remove="Tests/**/*.cs" />
