@@ -421,7 +421,7 @@ def _reorder_lance(path, front):
     except Exception as exc:  # corrupt / incomplete / not a Lance dataset
         raise FileError(f"could not open dataset: {exc}") from exc
 
-    from .storage import DESCRIPTOR
+    from .storage import DESCRIPTOR, DATA_STORAGE_VERSION
     from .lowercase import SCALAR_TYPES
 
     existing = list(ds.schema.names)
@@ -447,7 +447,7 @@ def _reorder_lance(path, front):
     try:
         rewritten = lance.write_dataset(
             ds.scanner(columns=new_order, scan_in_order=True).to_reader(),
-            str(new_ds), data_storage_version="2.1",
+            str(new_ds), data_storage_version=DATA_STORAGE_VERSION,
         )
         descriptor = Path(path) / DESCRIPTOR
         if descriptor.exists():

@@ -4,6 +4,7 @@ import json
 import sys
 import tempfile
 import unittest
+import zipfile
 from contextlib import redirect_stdout, redirect_stderr
 from datetime import timedelta
 from pathlib import Path
@@ -48,6 +49,28 @@ class StorageTests(unittest.TestCase):
             patch = None if row['patch'] is None else bytes.fromhex(row['patch'])
             self.assertEqual(storage.case_patch(row['original'], row['lower']), patch)
             self.assertEqual(storage.restore_case(row['lower'], patch), row['original'])
+
+    def test_large_miniblocks_survive_optimize_reorder_and_prep(self):
+        fixture = Path(__file__).resolve().parents[2] / 'Tests/Fixtures/lance-v22.zip'
+        with zipfile.ZipFile(fixture) as archive:
+            table = pa.table(json.loads(archive.read('expected.json')))
+        path = self.root / 'large.lance'
+        lance.write_dataset(table, str(path))
+        optimize_dataset(path, emit=lambda _: None)
+        ds = lance.dataset(str(path))
+        self.assertEqual(ds.data_storage_version, '2.2')
+        self.assertEqual(storage.logical_reader(ds, path).read_all(), table)
+        self.assertEqual(ds.schema.field('prompt').metadata[b'lance-encoding:structural-encoding'], b'miniblock')
+        self.assertEqual(self.cli('columns', 'reorder', str(path), 'tags,prompt'), 0)
+        self.assertEqual(lance.dataset(str(path)).data_storage_version, '2.2')
+        self.assertEqual(storage.logical_reader(lance.dataset(str(path)), path).read_all(), table.select(['tags', 'prompt']))
+        parquet = self.root / 'large.parquet'
+        pq.write_table(table, parquet)
+        output = self.root / 'prepared.lance'
+        self.assertEqual(self.cli('prep', str(parquet), '-o', str(output), '--columns', 'prompt;tags'), 0)
+        self.assertEqual(lance.dataset(str(output)).data_storage_version, '2.2')
+        self.assertEqual(storage.logical_reader(lance.dataset(str(output)), output).read_all(),
+                         table.filter(pa.compute.is_valid(table['prompt'])))
 
     def test_bad_patches_fail_closed(self):
         for lower, patch in [('a', None), (None, b''), ('a', b'?'), ('a', b'S\x80'),
@@ -101,8 +124,10 @@ class StorageTests(unittest.TestCase):
 
     def test_older_completed_descriptor_is_adopted_without_rewrite(self):
         path, _ = self.dataset()
-        optimize_dataset(path, emit=lambda _: None)
+        with patch.object(storage, 'DATA_STORAGE_VERSION', '2.1'):
+            optimize_dataset(path, emit=lambda _: None)
         ds = lance.dataset(str(path))
+        self.assertEqual(ds.data_storage_version, '2.1')
         storage.write_descriptor(path, storage.read_descriptor(path))
         before = (path / storage.DESCRIPTOR).read_bytes()
         with patch.object(lance, 'write_dataset', side_effect=AssertionError('rewrote data')):

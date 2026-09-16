@@ -207,7 +207,7 @@ def cmd_prep(args) -> int:
                     ) as cleaned:
                         expected = storage.LogicalDigest(cleaned.schema)
                         encoded, pairs = storage.encoded_reader(cleaned, expected)
-                        ds = lance.write_dataset(encoded, str(staged), mode="create", data_storage_version="2.1")
+                        ds = lance.write_dataset(encoded, str(staged), mode="create", data_storage_version=storage.DATA_STORAGE_VERSION)
                         storage.write_descriptor(staged, pairs)
                         storage.verify_dataset(staged, expected)
                 (work / "prep.json").write_text(json.dumps({

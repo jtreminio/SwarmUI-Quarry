@@ -492,11 +492,11 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "duckdb", specifier = ">=1.5.3" },
+    { name = "duckdb", specifier = "==1.5.3" },
     { name = "huggingface-hub" },
     { name = "pip", specifier = ">=26.1.2" },
     { name = "pyarrow" },
-    { name = "pylance", specifier = ">=7.0.0" },
+    { name = "pylance", specifier = "==7.0.0" },
     { name = "visidata", specifier = ">=3.3" },
 ]
 

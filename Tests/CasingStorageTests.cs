@@ -1,4 +1,5 @@
 using System.IO;
+using System.IO.Compression;
 using System.Text;
 using DuckDB.NET.Data;
 using Newtonsoft.Json.Linq;
@@ -10,6 +11,40 @@ namespace Quarry.Tests;
 public class CasingStorageTests
 {
     private static JArray Fixtures => JArray.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "casing-v1.json")));
+
+    [Fact]
+    public void PythonFormat22MiniblocksAreReadableByQuarry()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "quarry-lance22-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            ZipFile.ExtractToDirectory(Path.Combine(AppContext.BaseDirectory, "Fixtures", "lance-v22.zip"), root);
+            string path = Path.Combine(root, "sample.lance");
+            JObject expected = JObject.Parse(File.ReadAllText(Path.Combine(root, "expected.json")));
+            using DuckDbQueryBackend backend = new();
+            ColumnSchema schema = backend.GetSchema(path);
+            Assert.Equal(new[] { "prompt", "tags" }, schema.VisibleColumns.Select(c => c.Name));
+            Assert.All(schema.VisibleColumns, c => Assert.True(c.HasNgramIndex));
+            Assert.Equal(6, backend.CountRows(path, SqlFilter.None));
+            var sample = backend.GetSampleRows(path, 6);
+            Assert.Equal(6, sample.Rows.Count);
+            for (int row = 0; row < 6; row++)
+            {
+                Assert.Equal(expected["prompt"][row].Value<string>() ?? "", sample.Rows[row][0]);
+                Assert.Equal(expected["tags"][row].Value<string>() ?? "", sample.Rows[row][1]);
+            }
+            foreach (string term in new[] { "BLUE", "ÉTÉ", "猫" })
+            {
+                SqlFilter filter = SqlFilterBuilder.Build(QueryParser.Parse($"sample[prompt={term}]"), schema);
+                Assert.Equal(1, backend.CountRows(path, filter));
+            }
+            Assert.Equal("Blue CAT, Art", backend.GetPromptAt(path, ["prompt", "tags"], SqlFilter.None, 0));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
 
     [Fact]
     public void SharedPythonFixtures_RestoreExactOriginalUtf8()

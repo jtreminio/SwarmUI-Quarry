@@ -121,7 +121,7 @@ def optimize_dataset(path, emit=print, dry_run=False, *, auto_btree=False):
                 expected = storage.LogicalDigest(reader.schema)
                 encoded, pairs = storage.encoded_reader(reader, expected, miniblock=miniblock)
             try:
-                lance.write_dataset(encoded, str(staged), mode="create", data_storage_version="2.1")
+                lance.write_dataset(encoded, str(staged), mode="create", data_storage_version=storage.DATA_STORAGE_VERSION)
                 break
             except BaseException as exc:
                 if not _retryable_write_error(exc):

@@ -30,6 +30,7 @@
 
   <ItemGroup>
     <None Update="Fixtures/casing-v1.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Fixtures/lance-v22.zip" CopyToOutputDirectory="PreserveNewest" />
     <Compile Remove="bin/**/*.cs" />
     <Compile Remove="obj/**/*.cs" />
     <Compile Remove="**/._*" />

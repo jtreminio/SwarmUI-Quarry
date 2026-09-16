@@ -14,7 +14,9 @@ their original names/order. Companions follow the logical columns and are intern
 The text is lowercased using DuckDB `lower`; encoded search also applies DuckDB
 `lower` to the query parameter. Text fields request
 `lance-encoding:structural-encoding = miniblock`, with default compression in Lance
-format 2.1. If optimization hits the miniblock size limit or its known native writer panic,
+format 2.2, which supports miniblock chunks larger than format 2.1's 32 KiB limit.
+Existing optimized format-2.1 datasets remain readable and eligible for skipping.
+If optimization hits a miniblock size error or its known native writer panic,
 it retries with 1,024-row input batches, then with Lance's default layout if needed.
 Each retry restarts the temporary dataset; casing and index guarantees are unchanged.
 Binary patches use default encoding. All text fields get NGRAM indexes;

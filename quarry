@@ -2,8 +2,8 @@
 # /// script
 # requires-python = ">=3.10"
 # dependencies = [
-#     "duckdb>=1.5.3",
-#     "pylance>=7.0.0",
+#     "duckdb==1.5.3",
+#     "pylance==7.0.0",
 #     "pyarrow",
 #     "huggingface_hub",
 #     "visidata>=3.3",

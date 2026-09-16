@@ -11,6 +11,7 @@ from .common import FileError
 
 DESCRIPTOR = "quarry-storage.json"
 CASE_SUFFIX = "__case"
+DATA_STORAGE_VERSION = "2.2"
 UPPER = re.compile(b"[A-Z]")
 
 
