@@ -388,8 +388,14 @@
     color: var(--text-soft);
 }
 
-.quarry-download-dialog {
+.modal-dialog.quarry-download-dialog {
+    width: calc(100vw - 2rem);
     max-width: 60rem;
+    margin-inline: auto;
+}
+
+.quarry-download-dialog .modal-content {
+    width: 100%;
 }
 
 .quarry-download-body {
