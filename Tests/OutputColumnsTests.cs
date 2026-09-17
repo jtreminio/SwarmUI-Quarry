@@ -110,6 +110,41 @@ public class OutputColumnsTests : IDisposable
         Assert.Equal(new[] { "goth portrait", "punk portrait" }, result.Rows.Select(row => row.Prompt));
     }
 
+    [Fact]
+    public void NestedQueries_UseSameBindingsInPreviewAndPromptGeneration()
+    {
+        File.WriteAllText(Path.Combine(DatasetManager.DatasetsFolder, "portraits.jsonl"), """
+            {"subject":[{"hair":"blond red","eyes":"blue green"},{"hair":"blond","eyes":"blue"}]}
+            {"subject":[{"hair":"blond red","eyes":"blue green"}]}
+            """);
+        DatasetManager.Sync();
+        const string inner = "portraits[subject[i].hair=blond; subject[i].eyes=blue; subject[n].hair=red; subject[n].eyes=green]:subject[i], subject[n]|keys; record_separator=\" = \"; field_separator=\", \"";
+        const string expected = "hair: blond, eyes: blue = hair: blond red, eyes: blue green";
+        QueryRunResult result = QueryRunner.Run($"<q:{inner}>", 25);
+        Assert.Null(result.Invalid);
+        Assert.Equal(1, result.Total);
+        Assert.Equal(expected, Assert.Single(result.Rows).Prompt);
+        Assert.Equal(new[] { "portraits" }, PromptTagHandler.ResolveReferencedDatasetNames($"<q:{inner}>"));
+        using GlobalStateFixture state = new();
+        var behavior = T2IParamTypes.WildcardSeedBehavior;
+        int earlyHandlers = T2IParamInput.SpecialParameterHandlers.Count;
+        int lateHandlers = T2IParamInput.LateSpecialParameterHandlers.Count;
+        try
+        {
+            T2IParamTypes.WildcardSeedBehavior = new(new("Wildcard Seed Behavior", "", "Random", ID: "wildcardseedbehavior"));
+            PromptTagHandler.Initialize();
+            T2IPromptHandling.PromptTagContext context = new() { Input = new T2IParamInput(null) { WildcardRandom = new Random(123) } };
+            Assert.Equal(expected, T2IPromptHandling.ProcessPromptLike($"<q:{inner}>", context, false));
+        }
+        finally
+        {
+            T2IParamTypes.WildcardSeedBehavior = behavior;
+            T2IParamInput.SpecialParameterHandlers.RemoveRange(earlyHandlers, T2IParamInput.SpecialParameterHandlers.Count - earlyHandlers);
+            T2IParamInput.LateSpecialParameterHandlers.RemoveRange(lateHandlers, T2IParamInput.LateSpecialParameterHandlers.Count - lateHandlers);
+        }
+        Assert.NotNull(QueryRunner.Run("<q:portraits:subject[unknown]>", 25).Invalid);
+    }
+
     public void Dispose()
     {
         DatasetManager.DatasetsFolder = "";

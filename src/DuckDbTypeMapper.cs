@@ -12,7 +12,7 @@ public static class DuckDbTypeMapper
         bool isList = type.EndsWith(']')
             || type.StartsWith("LIST(", StringComparison.OrdinalIgnoreCase)
             || type.StartsWith("ARRAY(", StringComparison.OrdinalIgnoreCase);
-        return isList ? ColumnKind.List : ColumnKind.Scalar;
+        return isList ? ColumnKind.List : type.StartsWith("STRUCT(", StringComparison.OrdinalIgnoreCase) ? ColumnKind.Object : ColumnKind.Scalar;
     }
 
     private static readonly HashSet<string> NumericTypes = new(StringComparer.OrdinalIgnoreCase)

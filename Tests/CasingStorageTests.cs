@@ -39,10 +39,18 @@ public class CasingStorageTests
                 Assert.Equal(1, backend.CountRows(path, filter));
             }
             Assert.Equal("Blue CAT, Art", backend.GetPromptAt(path, ["prompt", "tags"], SqlFilter.None, 0));
+            Query formatted = QueryParser.Parse("sample:prompt,tags|keys;rs=\" = \"");
+            SqlFilter formattedFilter = NestedQueryCompiler.Build(formatted, schema, [], formatted.PromptColumns);
+            Assert.Equal("prompt: Blue CAT = tags: Art", backend.GetPromptAt(path, formatted.PromptColumns, formattedFilter, 0));
+            Assert.Equal(("prompt: Blue CAT = tags: Art", true), backend.GetCandidateAt(path, formatted.PromptColumns, formattedFilter, 0));
+            Assert.NotEmpty(backend.GetPrompts(path, formatted.PromptColumns, formattedFilter, 10, 0));
         }
         finally
         {
-            if (Directory.Exists(root)) Directory.Delete(root, true);
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, true);
+            }
         }
     }
 

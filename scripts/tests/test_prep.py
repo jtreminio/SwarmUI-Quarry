@@ -140,6 +140,29 @@ class PrepTests(unittest.TestCase):
             {"prompt": "Hello, world", "id": 1}, {"prompt": "Next", "id": 5},
         ])
 
+    def test_object_columns_survive_preparation(self):
+        source = self.root / "records.jsonl"
+        rows = [
+            {"prompt": "Portrait one", "subject": [{"hair": "Blond", "eyes": "Blue"}, {"hair": "Red", "eyes": "Green"}], "meta": {"style": "Photo", "score": 2}},
+            {"prompt": "Portrait two", "subject": [{"hair": "Brown", "eyes": "Blue"}], "meta": {"style": "Sketch", "score": 3}},
+        ]
+        source.write_text("\n".join(json.dumps(row) for row in rows))
+        result, _, stderr, _ = self.run_cli(["prep", str(source), "--columns", "prompt;subject;meta"])
+        self.assertEqual(result, 0, stderr)
+        output = source.with_suffix(".lance")
+        ds = lance.dataset(str(output))
+        self.assertTrue(pa.types.is_list(ds.schema.field("subject").type))
+        self.assertTrue(pa.types.is_struct(ds.schema.field("meta").type))
+        self.assertEqual(logical_reader(ds, output, ["prompt", "subject", "meta"]).read_all().to_pylist(), rows)
+
+    def test_deeper_record_nesting_is_rejected(self):
+        source = self.root / "nested.jsonl"
+        source.write_text(json.dumps({"prompt": "portrait", "subject": [{"hair": ["blond", "brown"]}]}))
+        result, _, stderr, _ = self.run_cli(["prep", str(source), "--columns", "prompt;subject"])
+        self.assertEqual(result, 1, stderr)
+        self.assertIn("direct scalar fields", stderr)
+        self.assertFalse(source.with_suffix(".lance").exists())
+
     def test_decimal_columns_are_preserved_without_unsupported_indices(self):
         table = pa.table({
             "prompt": ["first", "second", "third"],

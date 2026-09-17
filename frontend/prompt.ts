@@ -1,3 +1,4 @@
+import { querySections } from "./querysyntax";
 import type { ReferencesResponse } from "./types";
 
 const HIGHLIGHT_DEBOUNCE_MS = 250;
@@ -89,9 +90,10 @@ export interface PromptEdit {
 const splitTagInner = (
     inner: string,
 ): { names: string[]; filter: string; column: string } => {
-    const colon = inner.indexOf(":", inner.lastIndexOf("]") + 1);
-    const head = colon < 0 ? inner : inner.slice(0, colon);
-    const column = colon < 0 ? "" : inner.slice(colon);
+    const sections = querySections(inner);
+    const boundary = sections.colon >= 0 ? sections.colon : sections.pipe;
+    const head = boundary < 0 ? inner : inner.slice(0, boundary);
+    const column = boundary < 0 ? "" : inner.slice(boundary);
     const bracket = head.indexOf("[");
     const namesPart = bracket < 0 ? head : head.slice(0, bracket);
     const filter = bracket < 0 ? "" : head.slice(bracket);

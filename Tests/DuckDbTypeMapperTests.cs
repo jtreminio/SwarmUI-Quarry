@@ -5,6 +5,11 @@ namespace Quarry.Tests;
 public class DuckDbTypeMapperTests
 {
     [Theory]
+    [InlineData("STRUCT(a INTEGER)")]
+    [InlineData("struct(hair VARCHAR, eyes VARCHAR)")]
+    public void ObjectTypes(string type) => Assert.Equal(ColumnKind.Object, DuckDbTypeMapper.MapKind(type));
+
+    [Theory]
     [InlineData("VARCHAR")]
     [InlineData("INTEGER")]
     [InlineData("BIGINT")]
@@ -12,7 +17,6 @@ public class DuckDbTypeMapperTests
     [InlineData("BOOLEAN")]
     [InlineData("DECIMAL(10,2)")]
     [InlineData("MAP(VARCHAR, INTEGER)")]
-    [InlineData("STRUCT(a INTEGER)")]
     [InlineData("")]
     [InlineData("   ")]
     [InlineData(null)]
@@ -63,7 +67,6 @@ public class DuckDbTypeMapperTests
     [InlineData("BLOB")]
     [InlineData("UUID")]
     [InlineData("MAP(VARCHAR, INTEGER)")]
-    [InlineData("STRUCT(a INTEGER)")]
     [InlineData("INTEGER[]")] // a list of numbers is not a numeric scalar
     [InlineData("DECIMAL[]")]
     [InlineData("ARRAY(DOUBLE)")]

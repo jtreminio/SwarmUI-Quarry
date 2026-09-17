@@ -33,8 +33,8 @@ public sealed class DatasetSource
         {
             ".parquet" => new DatasetSource($"read_parquet({literal})", false),
             ".csv" or ".tsv" => new DatasetSource($"read_csv({literal})", false),
-            ".json" => new DatasetSource($"read_json({literal})", false),
-            ".jsonl" or ".ndjson" => new DatasetSource($"read_ndjson({literal})", false),
+            ".json" => new DatasetSource(JsonSourceSchema.Resolve(path, false), false),
+            ".jsonl" or ".ndjson" => new DatasetSource(JsonSourceSchema.Resolve(path, true), false),
             ".lance" => new DatasetSource(literal, true),
             _ => throw new QueryException($"Unsupported dataset file type '{ext}' for '{path}'."),
         };

@@ -9,6 +9,23 @@ public static class PromptColumnResolver
 
     public static IReadOnlyList<string> ResolveOutputColumns(IReadOnlyList<string> requestedColumns, string configuredColumn, ColumnSchema schema)
     {
+        foreach (string name in requestedColumns)
+        {
+            if (schema.TryGet(name, out ColumnInfo hidden) && (hidden.IsCasingPatch || hidden.IsSearchHelper))
+            {
+                throw new QueryException("Internal storage columns cannot be selected as output.");
+            }
+        }
+
+        if (requestedColumns.Any(c => !schema.TryGet(c, out _) && (c.Contains('[') || c.Contains('.'))))
+        {
+            foreach (string name in requestedColumns)
+            {
+                FieldPath.Resolve(name, schema);
+            }
+
+            return requestedColumns;
+        }
         if (requestedColumns.Count <= 1)
         {
             string resolved = Resolve(requestedColumns.FirstOrDefault(), configuredColumn, schema);
@@ -33,19 +50,25 @@ public static class PromptColumnResolver
     {
         if (!string.IsNullOrWhiteSpace(requestedColumn) && schema.TryGet(requestedColumn, out ColumnInfo requested))
         {
+            if (requested.IsCasingPatch || requested.IsSearchHelper)
+            {
+                throw new QueryException("Internal storage columns cannot be selected as output.");
+            }
+
             return requested.Name;
         }
-        if (!string.IsNullOrWhiteSpace(configuredColumn) && schema.TryGet(configuredColumn, out ColumnInfo configured))
+        if (!string.IsNullOrWhiteSpace(configuredColumn) && schema.TryGet(configuredColumn, out ColumnInfo configured)
+            && !schema.IsCompanionName(configured.Name))
         {
             return configured.Name;
         }
         foreach (string preferred in PreferredNames)
         {
-            if (schema.TryGet(preferred, out ColumnInfo match))
+            if (schema.TryGet(preferred, out ColumnInfo match) && !schema.IsCompanionName(match.Name))
             {
                 return match.Name;
             }
         }
-        return schema.Columns.Count > 0 ? schema.Columns[0].Name : null;
+        return schema.VisibleColumns.FirstOrDefault()?.Name;
     }
 }

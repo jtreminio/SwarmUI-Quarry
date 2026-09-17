@@ -115,11 +115,11 @@ def _lance_blob_projection(field):
         or pa.types.is_large_binary(t)
         or pa.types.is_fixed_size_binary(t)
     ):
-        return f"octet_length({ident})"
+        return f"octet_length(encode({ident}, 'hex')) / 2"
     if pa.types.is_struct(t):
         sub = {f.name for f in t}
         if "bytes" in sub:
-            return f"octet_length({ident}.{_lance_ident('bytes')})"
+            return f"octet_length(encode({ident}.{_lance_ident('bytes')}, 'hex')) / 2"
     return None
 
 
@@ -127,27 +127,31 @@ def _make_lance_parquet(path):
     """Stream a Lance dataset to a temp parquet, shrinking BLOB columns to sizes."""
     import lance
     import pyarrow.parquet as pq
+    from .storage import logical_reader
 
     ds = lance.dataset(str(path))
+    logical = logical_reader(ds, path)
     blob_cols = []
     columns = {}
-    for field in ds.schema:
+    for field in logical.schema:
         expr = _lance_blob_projection(field)
-        if expr is None:
-            columns[field.name] = _lance_ident(field.name)  # pass through unchanged
-        else:
+        if expr is not None:
             blob_cols.append(field.name)
             columns[field.name] = expr
+    logical.close()
 
+    reader = logical_reader(ds, path, batch_rows=8192, projections=columns)
     tmp = tempfile.NamedTemporaryFile(suffix=".parquet", delete=False)
     tmp.close()
-    reader = ds.scanner(columns=columns, batch_size=8192).to_reader()
-    writer = pq.ParquetWriter(tmp.name, reader.schema)
     try:
-        for batch in reader:
-            writer.write_batch(batch)
+        with pq.ParquetWriter(tmp.name, reader.schema) as writer:
+            for batch in reader:
+                writer.write_batch(batch)
+    except BaseException:
+        Path(tmp.name).unlink(missing_ok=True)
+        raise
     finally:
-        writer.close()
+        reader.close()
     return Path(tmp.name), blob_cols
 
 

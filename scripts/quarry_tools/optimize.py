@@ -27,22 +27,33 @@ def _already_optimized(ds, path, *, dry_run):
     descriptor = path / storage.DESCRIPTOR
     if not descriptor.exists():
         return False
-    pairs = storage.read_descriptor(path, ds.schema)
+    layout = storage.read_layout(path, ds.schema)
+    pairs = layout["columns"]
+    helper_names = {h["physical"] for h in layout["helpers"]}
+    import pyarrow as pa
+    hidden = helper_names | set(pairs.values()) | set(storage.legacy_pairs(ds.schema).values())
+    expected_helpers, structured = storage.helper_layout(pa.schema([f for f in ds.schema if f.name not in hidden]))
+    if structured and (layout["version"] != 2 or not layout.get("snapshot_trusted")
+            or layout.get("search_version") != 1 or not layout.get("helpers_indexed")
+            or ds.has_stable_row_ids
+            or {(h["column"], h["field"], h["kind"]) for h in expected_helpers}
+                != {(h["column"], h["field"], h["kind"]) for h in layout["helpers"]}):
+        return False
     marker = json.loads(descriptor.read_text(encoding="utf-8")).get("optimized")
     if marker is not None and marker != completion_marker(ds):
         return False
     text = {f.name for f in ds.schema if storage.is_text(f.type)}
-    if set(pairs) != text or storage.legacy_pairs(ds.schema) or len(ds.versions()) != 1:
+    if set(pairs) | helper_names != text or storage.legacy_pairs(ds.schema) or len(ds.versions()) != 1:
         return False
     fragments = {f.fragment_id for f in ds.get_fragments()}
-    indexed = {i["fields"][0] for i in ds.list_indices()
+    indexed = {ds.lance_schema.field(i["fields"][0]).name() for i in ds.list_indices()
                if i["type"] == "NGram" and len(i["fields"]) == 1
                and fragments <= set(i["fragment_ids"] or [])}
     if not text <= indexed:
         return False
     # Older completed datasets have the codec descriptor but no completion marker.
     if marker is None and not dry_run:
-        storage.write_descriptor(path, pairs, optimized=completion_marker(ds))
+        storage.write_descriptor(path, pairs, optimized=completion_marker(ds), finalize=True)
     return True
 
 
@@ -88,13 +99,15 @@ def optimize_dataset(path, emit=print, dry_run=False, *, auto_btree=False, get_s
     if _already_optimized(source, path, dry_run=dry_run):
         emit(f"  skipped: already optimized (Lance version {source.version})")
         return _SKIPPED
-    plan = index_plan(source)
+    source_layout = storage.read_layout(path, source.schema)
+    old_helpers = {h["physical"] for h in source_layout["helpers"]}
+    plan = [(n, f, k) for n, f, k in index_plan(source) if f not in old_helpers]
     reader = storage.logical_reader(source, path)
     expected = storage.LogicalDigest(reader.schema)
     encoded, pairs = storage.encoded_reader(reader, expected)
     reserved = {name for name, _, kind in plan if kind != "NGRAM"}
     ngram_names = {}
-    for field in pairs:
+    for field in [*pairs, *(h["physical"] for h in pairs.helpers)]:
         name = field + "_idx"
         while name in reserved:
             name += "_ngram"
@@ -122,7 +135,8 @@ def optimize_dataset(path, emit=print, dry_run=False, *, auto_btree=False, get_s
                 expected = storage.LogicalDigest(reader.schema)
                 encoded, pairs = storage.encoded_reader(reader, expected, miniblock=miniblock)
             try:
-                lance.write_dataset(encoded, str(staged), mode="create", data_storage_version=storage.DATA_STORAGE_VERSION)
+                lance.write_dataset(encoded, str(staged), mode="create", data_storage_version=storage.DATA_STORAGE_VERSION,
+                                    enable_stable_row_ids=False)
                 break
             except BaseException as exc:
                 if not _retryable_write_error(exc):
@@ -136,10 +150,12 @@ def optimize_dataset(path, emit=print, dry_run=False, *, auto_btree=False, get_s
                 encoded.close()
             if staged.exists():
                 shutil.rmtree(staged)
+        if (path / storage.DESCRIPTOR).exists():
+            shutil.copy2(path / storage.DESCRIPTOR, staged / storage.DESCRIPTOR)
         storage.write_descriptor(staged, pairs)
         # Build each index once; prune only after every index is complete.
         lance_tools._build_one(staged, None, [], extra_btree, False, False, True,
-                               emit, clean=False, flatten=False, ngram_names=ngram_names)
+                               emit, clean=False, flatten=False, ngram_names=ngram_names, trusted_staging=True)
         ds = lance.dataset(str(staged))
         for name, field, kind in plan:
             if kind != "NGRAM":
@@ -147,17 +163,20 @@ def optimize_dataset(path, emit=print, dry_run=False, *, auto_btree=False, get_s
         ds = lance.dataset(str(staged))
         actual_indexes = {(ds.lance_schema.field(i["fields"][0]).name(), SCALAR_TYPES.get(i["type"]))
                           for i in ds.list_indices() if len(i["fields"]) == 1}
-        required = {(n, "NGRAM") for n in pairs} | {(f, k) for _, f, k in plan}
+        required = {(n, "NGRAM") for n in [*pairs, *(h["physical"] for h in pairs.helpers)]} | {(f, k) for _, f, k in plan}
         if not required <= actual_indexes:
             raise FileError(f"rewrite failed to retain required indexes: {required - actual_indexes}")
         ds.cleanup_old_versions(older_than=timedelta(0), delete_unverified=True)
         emit("  verifying reconstructed original values…")
-        storage.verify_dataset(staged, expected)
+        storage.verify_dataset(staged, expected, trusted_staging=True)
+        storage.verify_helpers(staged)
         if len(lance.dataset(str(staged)).versions()) != 1:
             raise FileError("rewrite retained unexpected historical versions")
         if lance.dataset(str(path)).version != source.version:
             raise FileError("source changed during migration; refusing replacement")
-        storage.write_descriptor(staged, pairs, optimized=completion_marker(ds))
+        if source_layout.get("snapshot_trusted") and storage.manifest_snapshot(path) != source_layout.get("snapshot"):
+            raise FileError("source snapshot changed during migration; refusing replacement")
+        storage.write_descriptor(staged, pairs, optimized=completion_marker(ds), finalize=True)
         path.rename(backup)
         try:
             staged.rename(path)

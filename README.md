@@ -74,7 +74,7 @@ Quarry prints the source row count and available columns, then asks which to kee
 Columns to keep: caption=prompt;tags;rating=score
 ```
 
-This keeps only those three columns, in that order. Quarry converts the selection to Lance, flattens list columns into text, removes empty and duplicate prompt rows, and builds search indices automatically.
+This keeps only those three columns, in that order. Quarry converts the selection to Lance, flattens simple value lists into text, removes empty and duplicate prompt rows, and builds search indices automatically. Direct objects and arrays of direct objects keep their structure so you can query their fields and select records at runtime.
 
 Inputs can be CSV, TSV, JSON, JSONL, NDJSON, Parquet, or a `.lance` dataset directory. The result is `<stem>.lance` beside the input, or `<stem>.prepared.lance` for Lance input. The source stays intact, and an existing output is never overwritten. Use `-o` to choose an output path, or `--columns` to supply the selection without a prompt:
 
@@ -84,6 +84,22 @@ Inputs can be CSV, TSV, JSON, JSONL, NDJSON, Parquet, or a `.lance` dataset dire
 ```
 
 Cleaning uses the first selected column named `prompt`, `text`, `caption`, `description`, or `value` in that preference order, falling back to the first selected column. Use `--prompt-column` with its **new name** to override this. Run `./quarry prep --help` for all options; the existing individual commands remain available.
+
+For a JSONL file whose structured column is already named `prompt`:
+
+```bash
+./quarry prep ~/data/AIConfigs/OriginalDatadumps/original.jsonl --columns 'prompt'
+```
+
+If that column is named `subject`, rename it during preparation:
+
+```bash
+./quarry prep portraits.jsonl --columns 'subject=prompt;style;setting'
+```
+
+The resulting `prompt` stays a native object or list of objects. The default tag prints all records, and preparation retains every record. Duplicate detection compares **all records in order**, normalizing each text value by lowercasing and removing non-alphanumeric characters. Field names, scalar types, nulls, value boundaries, and repeated records remain significant: `[A, B]` differs from `[A, C]`, `[B, A]`, and `[A]`. Equivalent complete prompts keep the earliest source row and its original values. A blank first record does not discard a populated later record. Wholly punctuation-only prompts retain the existing exception from deduplication.
+
+Quarry discovers JSON fields across the entire input before reading with explicit types. Date-shaped strings stay strings, and integers retain their exact supported signed or unsigned 64-bit values. Mixed scalar kinds within one field, out-of-range numbers, deeper nesting, and ambiguous field names produce an error identifying the field. Fix the input instead of relying on automatic conversion to strings or floating-point numbers. Field output order follows the unified schema's first-seen field order; record order follows the source array.
 
 ## Writing `<q:>` tags
 
@@ -120,6 +136,82 @@ If you keep some datasets in subfolders, a single `*` stays at **one level**: `<
 
 It also matches **partial names**, which is perfect when you keep a family of related sets. Say you have `portraits-photo`, `portraits-anime`, and `portraits-vintage`: then `<q:portraits-*>` pulls from all three at once. The `*` can stand in for as much of the name as you like, so even `<q:por*>` would catch the lot. And partial names take filters just like everything else, so `<q:portraits-*[tags=girl]>` grabs a "girl" entry from every one of your portrait sets.
 
+### Objects and arrays of records
+
+Quarry supports objects containing scalar fields and arrays of those objects. For example:
+
+```json
+{"style":"Photo","subject":[{"hair":"blond","eyes":"blue"},{"hair":"red","eyes":"green"}]}
+```
+
+You can use the JSONL directly or preserve these columns with `quarry prep`. Objects with nested objects or arrays, and arrays of arrays, are unsupported. Simple lists of text remain supported. JSON stored inside a string stays a string; nested selectors require native object/list columns.
+
+| Selector | Meaning |
+| --- | --- |
+| `subject` / `subject[]` | Search any record; print all records in array order |
+| `subject.hair` / `subject[].hair` | Search any record's `hair` field; print all `hair` values |
+| `subject[0]` / `subject[1]` | First / second record (zero-based) |
+| `subject[i]` | A record bound to variable `i` by a filter |
+| `meta` / `meta.style` | A direct object's values / one field |
+
+Bare arrays and `[]` are equivalent. Use `[0]` to select only the first record.
+With `+=` / `-=`, bare arrays and `[]` compare the non-null record count.
+A direct object needs no array selector. Existing queries that relied on a bare
+array selecting the first record must now use `[0]` explicitly.
+
+For example, after naming your subject array `prompt`, find rows with at least two
+subjects and print all of them:
+
+```text
+<q:nl/jgreely.c1ga[prompt+=2]:prompt>
+```
+
+Use `prompt-=2` for at most two, or `prompt+=2;prompt-=2` for exactly two.
+Null slots are excluded; null and empty arrays count as zero. An object whose
+fields are all blank still counts as a record. Counts do not change output
+selection: `:prompt` prints all records, while `:prompt[0]` prints only record zero.
+
+```text
+<q:portraits[subject[i].hair=blond;subject[i].eyes=blue]:subject[i]>
+<q:portraits[subject[i].hair=blond;subject[i].eyes=blue]:subject[]>
+<q:portraits[subject[i].hair=blond;subject[i].eyes=blue;subject[n].hair=red;subject[n].eyes=green]:subject[i],subject[n]>
+```
+
+Semicolons mean AND. Repeated variables must match the same record. Different variables in the same array automatically require distinct records; variables are scoped to their array column. Quarry selects the first complete valid assignment in variable appearance and array order, trying later candidates when necessary. Output variables must be bound by a filter. The first example prints the matching subject, the second prints all subjects, and the third prints the two distinct matching subjects in the specified order.
+
+Each source row counts once, regardless of how many assignments match. Selecting multiple subjects does not give that row extra weight during random selection.
+
+Unbound array conditions are independent: `subject[].hair=blond;subject[].eyes=blue` can match hair and eyes from different subjects. Use a shared variable to require the same subject. `subject[].hair==blond,red` requires both terms somewhere among the selected values, while `subject[].hair!=blond,red` requires neither term anywhere. As with flat text columns, matches are case-insensitive substrings. Numeric and text-length comparisons require an individual nested field, such as `subject[0].age+=18` or `subject[i].age+=18`; `subject.age+=18` and `subject[].age+=18` are not supported. Whole-array comparisons count records instead.
+
+Missing indices, nulls, and empty values produce no text or separators. Unknown fields, unbound variables, and invalid selectors produce query errors rather than falling back to the default prompt column. Rows whose nested output is entirely empty are excluded from the eligible count. A negative nested condition matches when no selected value contains its terms, including when the selected value is absent.
+
+### Field names and output separators
+
+Add output options after `|`:
+
+```text
+<q:portraits[subject[i].hair=blond; subject[i].eyes=blue; subject[n].hair=red; subject[n].eyes=green]:subject[i], subject[n]|keys; record_separator=" = "; field_separator=", ">
+```
+
+Output:
+
+```text
+hair: blond, eyes: blue = hair: red, eyes: green
+```
+
+| Option | Behavior | Default |
+| --- | --- | --- |
+| `keys` | Prefix nonempty values with their literal field names and `: ` | Off |
+| `record_separator` or `rs` | Join records and separately selected outputs | `", "` |
+| `field_separator` or `fs` | Join fields within each record | `", "` |
+
+Options apply to the whole output selection. Separators are double-quoted strings; spaces are preserved, and JSON escapes such as `\n` and `\"` are accepted. Quoted semicolons, commas, brackets, and pipes are literal separator text. To include angle brackets in a tag separator, use `\u003c` and `\u003e` so they do not close SwarmUI's tag early. Duplicate options (including a long name and its alias) are rejected.
+
+```text
+<q:portraits:subject[]|keys>
+<q:portraits:subject[]|keys;rs="; ";fs=", ">
+```
+
 ### Leaving a dataset out of wildcards
 
 Every dataset in the Quarry tab has a little on/off switch next to it. Flip it **off** and that dataset is skipped whenever a wildcard would otherwise sweep it in — `<q:*>`, `<q:**>`, `<q:anime/**>`, `<q:por*>`, and so on all pretend it isn't there. Handy for a set you keep around but don't want mixed into "everything" rolls.
@@ -145,12 +237,12 @@ When you list several values, the operator decides how they have to match:
 | `=`  | match **any** of them  | `tags=punk,goth` keeps punk or goth |
 | `==` | match **all** of them  | `tags==punk,goth` keeps punk and goth |
 | `!=` | match **none** of them | `tags!=nsfw` drops anything nsfw |
-| `+=` | number is **at least**, or text is **at least this long** | `prompt+=50` keeps text with 50 or more characters |
-| `-=` | number is **at most**, or text is **at most this long** | `tags-=50` keeps text with 50 or fewer characters |
+| `+=` | number, text length, or array count is **at least** | `prompt+=2` keeps arrays with two or more non-null records |
+| `-=` | number, text length, or array count is **at most** | `prompt-=2` keeps arrays with at most two non-null records |
 
-Easy way to remember: **`=` one, `==` all, `!=` none**, and **`+=` up, `-=` down** — either the number itself or the text's character count.
+Easy way to remember: **`=` one, `==` all, `!=` none**, and **`+=` up, `-=` down** — the number itself, the text's character count, or the array's non-null element count.
 
-The last two, `+=` (at least) and `-=` (at most), compare **number columns** directly (a rating, a width, a year). On a **text column**, they compare its length in characters instead: `prompt+=100` means at least 100 characters, while `prompt-=500` means at most 500. List columns do not have a single character length, so Quarry skips a dataset when these operators target a list.
+The last two, `+=` (at least) and `-=` (at most), compare **number columns** directly (a rating, a width, a year). On a **text column**, they compare its length in characters instead: `prompt+=100` means at least 100 characters, while `prompt-=500` means at most 500. On an **array column**, they count non-null elements (records or scalar values). For the merged `tags` keyword, each configured column is compared separately and any matching column qualifies; their lengths/counts are not added together.
 
 Want more than one condition? Stack filters with a semicolon and Quarry requires all of them at once:
 
@@ -220,7 +312,7 @@ You do not have to remember your dataset names. Start typing a Quarry tag in any
 - Type `<q` and **Quarry** shows up in the list of tags.
 - After `<q:` you get a list of **every dataset**. Keep typing to narrow it.
 - Type a comma and it suggests the **next dataset** for a combined pull (the ones you have already added drop out of the list).
-- With a single dataset, type `[` and it lists **that dataset's columns** to filter on, with its tag columns first — so `<q:characters[` immediately offers `tags`. Once you have picked a column it offers the **operators** (`=` any, `==` all, `!=` none, plus `+=` and `-=` for numbers or text length); after a `;` it starts over for your next condition.
+- With a single dataset, type `[` and it lists **that dataset's columns** to filter on, with its tag columns first — so `<q:characters[` immediately offers `tags`. Once you have picked a column it offers the **operators** (`=` any, `==` all, `!=` none, plus `+=` and `-=` for numbers, text length, or array count); after a `;` it starts over for your next condition.
 - Type `:` (after the name and any `[filter]`) and it lists the **columns you can use as the prompt** — the default prompt column first — for the [`:column` override](#picking-the-prompt-column-qfoobar). Add a comma to choose another output column; already selected columns are excluded from the suggestions.
 
 Picking a suggestion leaves the tag open so you can keep going — add another comma, open a `[` filter, or just type `>` to finish.
@@ -296,7 +388,7 @@ dataset in a `.quarry-prep-*` checkpoint directory and prints a recovery command
 ./quarry prep --resume /path/to/.quarry-prep-xxxxxxxx
 ```
 
-Resume skips conversion and deduplication and reuses the completed casing representation. Older prep checkpoints are upgraded before publication. The final output is published only after indexing succeeds; the source
+Resume skips conversion and deduplication, verifies the checkpoint's logical values and derived search data, and reuses the completed representation. Older prep checkpoints are upgraded before publication. The final output is published only after logical-value and index verification succeeds; the source
 and any existing output remain untouched. Temporary cleanup/index files are
 removed, while the checkpoint remains until a successful resume.
 
@@ -320,10 +412,16 @@ do not estimate savings.
 
 The rewrite preserves live rows, row order, logical column order, nulls, and exact
 original text. It removes recognized `__lc` companions, stores lowercase text in
-the original columns, adds lossless binary `__case` patches, and rebuilds NGRAM
-indexes on every string column. Supported existing scalar indexes are retained;
+flat string columns, adds lossless binary `__case` patches, and rebuilds NGRAM
+indexes. Structured columns retain their original nested values; each nested text
+field gets a hidden lowercase search column spanning all records and an NGRAM
+index. These fields are discovered from the schema, not a fixed list. For example,
+a record with 13 text fields gets 13 search columns regardless of array length.
+Supported existing scalar indexes are retained;
 unsupported indexes and case-sensitive string BTREE/BITMAP indexes are rejected
-before replacement. Non-text columns keep their types and values.
+before replacement. Non-text columns keep their types and values. Optimize never
+deduplicates rows. Search columns add storage, so nested indexing is not a promise
+of reduced dataset size.
 
 Only the current Lance version survives: deleted rows, obsolete physical columns,
 and previous versions are discarded. Index creation can advance the version
@@ -334,17 +432,33 @@ the dataset for the rewritten data, indexes, and index spill files. Stop readers
 and writers before migrating; live concurrent replacement is not supported.
 
 Quarry automatically restores casing for prompts, search results, and previews.
-Short and non-ASCII search terms use a scan to avoid false negatives from the
-current NGRAM tokenizer; other terms retain indexed filtering.
+For flat text, only entirely ASCII alphanumeric terms of at least three characters
+use the NGRAM route; other terms scan to preserve substring semantics. Nested
+search can use the longest literal ASCII alphanumeric run of at least three
+characters from a positive term to narrow candidates, then checks the complete
+condition against the original records. Terms without that run and negative
+conditions retain exact scan behavior. Indices never replace the checks for
+record position, shared variables, or distinct subjects, and never change counts
+or output selection.
 ASCII casing uses sparse UTF-8 byte positions or a bitmap; Unicode casing changes
 use the full original UTF-8 value when necessary. No Unicode normalization is
 applied. Keep `quarry-storage.json` with the dataset: it identifies the format and
-its casing columns. Other Lance readers see the physical lowercase values unless
-they implement this codec. See [the storage specification](docs/casing-storage.md).
+its casing and search columns. Other Lance readers see physical lowercase flat
+values unless they implement this codec; nested values retain their original
+casing. See [the storage specification](docs/casing-storage.md).
+
+Structured datasets record the finalized Lance manifest in a version-2 storage
+descriptor. If the dataset changes outside Quarry, untrusted search columns are
+not used. Datasets containing only original nested values remain readable with
+exact searches; run `./quarry lance optimize DATASET.lance` to regenerate their
+search data. If the dataset also has flat casing patches, a changed snapshot is
+an error: rebuild from the original input because those patches can no longer be
+safely paired with the text. Do not edit the descriptor to bypass this check.
 
 Use `./quarry prep` to select, rename, reorder, or clean encoded input into a new
 dataset. `./quarry columns reorder DATASET.lance score,prompt` reorders in place,
-preserving the casing JSON, companion columns, and supported scalar indexes.
+preserving logical values, companion columns, and supported scalar indexes, and
+refreshing the structured dataset's snapshot after verification.
 The rewrite rebuilds indexes before replacing the original dataset; unsupported
 index types are rejected before writing. `./quarry lance prep --no-clean` can
 rebuild indexes, while its legacy in-place cleaning pass rejects encoded datasets.

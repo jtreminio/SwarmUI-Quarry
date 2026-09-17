@@ -1,9 +1,10 @@
-export type ColumnKind = "scalar" | "list";
+export type ColumnKind = "scalar" | "list" | "object";
 
 export interface ColumnDto {
     name: string;
     kind: ColumnKind;
     numeric?: boolean;
+    fields?: { name: string; numeric?: boolean }[];
 }
 
 export interface DatasetDto {

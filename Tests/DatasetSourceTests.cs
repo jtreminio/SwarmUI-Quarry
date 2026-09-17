@@ -8,9 +8,6 @@ public class DatasetSourceTests
     [InlineData("/data/x.parquet", "read_parquet('/data/x.parquet')", false)]
     [InlineData("/data/x.csv", "read_csv('/data/x.csv')", false)]
     [InlineData("/data/x.tsv", "read_csv('/data/x.tsv')", false)]
-    [InlineData("/data/x.json", "read_json('/data/x.json')", false)]
-    [InlineData("/data/x.jsonl", "read_ndjson('/data/x.jsonl')", false)]
-    [InlineData("/data/x.ndjson", "read_ndjson('/data/x.ndjson')", false)]
     [InlineData("/data/x.lance", "'/data/x.lance'", true)]
     public void Resolve_MapsExtensionToReader(string path, string expectedFrom, bool requiresLance)
     {

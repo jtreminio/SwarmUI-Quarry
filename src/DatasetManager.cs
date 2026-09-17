@@ -1,4 +1,5 @@
 using System.IO;
+using System.Security.Cryptography;
 using FreneticUtilities.FreneticExtensions;
 using SwarmUI.Core;
 using SwarmUI.Utils;
@@ -455,12 +456,30 @@ public static class DatasetManager
             && !trimmed.Contains("whattheduck", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string ComputeHash(string path)
+    internal static string ComputeHash(string path)
     {
         try
         {
             if (Directory.Exists(path))
             {
+                string versions = Path.Combine(path, "_versions");
+                string descriptor = Path.Combine(path, CasingStorage.DescriptorName);
+                string[] manifests = Directory.Exists(versions)
+                    ? Directory.GetFiles(versions, "*.manifest", SearchOption.TopDirectoryOnly) : [];
+                if (manifests.Length > 0 || File.Exists(descriptor))
+                {
+                    using IncrementalHash identity = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+                    foreach (string file in manifests.Concat(File.Exists(descriptor) ? [descriptor] : [])
+                        .OrderBy(f => Path.GetRelativePath(path, f), StringComparer.Ordinal))
+                    {
+                        byte[] name = Encoding.UTF8.GetBytes(Path.GetRelativePath(path, file).Replace('\\', '/'));
+                        identity.AppendData(BitConverter.GetBytes(name.Length));
+                        identity.AppendData(name);
+                        using FileStream stream = File.OpenRead(file);
+                        identity.AppendData(SHA256.HashData(stream));
+                    }
+                    return "lance:" + Convert.ToHexString(identity.GetHashAndReset());
+                }
                 DirectoryInfo dir = new(path);
                 long newest = dir.LastWriteTimeUtc.Ticks;
                 int count = 0;

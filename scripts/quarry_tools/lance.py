@@ -91,6 +91,30 @@ def is_list_type(dtype) -> bool:
     )
 
 
+def is_record_type(dtype) -> bool:
+    """Objects and arrays of objects remain structured for runtime selectors."""
+    import pyarrow as pa
+
+    return pa.types.is_struct(dtype) or (
+        is_list_type(dtype) and pa.types.is_struct(dtype.value_type)
+    )
+
+
+def validate_record_type(dtype, name):
+    import pyarrow as pa
+
+    record = dtype.value_type if is_list_type(dtype) else dtype
+    if is_list_type(dtype) and is_list_type(record):
+        raise FileError(f"column {name!r}: arrays of arrays are not supported")
+    if is_record_type(dtype) and any(
+        pa.types.is_nested(field.type) for field in record
+    ):
+        raise FileError(
+            f"column {name!r}: objects must contain direct scalar fields; "
+            "nested objects or arrays inside records are not supported"
+        )
+
+
 def flatten_value(value):
     """Join one list cell to a string the way Lance's array_to_string does."""
     if value is None:
@@ -193,8 +217,11 @@ def process_dataset(
     columns = list(ds.schema.names)
     if not columns:
         raise DatasetError("dataset has no columns")
+    for field in ds.schema:
+        validate_record_type(field.type, field.name)
     list_cols = [
         name for name in columns if is_list_type(ds.schema.field(name).type)
+        and not is_record_type(ds.schema.field(name).type)
     ]
 
     result = {
@@ -216,7 +243,19 @@ def process_dataset(
     col = resolve_prompt_column(columns, override)
     result["column"] = col
     dtype = ds.schema.field(col).type
-    preview_list = dry_run and flatten and is_list_type(dtype)
+    preview_list = dry_run and flatten and is_list_type(dtype) and not is_record_type(dtype)
+
+    if is_record_type(dtype):
+        from .structured import clean_lance_records
+
+        empty, duplicates = clean_lance_records(ds, col, path, dedup=dedup, dry_run=dry_run)
+        result["empty"], result["duplicate"] = empty, duplicates
+        if not dry_run:
+            result["empty_removed"], result["duplicate_removed"] = empty, duplicates
+        if compact and not dry_run and (result["flattened"] or empty or duplicates):
+            ds.optimize.compact_files()
+            ds.cleanup_old_versions(older_than=timedelta(0))
+        return result
 
     pred = empty_row_predicate(col, dtype)
     total = result["total"]
@@ -504,7 +543,7 @@ def register_convert(subparsers, name: str, invocation: str, alias_of=None) -> N
 _PREP_DESC = """\
 Prep standalone Lance dataset(s) for Quarry: clean, then build search indices.
 
-Each dataset is first cleaned -- list columns are flattened to ', '-joined
+Each dataset is first cleaned -- simple list columns are flattened to ', '-joined
 strings, and empty plus normalized-duplicate prompt rows are deleted (see the
 --no-flatten / --no-dedup / --no-compact toggles and --prompt-column). This is
 DESTRUCTIVE. Pass --no-clean to skip it, or --dry-run to preview what cleaning
@@ -662,34 +701,92 @@ def _clean_one(path, prompt_column, dry_run, flatten, dedup, compact, emit) -> N
     )
 
 
+def _reindex_prepared(path, layout, rebuild, emit):
+    """Keep the published snapshot readable until a rebuilt copy is verified."""
+    import lance
+    import shutil
+    import tempfile
+    from . import storage
+    from .optimize import completion_marker
+
+    path = Path(path)
+    descriptor = (path / storage.DESCRIPTOR).read_bytes()
+    reader = storage.logical_reader(lance.dataset(str(path)), path)
+    expected = storage.LogicalDigest(reader.schema)
+    for batch in reader:
+        expected.update(batch)
+    work = Path(tempfile.mkdtemp(dir=path.parent, prefix=".quarry-reindex-"))
+    staged, backup = work / "dataset.lance", work / "original.lance"
+    try:
+        shutil.copytree(path, staged)
+        rebuild(staged)
+        storage.verify_helpers(staged)
+        storage.verify_dataset(staged, expected, trusted_staging=True)
+        storage.write_descriptor(staged, layout["columns"],
+                                 optimized=completion_marker(lance.dataset(str(staged))), finalize=True)
+        if ((path / storage.DESCRIPTOR).read_bytes() != descriptor
+                or storage.manifest_snapshot(path) != layout["snapshot"]):
+            raise FileError("source changed during reindexing; refusing replacement")
+        os.replace(path, backup)
+        try:
+            os.replace(staged, path)
+        except BaseException:
+            os.replace(backup, path)
+            raise
+    finally:
+        if backup.exists() and not path.exists():
+            emit(f"  recovery required: original dataset retained at {backup}")
+        else:
+            shutil.rmtree(work)
+
+
 def _build_one(
     path, text_columns, bitmap, btree, always_companion, auto_btree, keep_history,
     emit, clean=True, flatten=True, dedup=True, compact=True, prompt_column=None,
-    dry_run=False, reuse_companions=False, ngram_names=None,
+    dry_run=False, reuse_companions=False, ngram_names=None, trusted_staging=False,
 ) -> None:
     import lance
     import pyarrow as pa
 
-    from .storage import read_descriptor
-    encoded = read_descriptor(path)
-    if encoded and clean:
+    from .storage import read_layout
+    layout = read_layout(path, trusted_staging=trusted_staging)
+    encoded = layout["columns"]
+    helpers = {h["physical"] for h in layout["helpers"]}
+    helper_labels = {h["physical"]: h["column"] + ("[]" if h["kind"] == "list" else "") + "." + h["field"]
+                     for h in layout["helpers"]}
+    if layout["version"] == 2 and not trusted_staging:
+        if not layout.get("snapshot_trusted") or layout.get("search_version") != 1:
+            raise FileError("search helpers are not trusted; run ./quarry lance optimize to regenerate them")
+        if keep_history:
+            raise FileError("structured prepared storage requires one finalized version; omit --keep-history")
+        from .storage import verify_helpers
+        verify_helpers(path)
+    if (encoded or layout["version"] == 2) and clean:
         raise FileError("encoded datasets must be cleaned with ./quarry prep to preserve original casing; use --no-clean to rebuild indexes")
-    if encoded and always_companion:
+    if (encoded or layout["version"] == 2) and always_companion:
         raise FileError("--always-companion is deprecated and incompatible with casing storage")
     emit(f"\n=== {path} ===")
     if clean:
         _clean_one(path, prompt_column, dry_run, flatten, dedup, compact, emit)
     if dry_run:
         return  # preview only -- nothing was cleaned, so there's nothing to index
+    if layout["version"] == 2 and not trusted_staging:
+        return _reindex_prepared(path, layout, lambda staged: _build_one(
+            staged, text_columns, bitmap, btree, always_companion, auto_btree, False,
+            emit, clean=False, reuse_companions=reuse_companions,
+            ngram_names=ngram_names, trusted_staging=True,
+        ), emit)
     ds = lance.dataset(str(path))
     before = _dir_size(path)
-    for col in _resolve_text_columns(ds, text_columns or list(encoded)):
-        emit(f"  {col!r}: checking whether a lowercase search column is needed…")
-        if col in encoded or (not always_companion and _all_lowercase(str(path), col)):
+    requested = text_columns or (list(encoded) + sorted(helpers))
+    for col in _resolve_text_columns(ds, requested):
+        label = helper_labels.get(col, col)
+        emit(f"  {label!r}: checking whether a lowercase search column is needed…")
+        if col in encoded or col in helpers or (not always_companion and _all_lowercase(str(path), col)):
             t = time.time()
-            emit(f"  {col!r}: building NGRAM index…")
+            emit(f"  {label!r}: building NGRAM index…")
             ds.create_scalar_index(col, "NGRAM", replace=True, **({"name": ngram_names[col]} if ngram_names and col in ngram_names else {}))
-            emit(f"  {col!r}: already lowercase -> NGRAM in place in {time.time() - t:.1f}s")
+            emit(f"  {label!r}: NGRAM in place in {time.time() - t:.1f}s")
             continue
         companion = col + LC_SUFFIX
         t = time.time()
@@ -737,7 +834,7 @@ def _build_one(
         emit(f"  pruned {stats.old_versions} old version(s), reclaimed {_human(stats.bytes_removed)}")
     ds = lance.dataset(str(path))
     after = _dir_size(path)
-    emit(f"  indices: {[(i['name'], i['type']) for i in ds.list_indices()]}")
+    emit(f"  indices: {[(helper_labels.get(i['fields'][0], i['name']) if len(i['fields']) == 1 else i['name'], i['type']) for i in ds.list_indices()]}")
     emit(f"  size: {_human(before)} -> {_human(after)}  (+{_human(after - before)})")
 
 

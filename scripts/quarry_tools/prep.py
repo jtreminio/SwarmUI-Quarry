@@ -62,6 +62,13 @@ def plan_columns(existing: list[str], raw: str) -> list[tuple[str, str]]:
 @contextmanager
 def open_source(path: Path, fmt: str, batch_rows: int):
     """Expose a schema, row count, and lazy batches while keeping the reader open."""
+    if fmt in ("json", "jsonl"):
+        from .json_schema import open_json_source
+
+        with open_json_source(path, fmt, batch_rows) as source:
+            yield source
+        return
+
     if fmt == "lance":
         import lance
 
@@ -101,14 +108,15 @@ def open_source(path: Path, fmt: str, batch_rows: int):
 
 
 def selected_reader(schema, batches, selected):
-    """Rename and flatten streamed batches without moving selected columns."""
+    """Rename columns, flatten simple lists, and preserve shallow records."""
     import pyarrow as pa
 
     fields = []
     flattened = []
     for source, target in selected:
         field = schema.field(source)
-        flatten = lance_tools.is_list_type(field.type)
+        lance_tools.validate_record_type(field.type, source)
+        flatten = lance_tools.is_list_type(field.type) and not lance_tools.is_record_type(field.type)
         flattened.append(flatten)
         fields.append(
             pa.field(target, pa.string(), nullable=field.nullable)
@@ -189,6 +197,8 @@ def cmd_prep(args) -> int:
                         print(f"error: {exc}", file=sys.stderr)
             names = [target for _, target in selected]
             prompt_column = lance_tools.resolve_prompt_column(names, args.prompt_column)
+            from .json_schema import validate_empty_selections
+            validate_empty_selections(schema, selected, prompt_column)
             reader = selected_reader(schema, batches, selected)
             print(f"Keeping: {'; '.join(f'{old}={new}' for old, new in selected)}")
             print(f"Prompt column: {prompt_column}")
@@ -207,11 +217,15 @@ def cmd_prep(args) -> int:
                     ) as cleaned:
                         expected = storage.LogicalDigest(cleaned.schema)
                         encoded, pairs = storage.encoded_reader(cleaned, expected)
-                        ds = lance.write_dataset(encoded, str(staged), mode="create", data_storage_version=storage.DATA_STORAGE_VERSION)
+                        ds = lance.write_dataset(encoded, str(staged), mode="create", data_storage_version=storage.DATA_STORAGE_VERSION,
+                                                 enable_stable_row_ids=False)
                         storage.write_descriptor(staged, pairs)
-                        storage.verify_dataset(staged, expected)
+                        storage.verify_dataset(staged, expected, trusted_staging=True)
                 (work / "prep.json").write_text(json.dumps({
-                    "version": 2, "output": str(output), "prompt_column": prompt_column,
+                    "version": 3, "output": str(output), "prompt_column": prompt_column,
+                    "storage_policy": 2, "search_policy": 1,
+                    "logical_digest": expected.result(),
+                    "logical_schema": [[field.name, str(field.type)] for field in expected.schema],
                 }), encoding="utf-8")
                 ready = True
                 print(f"Wrote {ds.count_rows():,} cleaned row(s); building search indices…", flush=True)
@@ -241,7 +255,23 @@ def index_and_publish(work, output, prompt_column, emit, *, resume=False):
     import lance
 
     staged = work / "dataset.lance"
-    if not (staged / storage.DESCRIPTOR).exists():
+    checkpoint_file = work / "prep.json"
+    checkpoint = json.loads(checkpoint_file.read_text()) if checkpoint_file.exists() else {}
+    reader = storage.logical_reader(lance.dataset(str(staged)), staged, trusted_staging=True)
+    actual = storage.LogicalDigest(reader.schema)
+    for batch in reader:
+        actual.update(batch)
+    if checkpoint.get("version") == 3:
+        if checkpoint.get("storage_policy") != 2 or checkpoint.get("search_policy") != 1:
+            raise FileError("unsupported prep checkpoint storage policy")
+        if list(actual.result()) != checkpoint.get("logical_digest"):
+            raise FileError("prep checkpoint logical values changed; rebuild from original input")
+        if [[field.name, str(field.type)] for field in actual.schema] != checkpoint.get("logical_schema"):
+            raise FileError("prep checkpoint logical schema changed; rebuild from original input")
+        storage.verify_helpers(staged)
+    existing_layout = storage.read_layout(staged, trusted_staging=True)
+    _, has_records = storage.helper_layout(actual.schema)
+    if not (staged / storage.DESCRIPTOR).exists() or (has_records and existing_layout["version"] == 1):
         from .optimize import optimize_dataset
         optimize_dataset(staged, emit, auto_btree=True)
         return publish_dataset(staged, output)
@@ -257,6 +287,7 @@ def index_and_publish(work, output, prompt_column, emit, *, resume=False):
                 keep_history=False, emit=emit, clean=False,
                 flatten=False, prompt_column=prompt_column,
                 reuse_companions=resume,
+                trusted_staging=True,
             )
         finally:
             if previous is None:
@@ -265,7 +296,10 @@ def index_and_publish(work, output, prompt_column, emit, *, resume=False):
                 os.environ["TMPDIR"] = previous
     from .optimize import completion_marker
     ds = lance.dataset(str(staged))
-    storage.write_descriptor(staged, storage.read_descriptor(staged, ds.schema), optimized=completion_marker(ds))
+    storage.verify_helpers(staged)
+    storage.verify_dataset(staged, actual, trusted_staging=True)
+    storage.write_descriptor(staged, storage.read_descriptor(staged, ds.schema, trusted_staging=True),
+                             optimized=completion_marker(ds), finalize=True)
     return publish_dataset(staged, output)
 
 
@@ -292,9 +326,9 @@ def resume_prep(args):
             raise FileError("not a Quarry prep checkpoint directory")
         checkpoint = json.loads((work / "prep.json").read_text(encoding="utf-8"))
         staged = work / "dataset.lance"
-        if checkpoint.get("version") not in (1, 2) or staged.is_symlink() or not (staged / "_versions").is_dir():
+        if checkpoint.get("version") not in (1, 2, 3) or staged.is_symlink() or not (staged / "_versions").is_dir():
             raise FileError("not a completed Quarry conversion checkpoint")
-        if checkpoint.get("version") == 2 and not (staged / storage.DESCRIPTOR).is_file():
+        if checkpoint.get("version") in (2, 3) and not (staged / storage.DESCRIPTOR).is_file():
             raise FileError("casing storage descriptor is missing from the checkpoint")
         output = Path(args.output).expanduser().absolute() if args.output else Path(checkpoint["output"])
         if output.suffix != ".lance" or output.exists() or output.is_symlink():
@@ -321,7 +355,7 @@ def register(subparsers) -> None:
         "prep", help="select columns, convert to Lance, and prep in one command",
         description=(
             "Interactively select, rename, and order columns, then convert to Lance, "
-            "flatten lists, remove empty/duplicate prompt rows, and build search indices. "
+            "flatten simple lists, preserve object records, remove empty/duplicate complete prompts, and build search indices. "
             "Supports Parquet, CSV/TSV, JSON/JSONL/NDJSON, and Lance. "
             "The source is preserved; an existing output is never overwritten."
         ),

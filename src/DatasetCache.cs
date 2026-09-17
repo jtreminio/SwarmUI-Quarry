@@ -8,7 +8,7 @@ namespace Quarry;
 
 public static class DatasetCache
 {
-    private const int CacheVersion = 5;
+    private const int CacheVersion = 7;
     private static readonly ConcurrentDictionary<string, CacheEntry> Cache = new();
     private static readonly ConcurrentDictionary<string, long> FilteredCounts = new();
     private static readonly object CacheLock = new();
@@ -252,10 +252,17 @@ public static class DatasetCache
                         ["ngram"] = column.HasNgramIndex,
                         ["casingColumn"] = column.CasingColumn,
                         ["isCasingPatch"] = column.IsCasingPatch,
+                        ["isSearchHelper"] = column.IsSearchHelper,
                         ["numericType"] = column.NumericType,
+                        ["dataType"] = column.DataType,
                     });
                 }
                 obj["schema"] = columns;
+                obj["searchHelpers"] = new JArray(entry.Schema.SearchHelpers.Select(helper => new JObject
+                {
+                    ["column"] = helper.Column, ["field"] = helper.Field,
+                    ["kind"] = helper.Kind, ["physical"] = helper.Physical,
+                }));
             }
             if (entry.HasRowCount)
             {
@@ -316,7 +323,7 @@ public static class DatasetCache
                 Cache[property.Name] = new CacheEntry
                 {
                     Hash = hash,
-                    Schema = ReadSchema(obj["schema"] as JArray),
+                    Schema = ReadSchema(obj["schema"] as JArray, obj["searchHelpers"] as JArray),
                     HasRowCount = obj["rowCount"] is not null,
                     RowCountColumn = obj.Value<string>("rowCountColumn") ?? "",
                     RowCount = obj.Value<long?>("rowCount") ?? 0,
@@ -341,7 +348,7 @@ public static class DatasetCache
         }
     }
 
-    private static ColumnSchema ReadSchema(JArray columns)
+    private static ColumnSchema ReadSchema(JArray columns, JArray searchHelpers)
     {
         if (columns is null)
         {
@@ -355,16 +362,28 @@ public static class DatasetCache
             {
                 continue;
             }
-            ColumnKind kind = string.Equals(token.Value<string>("kind"), nameof(ColumnKind.List), StringComparison.OrdinalIgnoreCase)
-                ? ColumnKind.List
-                : ColumnKind.Scalar;
+            ColumnKind kind = Enum.TryParse(token.Value<string>("kind"), true, out ColumnKind parsedKind) ? parsedKind : ColumnKind.Scalar;
             bool numeric = token.Value<bool?>("numeric") ?? false;
             bool ngram = token.Value<bool?>("ngram") ?? false;
             string numericType = token.Value<string>("numericType");
             result.Add(new ColumnInfo(name, kind, numeric, hasNgramIndex: ngram, numericType: numericType,
-                casingColumn: token.Value<string>("casingColumn"), isCasingPatch: token.Value<bool?>("isCasingPatch") ?? false));
+                casingColumn: token.Value<string>("casingColumn"), isCasingPatch: token.Value<bool?>("isCasingPatch") ?? false,
+                dataType: token.Value<string>("dataType"), isSearchHelper: token.Value<bool?>("isSearchHelper") ?? false));
         }
-        return new ColumnSchema(result);
+        List<SearchHelper> helpers = [];
+        foreach (JToken helper in searchHelpers ?? [])
+        {
+            string column = helper.Value<string>("column"), field = helper.Value<string>("field"),
+                kind = helper.Value<string>("kind"), physical = helper.Value<string>("physical");
+            if (string.IsNullOrEmpty(column) || string.IsNullOrEmpty(field) || kind is not ("list" or "object")
+                || !result.Any(c => c.Name == physical && c.IsSearchHelper && c.HasNgramIndex))
+            {
+                return null;
+            }
+
+            helpers.Add(new(column, field, kind, physical));
+        }
+        return new ColumnSchema(result, helpers);
     }
 
     private static PreviewData ReadPreview(JObject preview)

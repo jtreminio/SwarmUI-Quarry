@@ -1,6 +1,10 @@
 root = true
 
 [*.cs]
+# Require braces for control-flow blocks, including single-line statements.
+csharp_prefer_braces = true
+dotnet_diagnostic.IDE0011.severity = warning
+
 # Catch dead/drift-prone code at build time. Promote each to a build warning so
 # future commits can't reintroduce them silently.
 

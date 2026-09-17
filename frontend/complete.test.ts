@@ -44,6 +44,112 @@ const ALL: CompletionDataset[] = [characters, creatures, styled];
 const labels = (suffix: string, list = ALL): string[] =>
     computeQuarryCompletions(suffix, list).map((c) => c.label);
 
+describe("nested selectors and formatting", () => {
+    const nested: CompletionDataset = {
+        name: "portraits",
+        columns: [
+            {
+                name: "subject",
+                kind: "list",
+                fields: [{ name: "hair" }, { name: "eyes" }],
+            },
+        ],
+        tagColumns: [],
+        promptColumn: "subject",
+        rowCount: 10,
+    };
+    it("completes fields inside the outer filter after a record selector", () => {
+        expect(labels("portraits[subject[i].h", [nested])).toEqual([
+            "subject[i].hair",
+        ]);
+        expect(
+            labels("portraits[subject[i].hair=blond;subject[n].e", [nested]),
+        ).toEqual(["subject[n].eyes"]);
+        expect(labels("portraits[subject[12].h", [nested])).toEqual([
+            "subject[12].hair",
+        ]);
+    });
+    it("offers count comparisons only for whole arrays, and length comparisons for individual fields", () => {
+        expect(labels("portraits[subject", [nested])).toEqual([
+            "=",
+            "==",
+            "!=",
+            "+=",
+            "-=",
+        ]);
+        for (const path of [
+            "subject[0]",
+            "subject[i]",
+            "subject.hair",
+            "subject[].hair",
+        ]) {
+            expect(labels(`portraits[${path}`, [nested])).toEqual([
+                "=",
+                "==",
+                "!=",
+            ]);
+        }
+        expect(labels("portraits[subject[i].hair", [nested])).toContain("+=");
+        expect(labels("portraits[subject[]", [nested])).toContain("+=");
+    });
+    it("suggests the current all-record syntax when completing the compatibility alias", () => {
+        expect(labels("portraits:subject[*].h", [nested])).toEqual([
+            "subject[].hair",
+        ]);
+        expect(
+            computeQuarryCompletions("portraits[subject[*]", [nested])[0].apply,
+        ).toBe("<q:portraits[subject[]=");
+        expect(labels("portraits:", [nested])).toContain("subject[]");
+        expect(labels("portraits:", [nested])).not.toContain("subject[*]");
+    });
+    it("completes output selectors without interpreting them as a new filter", () => {
+        const result = computeQuarryCompletions(
+            "portraits[subject[i].hair=blond]:subject[i].e",
+            [nested],
+        );
+        expect(result[0].apply).toBe(
+            "<q:portraits[subject[i].hair=blond]:subject[i].eyes",
+        );
+        expect(labels("portraits:subject[].h", [nested])).toEqual([
+            "subject[].hair",
+        ]);
+    });
+    it("preserves binding case while matching column and field names without case", () => {
+        expect(labels("portraits[SUBJECT[Person].H", [nested])).toEqual([
+            "subject[Person].hair",
+        ]);
+        expect(
+            computeQuarryCompletions("portraits[SUBJECT[I].HAIR", [nested])[0]
+                .apply,
+        ).toBe("<q:portraits[subject[I].hair=");
+        expect(
+            computeQuarryCompletions(
+                "portraits[subject[I].hair=blond]:SUBJECT[I].H",
+                [nested],
+            )[0].apply,
+        ).toBe("<q:portraits[subject[I].hair=blond]:subject[I].hair");
+    });
+    it("keeps bindings differing only in case distinct in output suggestions", () => {
+        const query = "portraits[subject[I].hair=blond;subject[i].hair=red]:";
+        expect(labels(query, [nested])).toEqual(
+            expect.arrayContaining(["subject[I]", "subject[i]"]),
+        );
+        expect(labels(`${query}SUBJECT[I],`, [nested])).not.toContain(
+            "subject[I]",
+        );
+        expect(labels(`${query}SUBJECT[I],`, [nested])).toContain("subject[i]");
+        expect(labels(`${query}subject[i].H`, [nested])).toEqual([
+            "subject[i].hair",
+        ]);
+    });
+    it("offers formatting names and aliases while respecting quoted separators", () => {
+        expect(
+            labels('portraits:subject[]|keys;rs="; [] |"; f', [nested]),
+        ).toEqual(['field_separator="', 'fs="']);
+        expect(labels('portraits:subject[]|rs=";', [nested])).toEqual([]);
+    });
+});
+
 describe("computeQuarryCompletions — dataset names", () => {
     it("lists every dataset for a bare `<q:`", () => {
         expect(labels("")).toEqual(["characters", "creatures", "styled"]);
@@ -95,7 +201,12 @@ describe("computeQuarryCompletions — dataset names", () => {
 
 describe("computeQuarryCompletions — filter columns", () => {
     it("lists a single dataset's columns when `[` is opened, tag columns first", () => {
-        expect(labels("characters[")).toEqual(["tags", "prompt", "source"]);
+        expect(labels("characters[")).toEqual([
+            "tags",
+            "prompt",
+            "source",
+            "tags[]",
+        ]);
     });
 
     it("labels columns by role", () => {
@@ -134,10 +245,10 @@ describe("computeQuarryCompletions — filter columns", () => {
 
     it("filters the column list by what is typed", () => {
         expect(labels("characters[so")).toEqual(["source"]);
-        expect(labels("characters[ta")).toEqual(["tags"]);
+        expect(labels("characters[ta")).toEqual(["tags", "tags[]"]);
     });
 
-    it("suggests the three operators once the column name is complete", () => {
+    it("suggests content and count operators for an array column", () => {
         expect(computeQuarryCompletions("characters[tags", ALL)).toEqual([
             {
                 apply: "<q:characters[tags=",
@@ -153,6 +264,16 @@ describe("computeQuarryCompletions — filter columns", () => {
                 apply: "<q:characters[tags!=",
                 label: "!=",
                 hint: "match none of the values",
+            },
+            {
+                apply: "<q:characters[tags+=",
+                label: "+=",
+                hint: "at least (number, text length, or array count)",
+            },
+            {
+                apply: "<q:characters[tags-=",
+                label: "-=",
+                hint: "at most (number, text length, or array count)",
             },
         ]);
     });
@@ -205,12 +326,12 @@ describe("computeQuarryCompletions — filter columns", () => {
             {
                 apply: "<q:rated[score+=",
                 label: "+=",
-                hint: "at least (number or text length)",
+                hint: "at least (number, text length, or array count)",
             },
             {
                 apply: "<q:rated[score-=",
                 label: "-=",
-                hint: "at most (number or text length)",
+                hint: "at most (number, text length, or array count)",
             },
         ]);
         // A text column uses the same operators for character-count comparisons.
@@ -221,8 +342,18 @@ describe("computeQuarryCompletions — filter columns", () => {
         ).toEqual(["=", "==", "!=", "+=", "-="]);
     });
 
-    it("does not add length modifiers for list columns", () => {
-        expect(labels("characters[tags")).toEqual(["=", "==", "!="]);
+    it("does not add comparison modifiers for direct objects", () => {
+        const objects: CompletionDataset = {
+            ...ALL[0],
+            columns: [
+                { name: "meta", kind: "object", fields: [{ name: "mood" }] },
+            ],
+        };
+        expect(labels(`${objects.name}[meta`, [objects])).toEqual([
+            "=",
+            "==",
+            "!=",
+        ]);
     });
 
     it("stops suggesting columns once a `+=` / `-=` is typed", () => {
@@ -269,8 +400,13 @@ describe("computeQuarryCompletions — filter columns", () => {
 
 describe("computeQuarryCompletions — prompt column override", () => {
     it("offers unselected columns after each comma, ignoring case and spaces", () => {
-        expect(labels("characters: PROMPT ,")).toEqual(["tags", "source"]);
+        expect(labels("characters: PROMPT ,")).toEqual([
+            "tags",
+            "source",
+            "tags[]",
+        ]);
         expect(labels("characters:prompt, tags,")).toEqual(["source"]);
+        expect(labels("characters:prompt, tags[],")).toEqual(["source"]);
         expect(labels("characters:prompt,tags,source,")).toEqual([]);
     });
 
@@ -290,7 +426,12 @@ describe("computeQuarryCompletions — prompt column override", () => {
     });
 
     it("lists the columns usable as the prompt after `:`, the default first", () => {
-        expect(labels("characters:")).toEqual(["prompt", "tags", "source"]);
+        expect(labels("characters:")).toEqual([
+            "prompt",
+            "tags",
+            "source",
+            "tags[]",
+        ]);
         expect(computeQuarryCompletions("characters:", ALL)[0].hint).toBe(
             "default prompt column",
         );
@@ -302,11 +443,13 @@ describe("computeQuarryCompletions — prompt column override", () => {
             "prompt",
             "tags",
             "source",
+            "tags[]",
         ]);
         expect(labels("characters[tags=girl]:")).toEqual([
             "prompt",
             "tags",
             "source",
+            "tags[]",
         ]);
     });
 
@@ -333,6 +476,7 @@ describe("computeQuarryCompletions — prompt column override", () => {
             "tags",
             "source",
             "kind",
+            "tags[]",
         ]);
         expect(cols.slice(0, 2).map((c) => c.hint)).toEqual([
             "default prompt column",

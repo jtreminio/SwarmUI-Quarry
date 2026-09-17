@@ -176,6 +176,6 @@ public static class QueryRunner
         List<ColumnInfo> tagColumns = TagColumnResolver.Resolve(DatasetManager.GetConfiguredTagColumns(entry.Name), schema, promptColumn);
         IReadOnlyList<string> outputColumns = PromptColumnResolver.ResolveOutputColumns(
             query.PromptColumns, DatasetManager.GetConfiguredPromptColumn(entry.Name), schema);
-        return outputColumns.Count == 0 ? null : new Plan(entry, promptColumn, outputColumns, SqlFilterBuilder.Build(query, schema, tagColumns));
+        return outputColumns.Count == 0 ? null : new Plan(entry, promptColumn, outputColumns, NestedQueryCompiler.Build(query, schema, tagColumns, outputColumns));
     }
 }

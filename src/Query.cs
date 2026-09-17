@@ -16,10 +16,13 @@ public sealed class QueryClause(string column, MatchOp op, IReadOnlyList<string>
     public IReadOnlyList<string> Values { get; } = values;
 }
 
-public sealed class Query(string name, IReadOnlyList<QueryClause> clauses, IReadOnlyList<string> promptColumns = null)
+public sealed record OutputFormat(bool Keys = false, string RecordSeparator = ", ", string FieldSeparator = ", ");
+
+public sealed class Query(string name, IReadOnlyList<QueryClause> clauses, IReadOnlyList<string> promptColumns = null, OutputFormat format = null)
 {
     public string Name { get; } = name;
     public IReadOnlyList<QueryClause> Clauses { get; } = clauses;
     public IReadOnlyList<string> PromptColumns { get; } = promptColumns ?? [];
     public bool HasFilter => Clauses.Count > 0;
+    public OutputFormat Format { get; } = format ?? new();
 }

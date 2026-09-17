@@ -47,7 +47,7 @@ export const renderDatasetOptions = (dataset: DatasetDto): string =>
         .map((col) => {
             const selected =
                 col.name === dataset.resolvedPromptColumn ? " selected" : "";
-            const badge = col.kind === "list" ? " [list]" : "";
+            const badge = col.kind === "scalar" ? "" : ` [${col.kind}]`;
             return `<option value="${escapeHtml(col.name)}"${selected}>${escapeHtml(col.name)}${badge}</option>`;
         })
         .join("");
@@ -60,7 +60,7 @@ export const renderTagCheckboxes = (dataset: DatasetDto): string =>
             )
                 ? " checked"
                 : "";
-            const badge = col.kind === "list" ? " [list]" : "";
+            const badge = col.kind === "scalar" ? "" : ` [${col.kind}]`;
             return `<label class="quarry-tag-option"><input type="checkbox" class="quarry-dataset-tag" data-dataset="${escapeHtml(dataset.name)}" value="${escapeHtml(col.name)}"${checked}> ${escapeHtml(col.name)}${badge}</label>`;
         })
         .join("");

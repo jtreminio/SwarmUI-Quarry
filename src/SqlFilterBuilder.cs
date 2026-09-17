@@ -30,14 +30,14 @@ public static class SqlFilterBuilder
                 throw new QueryException(
                     $"Column '{clause.Column}' does not exist in dataset '{query.Name}'.");
             }
-            if (column.IsCasingPatch)
+            if (column.IsCasingPatch || column.IsSearchHelper)
             {
-                throw new QueryException("Casing patches are internal storage columns.");
+                throw new QueryException("Internal storage columns cannot be queried directly.");
             }
             string quoted = SqlText.QuoteIdentifier(column.Name);
             if (clause.Op is MatchOp.GreaterOrEqual or MatchOp.LessOrEqual)
             {
-                if (column.Kind != ColumnKind.Scalar)
+                if (column.Kind == ColumnKind.Object)
                 {
                     throw new NonNumericComparisonException(column.Name);
                 }
@@ -82,7 +82,7 @@ public static class SqlFilterBuilder
                     string indexed = SearchColumn(tagColumns[c], schema);
                     bool encoded = tagColumns[c].CasingColumn is not null;
                     string scan = $"lower({SqlText.QuoteIdentifier(tagColumns[c].Name)})";
-                    perColumn[c] = ScalarContains(MatchExpr(value, indexed, scan), encoded ? encodedPlaceholder : placeholder);
+                    perColumn[c] = ScalarContains(MatchExpr(clause.Values[i], indexed, scan), encoded ? encodedPlaceholder : placeholder);
                 }
             }
             valueMatches[i] = perColumn.Length == 1 ? perColumn[0] : $"({string.Join(" OR ", perColumn)})";
@@ -90,12 +90,16 @@ public static class SqlFilterBuilder
         return Combine(clause, valueMatches);
     }
 
-    private static string BuildMergedTagComparisonTerm(
+    internal static string BuildMergedTagComparisonTerm(
         IReadOnlyList<ColumnInfo> tagColumns,
         QueryClause clause,
         List<QueryParameter> parameters)
     {
-        if (tagColumns.Any(column => column.Kind != ColumnKind.Scalar))
+        foreach (ColumnInfo column in tagColumns)
+        {
+            ComplexTypes.Validate(column);
+        }
+        if (tagColumns.Any(column => column.Kind == ColumnKind.Object))
         {
             throw new NonNumericComparisonException(TagsKeyword);
         }
@@ -135,13 +139,17 @@ public static class SqlFilterBuilder
         string bound = integral && !IsIntegerLiteral(value)
             ? $"TRY_CAST({(atLeast ? "CEIL" : "FLOOR")}(TRY_CAST(${parameterName} AS DOUBLE)) AS {castType})"
             : $"TRY_CAST(${parameterName} AS {castType})";
-        string valueExpression = column.IsNumeric
+        string valueExpression = column.Kind == ColumnKind.List
+            ? ArrayCount(SqlText.QuoteIdentifier(column.Name))
+            : column.IsNumeric
             ? SqlText.QuoteIdentifier(column.Name)
             : $"length({SqlText.QuoteIdentifier(column.Name)})";
         return $"{valueExpression} {op} {bound}";
     }
 
-    private static bool IsIntegerLiteral(string value)
+    internal static string ArrayCount(string expression) => $"coalesce(list_count({expression}), 0)";
+
+    internal static bool IsIntegerLiteral(string value)
     {
         if (string.IsNullOrEmpty(value))
         {
@@ -166,7 +174,7 @@ public static class SqlFilterBuilder
     {
         string indexed = SearchColumn(column, schema);
         bool encoded = column.CasingColumn is not null;
-        // Keep a scan path: the current NGRAM tokenizer cannot answer short or all Unicode terms.
+        // NGRAM retains only ASCII alphanumeric trigrams. Other needles need an exact scan.
         string scan = $"lower({SqlText.QuoteIdentifier(column.Name)})";
         string[] checks = new string[clause.Values.Count];
         for (int i = 0; i < clause.Values.Count; i++)
@@ -174,7 +182,7 @@ public static class SqlFilterBuilder
             string value = MatchValue(clause.Values[i]);
             string name = $"p{parameters.Count}";
             parameters.Add(new QueryParameter(name, encoded ? clause.Values[i] : value));
-            checks[i] = ScalarContains(MatchExpr(value, indexed, scan), encoded ? $"lower(${name})" : $"${name}");
+            checks[i] = ScalarContains(MatchExpr(clause.Values[i], indexed, scan), encoded ? $"lower(${name})" : $"${name}");
         }
         return Combine(clause, checks);
     }
@@ -195,7 +203,35 @@ public static class SqlFilterBuilder
 
     internal const int NgramMinLength = 3;
     internal static string MatchExpr(string value, string indexedExpr, string scanExpr)
-        => value.Length < NgramMinLength || value.Any(c => c > 127) ? scanExpr : indexedExpr;
+        => value.Length >= NgramMinLength && value.All(IsAsciiAlphanumeric) ? indexedExpr : scanExpr;
+
+    private static bool IsAsciiAlphanumeric(char value)
+        => value is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9';
+
+    /// <summary>
+    /// Returns a necessary substring for candidate filtering, never a replacement for the exact predicate.
+    /// Extract before lowercasing so Unicode case conversion cannot introduce an unverified ASCII run.
+    /// </summary>
+    internal static string NgramAnchor(string value)
+    {
+        int bestStart = 0, bestLength = 0, runStart = 0;
+        for (int i = 0; i <= value.Length; i++)
+        {
+            if (i < value.Length && IsAsciiAlphanumeric(value[i]))
+            {
+                continue;
+            }
+
+            int length = i - runStart;
+            if (length > bestLength)
+            {
+                bestStart = runStart;
+                bestLength = length;
+            }
+            runStart = i + 1;
+        }
+        return bestLength >= NgramMinLength ? value.Substring(bestStart, bestLength).ToLowerInvariant() : null;
+    }
 
     internal static string SearchColumn(ColumnInfo column, ColumnSchema schema)
     {

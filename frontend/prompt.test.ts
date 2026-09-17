@@ -8,6 +8,18 @@ import {
 // computePromptEdit(value, cursorPos, name, addToExisting) is the pure core of a dataset-name click: it decides
 // whether to insert, toggle-off, or append to an existing tag, and returns the new prompt text + caret.
 describe("computePromptEdit — insert (separate, the default)", () => {
+    it("preserves nested selectors and quoted options when toggling datasets", () => {
+        const tail =
+            '[subject[i].hair=blond]:subject[i], subject[]|keys; rs=" = ; [] "; fs=", "';
+        const added = computePromptEdit(`<q:A${tail}>`, 0, "B", true).value;
+        expect(added).toBe(`<q:A,B${tail}>`);
+        expect(computePromptEdit(added, 0, "A", true).value).toBe(
+            `<q:B${tail}>`,
+        );
+        expect(computePromptEdit('<q:A|keys;rs=";">', 0, "B", true).value).toBe(
+            '<q:A,B|keys;rs=";">',
+        );
+    });
     it("preserves output columns when adding and removing datasets", () => {
         const original = "<q:A[tags=goth]:appearance, clothing,pose>";
         const added = computePromptEdit(original, 0, "B", true).value;

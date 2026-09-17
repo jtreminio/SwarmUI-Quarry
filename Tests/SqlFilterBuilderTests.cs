@@ -36,6 +36,13 @@ public class SqlFilterBuilderTests
         Assert.Equal("", f.WhereClause);
     }
 
+    [Fact]
+    public void InternalSearchHelper_CannotBeQueriedAsAUserColumn()
+    {
+        ColumnSchema schema = new([new ColumnInfo("hidden", ColumnKind.Scalar, isSearchHelper: true)]);
+        Assert.Throws<QueryException>(() => SqlFilterBuilder.Build(QueryParser.Parse("p[hidden=abc]"), schema));
+    }
+
     // --- Scalar/text columns: case-insensitive substring -------------------------------------------
     // The value is lowercased into the bound parameter (not via a SQL lower() on the placeholder), and the
     // column side is lowercased too -- via lower(col) here, since these schemas have no `_lc` companion.
@@ -184,6 +191,52 @@ public class SqlFilterBuilderTests
         ]);
         Assert.Equal("(contains(lower(\"prompt\"), $p0) OR contains(\"prompt__lc\", $p1))",
             SqlFilterBuilder.Build(QueryParser.Parse("p[prompt=ab,abc]"), schema).WhereClause);
+    }
+
+    [Theory]
+    [InlineData("a-b")]
+    [InlineData("!!!")]
+    [InlineData("bc de")]
+    [InlineData("a_b")]
+    [InlineData("abc\u001fdef")]
+    [InlineData("café")]
+    [InlineData("Kelvin")]
+    public void UnsafeNgramNeedles_ScanOriginalColumn_ForScalarsAndMergedTags(string value)
+    {
+        ColumnInfo prompt = new("prompt", ColumnKind.Scalar, hasNgramIndex: true);
+        ColumnSchema schema = new([prompt, new ColumnInfo("prompt__lc", ColumnKind.Scalar, hasNgramIndex: true)]);
+        SqlFilter scalar = SqlFilterBuilder.Build(new Query("p", [new("prompt", MatchOp.Any, [value])]), schema);
+        SqlFilter merged = SqlFilterBuilder.Build(new Query("p", [new("tags", MatchOp.Any, [value])]), schema, [prompt]);
+        Assert.Equal("(contains(lower(\"prompt\"), $p0))", scalar.WhereClause);
+        Assert.Equal(scalar.WhereClause, merged.WhereClause);
+        Assert.Equal(value.ToLowerInvariant(), Assert.Single(scalar.Parameters).Value);
+    }
+
+    [Fact]
+    public void MixedSafeAndPunctuationNeedles_PreserveExactOrAndNegation()
+    {
+        ColumnSchema schema = new([new ColumnInfo("prompt", ColumnKind.Scalar, hasNgramIndex: true)]);
+        SqlFilter any = SqlFilterBuilder.Build(new Query("p", [new("prompt", MatchOp.Any, ["abc", "a-b"])]), schema);
+        SqlFilter none = SqlFilterBuilder.Build(new Query("p", [new("prompt", MatchOp.None, ["abc", "a-b"])]), schema);
+        Assert.Equal("(contains(\"prompt\", $p0) OR contains(lower(\"prompt\"), $p1))", any.WhereClause);
+        Assert.Equal("NOT " + any.WhereClause, none.WhereClause);
+    }
+
+    [Theory]
+    [InlineData("", null)]
+    [InlineData("a-b", null)]
+    [InlineData("bc de", null)]
+    [InlineData("!!!", null)]
+    [InlineData("éBLOND中文", "blond")]
+    [InlineData("ab\u0301c", null)]
+    [InlineData("abc\u001f12345", "12345")]
+    [InlineData("ABC-def", "abc")]
+    [InlineData("x-y-a1B", "a1b")]
+    [InlineData("İBLOND", "blond")]
+    [InlineData("Kab", null)]
+    public void NgramAnchor_UsesLongestLiteralAsciiRun_WithFirstTie(string value, string expected)
+    {
+        Assert.Equal(expected, SqlFilterBuilder.NgramAnchor(value));
     }
 
     // --- List columns: case-insensitive substring against each element ------------------------------
@@ -381,10 +434,10 @@ public class SqlFilterBuilderTests
     }
 
     [Fact]
-    public void NumericComparison_OnListColumn_Throws()
+    public void NumericComparison_OnListColumn_CountsNonNullElements()
     {
-        Assert.Throws<NonNumericComparisonException>(
-            () => BuildNumeric("p[tags-=5]", ("tags", ColumnKind.List, false)));
+        Assert.Equal("(coalesce(list_count(\"tags\"), 0) <= TRY_CAST($p0 AS BIGINT))",
+            BuildNumeric("p[tags-=5]", ("tags", ColumnKind.List, false)).WhereClause);
     }
 
     [Fact]
@@ -402,10 +455,10 @@ public class SqlFilterBuilderTests
     }
 
     [Fact]
-    public void Comparison_OnMergedTagsKeyword_WithListColumn_Throws()
+    public void Comparison_OnMergedTagsKeyword_WithListColumn_CountsEachColumn()
     {
-        Assert.Throws<NonNumericComparisonException>(
-            () => BuildWithTags("p[tags+=5]", ["bar"], ("bar", ColumnKind.List)));
+        Assert.Equal("(coalesce(list_count(\"bar\"), 0) >= TRY_CAST($p0 AS BIGINT))",
+            BuildWithTags("p[tags+=5]", ["bar"], ("bar", ColumnKind.List)).WhereClause);
     }
 
     // --- Mixed / general ----------------------------------------------------------------------------

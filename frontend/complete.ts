@@ -1,3 +1,4 @@
+import { querySections } from "./querysyntax";
 import type { ColumnDto, DatasetDto } from "./types";
 import { escapeHtml } from "./util";
 
@@ -32,7 +33,7 @@ export interface QuarryCompletion {
 interface FilterColumn {
     name: string;
     hint: string;
-    scalar?: boolean;
+    comparable?: boolean;
 }
 
 const MAX_DATASET_SUGGESTIONS = 50;
@@ -40,13 +41,21 @@ const MAX_DATASET_SUGGESTIONS = 50;
 const FILTER_OPERATORS: ReadonlyArray<{
     op: string;
     hint: string;
-    scalarOnly?: boolean;
+    comparisonOnly?: boolean;
 }> = [
     { op: "=", hint: "match any of the values" },
     { op: "==", hint: "match all of the values" },
     { op: "!=", hint: "match none of the values" },
-    { op: "+=", hint: "at least (number or text length)", scalarOnly: true },
-    { op: "-=", hint: "at most (number or text length)", scalarOnly: true },
+    {
+        op: "+=",
+        hint: "at least (number, text length, or array count)",
+        comparisonOnly: true,
+    },
+    {
+        op: "-=",
+        hint: "at most (number, text length, or array count)",
+        comparisonOnly: true,
+    },
 ];
 
 const findDataset = (
@@ -62,22 +71,17 @@ const filterByFragment = <T>(
     frag: string,
     getName: (item: T) => string,
     prefixFirst: boolean,
+    key = (value: string) => value.toLowerCase(),
 ): T[] => {
     if (frag.length === 0) {
         return items.slice();
     }
-    const matched = items.filter((i) =>
-        getName(i).toLowerCase().includes(frag),
-    );
+    const matched = items.filter((i) => key(getName(i)).includes(frag));
     if (!prefixFirst) {
         return matched;
     }
-    const starts = matched.filter((i) =>
-        getName(i).toLowerCase().startsWith(frag),
-    );
-    const rest = matched.filter(
-        (i) => !getName(i).toLowerCase().startsWith(frag),
-    );
+    const starts = matched.filter((i) => key(getName(i)).startsWith(frag));
+    const rest = matched.filter((i) => !key(getName(i)).startsWith(frag));
     return starts.concat(rest);
 };
 
@@ -93,7 +97,7 @@ const orderColumnsForFilter = (dataset: CompletionDataset): FilterColumn[] => {
             result.push({
                 name: col.name,
                 hint,
-                scalar: col.kind === "scalar",
+                comparable: col.kind !== "object",
             });
         }
     };
@@ -144,6 +148,65 @@ const completeDatasetName = (
     }));
 };
 
+// Column and field names ignore case; binding names inside selectors do not.
+const fieldPathKey = (value: string): string =>
+    value
+        .replace(/\[\*\]/g, "[]")
+        .split(/(\[[^\]]*\]?)/)
+        .map((part) => (part.startsWith("[") ? part : part.toLowerCase()))
+        .join("");
+
+const nestedColumns = (
+    columns: FilterColumn[],
+    datasets: CompletionDataset[],
+    fragment: string,
+    output = false,
+    query = "",
+): FilterColumn[] => {
+    const result = [...columns];
+    const used = new Set(result.map((c) => fieldPathKey(c.name)));
+    const add = (name: string, hint: string, comparable: boolean) => {
+        if (used.has(fieldPathKey(name))) return;
+        used.add(fieldPathKey(name));
+        result.push({ name, hint, comparable });
+    };
+    for (const dataset of datasets) {
+        for (const col of dataset.columns) {
+            if (!col.fields?.length) {
+                if (col.kind === "list")
+                    add(`${col.name}[]`, "all elements", true);
+                continue;
+            }
+            const selectors = new Set(["", "[]", "[0]"]);
+            const root = fragment.match(/^([^.[\]]+)(\[[^\]]*\])/);
+            if (root?.[1].toLowerCase() === col.name.toLowerCase())
+                selectors.add(root[2] === "[*]" ? "[]" : root[2]);
+            if (!output) {
+                selectors.add("[i]");
+                selectors.add("[n]");
+            } else {
+                for (const match of query.matchAll(
+                    /([^.[\];: ]+)\[([a-zA-Z_][a-zA-Z_0-9]*)\]/g,
+                )) {
+                    if (match[1].toLowerCase() === col.name.toLowerCase())
+                        selectors.add(`[${match[2]}]`);
+                }
+            }
+            for (const selector of col.kind === "object" ? [""] : selectors) {
+                const name = col.name + selector;
+                const all =
+                    col.kind === "list" &&
+                    (selector === "" || selector === "[]");
+                add(name, all ? "all records" : "selected record", all);
+                for (const field of col.fields) {
+                    add(`${name}.${field.name}`, "record field", !all);
+                }
+            }
+        }
+    }
+    return result;
+};
+
 const completeFilterColumn = (
     suffix: string,
     lastOpen: number,
@@ -168,19 +231,30 @@ const completeFilterColumn = (
         return [];
     }
     const head = `<q:${suffix.slice(0, lastOpen + 1 + (semiIdx === -1 ? 0 : semiIdx + 1))}`;
-    const columns = orderColumnsForFilter(dataset);
-    const frag = clause.trim().toLowerCase();
-    const exact = columns.find((c) => c.name.toLowerCase() === frag);
+    const fragment = clause.trim();
+    const frag = fieldPathKey(fragment);
+    const columns = nestedColumns(
+        orderColumnsForFilter(dataset),
+        [dataset],
+        fragment,
+    );
+    const exact = columns.find((c) => fieldPathKey(c.name) === frag);
     if (exact) {
         return FILTER_OPERATORS.filter(
-            (o) => !o.scalarOnly || exact.scalar,
+            (o) => !o.comparisonOnly || exact.comparable,
         ).map((o) => ({
             apply: `${head}${exact.name}${o.op}`,
             label: o.op,
             hint: o.hint,
         }));
     }
-    return filterByFragment(columns, frag, (c) => c.name, false).map((c) => ({
+    return filterByFragment(
+        columns,
+        frag,
+        (c) => c.name,
+        false,
+        fieldPathKey,
+    ).map((c) => ({
         apply: head + c.name,
         label: c.name,
         hint: c.hint,
@@ -235,25 +309,30 @@ const completePromptColumn = (
     }
     const columnsPart = suffix.slice(colonIdx + 1);
     const commaIdx = columnsPart.lastIndexOf(",");
+    const outputKey = (value: string) =>
+        fieldPathKey(value).replace(/\[\]/g, "");
     const chosen = new Set(
         columnsPart
             .slice(0, commaIdx + 1)
             .split(",")
-            .map((s) => s.trim().toLowerCase()),
+            .map((s) => outputKey(s.trim())),
     );
-    const frag = columnsPart
-        .slice(commaIdx + 1)
-        .trim()
-        .toLowerCase();
+    const fragment = columnsPart.slice(commaIdx + 1).trim();
+    const frag = fieldPathKey(fragment);
     const matches = filterByFragment(
-        orderColumnsForPrompt(named).filter(
-            (c) => !chosen.has(c.name.toLowerCase()),
-        ),
+        nestedColumns(
+            orderColumnsForPrompt(named),
+            named,
+            fragment,
+            true,
+            head,
+        ).filter((c) => !chosen.has(outputKey(c.name))),
         frag,
         (c) => c.name,
         false,
+        fieldPathKey,
     );
-    if (matches.length === 1 && matches[0].name.toLowerCase() === frag) {
+    if (matches.length === 1 && fieldPathKey(matches[0].name) === frag) {
         return [];
     }
     const applyHead = `<q:${suffix.slice(0, colonIdx + 1)}${columnsPart.slice(0, commaIdx + 1)}`;
@@ -268,18 +347,38 @@ export const computeQuarryCompletions = (
     suffix: string,
     list: CompletionDataset[] = datasets,
 ): QuarryCompletion[] => {
-    const lastOpen = suffix.lastIndexOf("[");
-    const lastClose = suffix.lastIndexOf("]");
-    if (lastOpen > lastClose) {
-        return completeFilterColumn(suffix, lastOpen, list);
+    const sections = querySections(suffix);
+    if (sections.pipe >= 0) {
+        if (sections.quoted) return [];
+        const fragment = suffix.slice(sections.optionStart).trim();
+        if (fragment.includes("=")) return [];
+        const options = [
+            { name: "keys", hint: "print field names" },
+            {
+                name: 'record_separator="',
+                hint: "separator between records (rs)",
+            },
+            {
+                name: 'field_separator="',
+                hint: "separator between fields (fs)",
+            },
+            { name: 'rs="', hint: "record separator" },
+            { name: 'fs="', hint: "field separator" },
+        ];
+        return options
+            .filter((o) => o.name.startsWith(fragment))
+            .map((o) => ({
+                apply: `<q:${suffix.slice(0, sections.optionStart)}${o.name}`,
+                label: o.name,
+                hint: o.hint,
+            }));
     }
-    const colonIdx = suffix.indexOf(":", lastClose + 1);
-    if (colonIdx !== -1) {
-        return completePromptColumn(suffix, colonIdx, list);
+    if (sections.colon >= 0)
+        return completePromptColumn(suffix, sections.colon, list);
+    if (sections.filterOpen >= 0 && sections.filterClose < 0) {
+        return completeFilterColumn(suffix, sections.filterOpen, list);
     }
-    if (lastClose !== -1) {
-        return [];
-    }
+    if (sections.filterClose >= 0) return [];
     return completeDatasetName(suffix, list);
 };
 

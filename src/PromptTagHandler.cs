@@ -315,7 +315,7 @@ public static class PromptTagHandler
         SqlFilter filter;
         try
         {
-            filter = SqlFilterBuilder.Build(query, schema, tagColumns);
+            filter = NestedQueryCompiler.Build(query, schema, tagColumns, outputColumns);
         }
         catch (NonNumericComparisonException ex)
         {

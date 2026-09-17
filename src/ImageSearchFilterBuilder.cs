@@ -88,13 +88,10 @@ public static class ImageSearchFilterBuilder
     private static string TextMatchColumn(string field, string value, ColumnSchema schema)
     {
         string scan = $"lower({SqlText.QuoteIdentifier(field)})";
-        if (value.Length < SqlFilterBuilder.NgramMinLength)
-        {
-            return scan;
-        }
-        return schema is not null && schema.TryGet(field, out ColumnInfo column)
+        string indexed = schema is not null && schema.TryGet(field, out ColumnInfo column)
             ? SqlFilterBuilder.SearchColumn(column, schema)
             : scan;
+        return SqlFilterBuilder.MatchExpr(value, indexed, scan);
     }
 
     private static string TextTerm(Func<string, string> matchColumnFor, string op, string value, List<QueryParameter> parameters)

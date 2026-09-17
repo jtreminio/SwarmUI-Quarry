@@ -76,9 +76,12 @@ def cmd_show(args) -> int:
         if not path.is_dir():
             raise SystemExit(f"error: no such Lance dataset: {path}")
         import lance  # imported lazily so non-Lance use needs no pylance
+        from .storage import logical_reader
 
         try:
-            names = list(lance.dataset(str(path)).schema.names)
+            reader = logical_reader(lance.dataset(str(path)), path)
+            names = reader.schema.names
+            reader.close()
         except Exception as exc:  # corrupt / incomplete / not a Lance dataset
             raise SystemExit(f"error: could not read {path} as lance: {exc}")
         print(",".join(names))
@@ -421,13 +424,21 @@ def _reorder_lance(path, front):
     except Exception as exc:  # corrupt / incomplete / not a Lance dataset
         raise FileError(f"could not open dataset: {exc}") from exc
 
-    from .storage import DESCRIPTOR, DATA_STORAGE_VERSION
+    from .storage import (
+        DESCRIPTOR, DATA_STORAGE_VERSION, LogicalDigest, logical_reader,
+        read_layout, verify_dataset, verify_helpers, write_descriptor,
+    )
     from .lowercase import SCALAR_TYPES
 
-    existing = list(ds.schema.names)
+    layout = read_layout(path, ds.schema)
+    reader = logical_reader(ds, path)
+    existing = reader.schema.names
+    reader.close()
     _, new_order = _plan_order(existing, front)
     if new_order == existing:
         return "lance", new_order, False
+    if layout.get("version") == 2 and not layout.get("snapshot_trusted"):
+        raise FileError("dataset changed outside Quarry; run quarry optimize before reordering")
 
     # Rewriting changes field IDs and row addresses, so rebuild indexes rather
     # than copying their files. Reject unsupported types before touching data.
@@ -437,17 +448,26 @@ def _reorder_lance(path, front):
         if kind is None or len(index["fields"]) != 1:
             raise FileError(f"cannot reorder with unsupported index {index['name']!r}: {index['type']}")
         field = ds.lance_schema.field(index["fields"][0]).name()
-        if field not in existing:
+        if field not in ds.schema.names:
             raise FileError(f"cannot reorder with nested index {index['name']!r}")
         indexes.append((index["name"], field, kind))
+
+    # Only logical columns are user-selectable. Keep physical casing companions
+    # and search projections intact behind them, with their existing identities.
+    physical_order = new_order + [n for n in ds.schema.names if n not in existing]
+    reader = logical_reader(ds, path, names=new_order)
+    expected = LogicalDigest(reader.schema)
+    for batch in reader:
+        expected.update(batch)
 
     work = Path(tempfile.mkdtemp(dir=str(path.parent), prefix=f".{path.name}."))
     new_ds = work / path.name
     backup = work / (path.name + ".bak")
     try:
         rewritten = lance.write_dataset(
-            ds.scanner(columns=new_order, scan_in_order=True).to_reader(),
+            ds.scanner(columns=physical_order, scan_in_order=True).to_reader(),
             str(new_ds), data_storage_version=DATA_STORAGE_VERSION,
+            enable_stable_row_ids=False,
         )
         descriptor = Path(path) / DESCRIPTOR
         if descriptor.exists():
@@ -457,7 +477,21 @@ def _reorder_lance(path, front):
         lance.dataset(str(new_ds)).cleanup_old_versions(
             older_than=timedelta(0), delete_unverified=True,
         )
+        verify_dataset(new_ds, expected, trusted_staging=True)
+        verify_helpers(new_ds)
+        if descriptor.exists():
+            optimized = layout.get("optimized")
+            if optimized is not None:
+                optimized = {**optimized, "lance_version": lance.dataset(str(new_ds)).version}
+            write_descriptor(new_ds, layout.get("columns", {}), optimized=optimized, finalize=True)
         if lance.dataset(str(path)).version != ds.version:
+            raise FileError("source changed during reordering; refusing replacement")
+        # Revalidate encoded snapshot identity before replacing the source.
+        current_layout = read_layout(path, lance.dataset(str(path)).schema)
+        if layout.get("version") == 2 and (
+            not current_layout.get("snapshot_trusted")
+            or current_layout.get("snapshot") != layout.get("snapshot")
+        ):
             raise FileError("source changed during reordering; refusing replacement")
         os.replace(path, backup)  # move the original aside
         try:

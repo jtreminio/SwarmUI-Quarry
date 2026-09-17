@@ -10,13 +10,15 @@ public static class TagColumnResolver
         {
             foreach (string name in configured)
             {
-                if (!string.IsNullOrWhiteSpace(name) && schema.TryGet(name, out ColumnInfo column) && seen.Add(column.Name))
+                if (!string.IsNullOrWhiteSpace(name) && schema.TryGet(name, out ColumnInfo column)
+                    && !schema.IsCompanionName(column.Name) && seen.Add(column.Name))
                 {
                     result.Add(column);
                 }
             }
         }
-        if (result.Count == 0 && !string.IsNullOrWhiteSpace(fallbackColumn) && schema.TryGet(fallbackColumn, out ColumnInfo fallback))
+        if (result.Count == 0 && !string.IsNullOrWhiteSpace(fallbackColumn) && schema.TryGet(fallbackColumn, out ColumnInfo fallback)
+            && !schema.IsCompanionName(fallback.Name))
         {
             result.Add(fallback);
         }

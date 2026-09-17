@@ -82,6 +82,26 @@ public class ImageSearchFilterBuilderTests
         Assert.Equal("contains(lower(\"prompt\"), $p0)", f.WhereClause);
     }
 
+    [Theory]
+    [InlineData("a-b")]
+    [InlineData("!!!")]
+    [InlineData("bc de")]
+    [InlineData("café")]
+    public void UnsafeNgramNeedles_BypassIndex_ForEveryTextOperator(string value)
+    {
+        ColumnSchema schema = new(
+        [
+            new ColumnInfo("prompt", ColumnKind.Scalar, hasNgramIndex: true),
+            new ColumnInfo("prompt__lc", ColumnKind.Scalar, hasNgramIndex: true),
+        ]);
+        foreach (string op in new[] { "=", "==", "!=" })
+        {
+            JArray filters = [new JObject { ["field"] = "prompt", ["op"] = op, ["value"] = value }];
+            SqlFilter filter = ImageSearchFilterBuilder.Build(filters, schema);
+            Assert.Equal((op == "!=" ? "NOT " : "") + "contains(lower(\"prompt\"), $p0)", filter.WhereClause);
+        }
+    }
+
     [Fact]
     public void TextAny_MultipleValues_OrsContains()
     {
