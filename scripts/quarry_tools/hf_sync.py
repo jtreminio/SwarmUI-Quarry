@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
@@ -89,6 +90,16 @@ def scan_datasets(root: Path, catalog: Path) -> list[LocalDataset]:
     if not root.is_dir():
         raise ValueError(f"local dataset directory does not exist: {root}")
     found = []
+    single_dataset = root.suffix.lower() == ".lance"
+    base = root.parent if single_dataset else root
+
+    def add_lance(path: Path):
+        files = list(path.rglob("*"))
+        if any(p.is_symlink() for p in files):
+            raise ValueError(f"symlink inside dataset: {path}")
+        if not any(p.is_file() for p in files):
+            raise ValueError(f"empty Lance dataset: {path}")
+        add(path)
 
     def walk(directory: Path):
         for path in sorted(directory.iterdir()):
@@ -98,22 +109,20 @@ def scan_datasets(root: Path, catalog: Path) -> list[LocalDataset]:
                 raise ValueError(f"symlink in dataset directory: {path}")
             if path.is_dir():
                 if path.suffix.lower() == ".lance":
-                    files = list(path.rglob("*"))
-                    if any(p.is_symlink() for p in files):
-                        raise ValueError(f"symlink inside dataset: {path}")
-                    if not any(p.is_file() for p in files):
-                        raise ValueError(f"empty Lance dataset: {path}")
-                    add(path)
+                    add_lance(path)
                 else:
                     walk(path)
             elif path.is_file() and path.suffix.lower() in EXT_FORMAT_SHOW and path.suffix.lower() != ".lance":
                 add(path)
 
     def add(path: Path):
-        relative = path.relative_to(root).as_posix()
+        relative = path.relative_to(base).as_posix()
         found.append(LocalDataset(relative.rsplit(".", 1)[0], path, relative))
 
-    walk(root)
+    if single_dataset:
+        add_lance(root)
+    else:
+        walk(root)
     names = set()
     for dataset in found:
         if dataset.name.casefold() in names:
@@ -141,7 +150,7 @@ def remote_datasets(files: list[str]) -> set[str]:
     return datasets
 
 
-def write_dataset_hash(directory: Path) -> str:
+def write_dataset_hash(directory: Path, *, persist: bool = True) -> str:
     descriptor = directory / DESCRIPTOR
     read_descriptor(directory)
     metadata = json.loads(descriptor.read_text(encoding="utf-8")) if descriptor.exists() else {"version": 1, "columns": {}}
@@ -158,13 +167,56 @@ def write_dataset_hash(directory: Path) -> str:
     metadata_bytes = json.dumps(metadata, sort_keys=True, separators=(",", ":")).encode("utf-8")
     entries.append([DESCRIPTOR, hashlib.sha256(metadata_bytes).hexdigest()])
     digest = hashlib.sha256(json.dumps(sorted(entries), separators=(",", ":")).encode("utf-8")).hexdigest()
-    if previous_hash == digest:
+    if previous_hash == digest or not persist:
         return digest
     metadata["datasetHash"] = digest
     with atomic_output(descriptor) as temporary:
         temporary.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
         temporary.chmod(descriptor.stat().st_mode & 0o777 if descriptor.exists() else 0o644)
     return digest
+
+
+def remote_dataset_hash(api, repo: str, snapshot: str, repo_path: str) -> str | None:
+    from huggingface_hub.errors import RemoteEntryNotFoundError
+
+    filename = f"{repo_path}/{DESCRIPTOR}"
+    try:
+        downloaded = api.hf_hub_download(repo_id=repo, repo_type="dataset", revision=snapshot,
+                                         filename=filename)
+    except RemoteEntryNotFoundError:
+        return None
+    try:
+        metadata = json.loads(Path(downloaded).read_text(encoding="utf-8"))
+    except (ValueError, UnicodeError):
+        print(f"  Invalid remote descriptor: {filename}; upload needed", file=sys.stderr)
+        return None
+    digest = metadata.get("datasetHash") if isinstance(metadata, dict) else None
+    if (isinstance(digest, str) and len(digest) == 64
+            and all(c in "0123456789abcdef" for c in digest.lower())):
+        return digest.lower()
+    return None
+
+
+def hash_datasets(datasets: list[LocalDataset], workers: int, *, persist: bool) -> dict[str, str]:
+    lance_datasets = [dataset for dataset in datasets if dataset.path.is_dir()]
+    if not lance_datasets:
+        return {}
+    workers = min(workers, len(lance_datasets))
+    print(f"Hashing {len(lance_datasets)} Lance dataset(s) with {workers} worker(s)", file=sys.stderr)
+    hashes = {}
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(write_dataset_hash, dataset.path, persist=persist): dataset
+                   for dataset in lance_datasets}
+        try:
+            for future in as_completed(futures):
+                dataset = futures[future]
+                hashes[dataset.repo_path] = future.result()
+                print(f"  Hashed [{len(hashes)}/{len(lance_datasets)}] {dataset.repo_path}", file=sys.stderr)
+        except BaseException:
+            for future in futures:
+                future.cancel()
+            raise
+    return hashes
 
 
 def infer_repo(name: str) -> str | None:
@@ -242,10 +294,31 @@ def cmd_sync(args) -> int:
         print(f"Sync {root} -> {args.repo} @ {args.revision}: {len(datasets)} dataset(s)", file=sys.stderr)
         if args.dry_run:
             remote = remote_datasets(api.list_repo_files(repo_id=args.repo, repo_type="dataset", revision=snapshot))
-            for dataset in datasets:
+        local_hashes = hash_datasets(datasets, args.hash_workers, persist=not args.dry_run)
+        uploaded = skipped = 0
+        for dataset in datasets:
+            if dataset.path.is_dir():
+                remote_hash = remote_dataset_hash(api, args.repo, snapshot, dataset.repo_path)
+                if remote_hash == local_hashes[dataset.repo_path]:
+                    print(f"  Skip [UNCHANGED] {dataset.repo_path}", file=sys.stderr)
+                    skipped += 1
+                    continue
+            if args.dry_run:
                 status = "NEW" if dataset.repo_path not in remote else "EXISTING"
                 print(f"  Upload [{status}] {dataset.repo_path}", file=sys.stderr)
+            else:
+                print(f"  Upload {dataset.repo_path}", file=sys.stderr)
+                kwargs = dict(repo_id=args.repo, repo_type="dataset", revision=args.revision,
+                              commit_message=f"Sync {dataset.name}")
+                if dataset.path.is_dir():
+                    api.upload_folder(folder_path=str(dataset.path), path_in_repo=dataset.repo_path,
+                                      ignore_patterns=UPLOAD_IGNORES, **kwargs)
+                else:
+                    api.upload_file(path_or_fileobj=str(dataset.path), path_in_repo=dataset.repo_path, **kwargs)
+            uploaded += 1
+        if args.dry_run:
             print(f"New datasets: {len(local_paths - remote)}; already on HF: {len(local_paths & remote)}", file=sys.stderr)
+            print(f"Would upload: {uploaded}; skipped unchanged: {skipped}", file=sys.stderr)
             if args.prune:
                 for path in sorted(remote - local_paths):
                     print(f"  Prune {path}", file=sys.stderr)
@@ -255,18 +328,7 @@ def cmd_sync(args) -> int:
                     print(f"  New source to check: {dataset.name}", file=sys.stderr)
             print("Dry run: no uploads, deletions, catalog edits, or prompts.", file=sys.stderr)
             return 0
-        for dataset in datasets:
-            print(f"  Upload {dataset.repo_path}", file=sys.stderr)
-            kwargs = dict(repo_id=args.repo, repo_type="dataset", revision=args.revision,
-                          commit_message=f"Sync {dataset.name}")
-            if dataset.path.is_dir():
-                print(f"  Hashing {dataset.repo_path}", file=sys.stderr)
-                write_dataset_hash(dataset.path)
-                api.upload_folder(folder_path=str(dataset.path), path_in_repo=dataset.repo_path,
-                                  ignore_patterns=UPLOAD_IGNORES, **kwargs)
-            else:
-                api.upload_file(path_or_fileobj=str(dataset.path), path_in_repo=dataset.repo_path, **kwargs)
-        print("All dataset uploads completed.", file=sys.stderr)
+        print(f"Sync completed: {uploaded} uploaded; {skipped} skipped unchanged.", file=sys.stderr)
         if args.prune:
             # HF rejects parent_commit deletions if the branch changes after this snapshot.
             snapshot = api.repo_info(repo_id=args.repo, repo_type="dataset", revision=args.revision).sha
@@ -290,15 +352,20 @@ def cmd_sync(args) -> int:
 
 
 def register(subparsers) -> None:
+    from .hf import _positive_int
+
     parser = subparsers.add_parser(
         "sync", help="upload local Quarry datasets and record their original sources",
-        description="Upload datasets to an existing Hugging Face dataset repo. After uploads finish, "
+        description="Upload datasets to an existing Hugging Face dataset repo, skipping Lance datasets "
+                    "whose content hashes match the published storage descriptors. After uploads finish, "
                     "verify inferred sources for new catalog names and prompt for unresolved URLs. "
                     "Enter NONE to record that a dataset has no source URL.",
     )
-    parser.add_argument("directory", help="local Quarry dataset directory")
+    parser.add_argument("directory", help="local Quarry dataset collection directory or a single .lance dataset directory")
     parser.add_argument("--repo", default=DEFAULT_REPO, help=f"destination dataset repository (default: {DEFAULT_REPO})")
     parser.add_argument("--revision", default="main", help="destination branch (default: main)")
+    parser.add_argument("--hash-workers", type=_positive_int, default=8,
+                        help="maximum datasets to hash in parallel (default: 8; use 1 for serial hashing)")
     parser.add_argument("--catalog", default=str(DEFAULT_CATALOG), help="source JSON file (default: this extension's dataset-sources.json)")
     parser.add_argument("--prune", action="store_true", help="after uploading, delete remote datasets absent locally; keep repo metadata")
     parser.add_argument("--dry-run", action="store_true", help="preview uploads, optional pruning, and new catalog names without making changes")

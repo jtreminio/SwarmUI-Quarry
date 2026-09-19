@@ -189,9 +189,12 @@ def cmd_prep(args) -> int:
             else:
                 print("Enter columns in the desired order, separated by ';'.")
                 print("Use original_name=new_name to rename; bare names stay unchanged.")
+                print("Press Enter to keep all available columns in their original order and with their original names.")
                 while True:
                     try:
-                        selected = plan_columns(schema.names, input("Columns to keep: "))
+                        raw = input("Columns to keep: ")
+                        selected = (plan_columns(schema.names, raw) if raw.strip()
+                                    else [(name, name) for name in schema.names])
                         break
                     except FileError as exc:
                         print(f"error: {exc}", file=sys.stderr)

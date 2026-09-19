@@ -2,11 +2,15 @@ import io
 import json
 import sys
 import tempfile
+import threading
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+
+from huggingface_hub.errors import RemoteEntryNotFoundError
+import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from quarry_tools.cli import main
@@ -32,11 +36,28 @@ class SyncTests(unittest.TestCase):
         self.api.upload_file.side_effect = lambda **kw: self.events.append(("upload", kw["path_in_repo"]))
         self.api.create_commit.side_effect = lambda **kw: self.events.append(("prune", kw))
         self.api.list_repo_files.return_value = []
+        self.remote_descriptors = {}
+        self.api.hf_hub_download.side_effect = self.download_descriptor
         self.source_error = None
         self.answers = []
         input_patch = patch("builtins.input", side_effect=self.answer)
         self.input = input_patch.start()
         self.addCleanup(input_patch.stop)
+
+    def download_descriptor(self, **kwargs):
+        filename = kwargs["filename"]
+        if filename not in self.remote_descriptors:
+            raise RemoteEntryNotFoundError("descriptor not found", response=httpx.Response(
+                404, request=httpx.Request("GET", "https://huggingface.co/descriptor")))
+        return str(self.remote_descriptors[filename])
+
+    def remote_descriptor(self, repo_path, contents):
+        filename = f"{repo_path}/{DESCRIPTOR}"
+        path = self.work / "remote" / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(contents)
+        self.remote_descriptors[filename] = path
+        self.api.list_repo_files.return_value.append(filename)
 
     def repo_info(self, **kwargs):
         if kwargs["repo_id"] == "owner/collection":
@@ -66,12 +87,66 @@ class SyncTests(unittest.TestCase):
     def write_catalog(self, entries):
         self.catalog.write_text(json.dumps(entries))
 
-    def run_cli(self, *options):
+    def run_cli(self, *options, directory=None):
         output = io.StringIO()
         with redirect_stderr(output), redirect_stdout(output):
-            result = main(["hf", "sync", str(self.local), "--repo=owner/collection",
+            result = main(["hf", "sync", str(directory or self.local), "--repo=owner/collection",
                            "--catalog", str(self.catalog), *options])
         return result, output.getvalue()
+
+    def test_direct_lance_directory_uploads_once_and_records_dataset_source(self):
+        part = self.dataset("tags/jgreely.c1ga.lance")
+        directory = part.parent.parent
+        (directory / "_versions").mkdir()
+        (directory / "_versions/latest_version_hint.json").write_text('{"version": 1}')
+        (directory / DESCRIPTOR).write_text('{"version": 1, "columns": {}}')
+        self.dataset("tags/other.dataset.lance")
+
+        result, output = self.run_cli(directory=str(directory) + "/")
+
+        self.assertEqual(result, 0, output)
+        self.assertIn("1 dataset(s)", output)
+        self.api.upload_file.assert_not_called()
+        self.api.upload_folder.assert_called_once_with(
+            folder_path=str(directory), path_in_repo="jgreely.c1ga.lance",
+            ignore_patterns=UPLOAD_IGNORES, repo_id="owner/collection", repo_type="dataset",
+            revision="main", commit_message="Sync jgreely.c1ga")
+        self.assertEqual(len(json.loads((directory / DESCRIPTOR).read_text())["datasetHash"]), 64)
+        self.assertEqual(load_catalog(self.catalog), [
+            {"name": "jgreely.c1ga", "alias": None,
+             "sourceUrl": "https://huggingface.co/datasets/jgreely/c1ga"},
+        ])
+        self.input.assert_not_called()
+
+    def test_direct_lance_dry_run_previews_dataset_without_changing_files(self):
+        part = self.dataset()
+        directory = part.parent.parent
+        directory = directory.rename(directory.with_suffix(".LANCE"))
+        self.api.list_repo_files.return_value = ["org.repo.LANCE/data/part.lance"]
+
+        result, output = self.run_cli("--dry-run", directory=directory)
+
+        self.assertEqual(result, 0, output)
+        self.assertIn("Upload [EXISTING] org.repo.LANCE", output)
+        self.assertIn("New datasets: 0; already on HF: 1", output)
+        self.assertIn("New source to check: org.repo", output)
+        self.assertFalse((directory / DESCRIPTOR).exists())
+        self.assertFalse(self.catalog.exists())
+        self.api.upload_folder.assert_not_called()
+        self.api.upload_file.assert_not_called()
+        self.input.assert_not_called()
+
+    def test_direct_empty_or_symlink_containing_lance_fails_before_api(self):
+        for case in ("empty", "symlink"):
+            with self.subTest(case=case):
+                directory = self.local / f"{case}.lance"
+                directory.mkdir()
+                if case == "symlink":
+                    (directory / "linked").symlink_to(self.work, target_is_directory=True)
+                result, output = self.run_cli(directory=directory)
+                self.assertEqual(result, 1, output)
+                self.assertIn("empty Lance dataset" if case == "empty" else "symlink inside dataset", output)
+                self.api_class.assert_not_called()
 
     def test_uploads_all_before_verification_and_infers_subset_repo(self):
         self.dataset("tags/org.repo.one.lance")
@@ -123,6 +198,188 @@ class SyncTests(unittest.TestCase):
         metadata["datasetHash"] = "ignored old hash"
         (renamed / DESCRIPTOR).write_text(json.dumps(metadata, indent=4))
         self.assertEqual(write_dataset_hash(renamed), original)
+
+    def test_matching_hash_skips_upload_and_still_records_source(self):
+        directory = self.dataset().parent.parent
+        write_dataset_hash(directory)
+        before = (directory / DESCRIPTOR).read_bytes()
+        self.remote_descriptor("tags/org.repo.lance", before.decode())
+
+        result, output = self.run_cli("--revision", "publish")
+
+        self.assertEqual(result, 0, output)
+        self.assertIn("Skip [UNCHANGED] tags/org.repo.lance", output)
+        self.assertIn("0 uploaded; 1 skipped unchanged", output)
+        self.api.upload_folder.assert_not_called()
+        self.api.upload_file.assert_not_called()
+        self.api.hf_hub_download.assert_called_once_with(
+            repo_id="owner/collection", repo_type="dataset", revision="snapshot-sha",
+            filename="tags/org.repo.lance/quarry-storage.json")
+        self.assertEqual((directory / DESCRIPTOR).read_bytes(), before)
+        self.assertEqual(load_catalog(self.catalog)[0]["name"], "tags/org.repo")
+
+    def test_mixed_collection_uploads_only_changed_new_and_single_file_datasets(self):
+        for name in ("same", "changed", "new"):
+            directory = self.dataset(f"tags/org.{name}.lance").parent.parent
+            write_dataset_hash(directory)
+            if name == "same":
+                self.remote_descriptor(f"tags/org.{name}.lance", (directory / DESCRIPTOR).read_text())
+            elif name == "changed":
+                self.remote_descriptor(f"tags/org.{name}.lance", json.dumps({"datasetHash": "0" * 64}))
+        self.dataset("tags/org.file.csv")
+
+        result, output = self.run_cli()
+
+        self.assertEqual(result, 0, output)
+        self.assertEqual([call.kwargs["path_in_repo"] for call in self.api.upload_folder.call_args_list],
+                         ["tags/org.changed.lance", "tags/org.new.lance"])
+        self.api.upload_file.assert_called_once()
+        self.assertEqual(self.api.upload_file.call_args.kwargs["path_in_repo"], "tags/org.file.csv")
+        self.assertIn("3 uploaded; 1 skipped unchanged", output)
+
+    def test_stale_local_hash_cannot_hide_content_or_metadata_edits(self):
+        for change in ("content", "metadata"):
+            with self.subTest(change=change):
+                part = self.dataset(f"tags/org.{change}.lance")
+                directory = part.parent.parent
+                previous = write_dataset_hash(directory)
+                self.remote_descriptor(directory.name, (directory / DESCRIPTOR).read_text())
+                if change == "content":
+                    part.write_text("DATA")
+                else:
+                    metadata = json.loads((directory / DESCRIPTOR).read_text())
+                    metadata["optimized"] = {"version": 1, "lance_version": 2}
+                    (directory / DESCRIPTOR).write_text(json.dumps(metadata))
+                self.api.upload_folder.reset_mock()
+
+                result, output = self.run_cli(directory=directory)
+
+                self.assertEqual(result, 0, output)
+                self.api.upload_folder.assert_called_once()
+                self.assertNotEqual(json.loads((directory / DESCRIPTOR).read_text())["datasetHash"], previous)
+
+    def test_missing_or_invalid_remote_hash_never_skips_upload(self):
+        directory = self.dataset().parent.parent
+        for contents in ('{}', '{"datasetHash": null}', '{"datasetHash": ""}',
+                         '{"datasetHash": "invalid"}', json.dumps({"datasetHash": "x" * 64}),
+                         '{"datasetHash": 123}', '[]', 'not json'):
+            with self.subTest(contents=contents):
+                self.remote_descriptor("tags/org.repo.lance", contents)
+                self.api.upload_folder.reset_mock()
+                result, output = self.run_cli()
+                self.assertEqual(result, 0, output)
+                self.api.upload_folder.assert_called_once()
+
+    def test_dry_run_compares_fresh_hashes_without_writing_local_changes(self):
+        descriptors = {}
+        for name in ("same", "changed"):
+            part = self.dataset(f"tags/org.{name}.lance")
+            directory = part.parent.parent
+            write_dataset_hash(directory)
+            descriptor = directory / DESCRIPTOR
+            descriptors[descriptor] = descriptor.read_bytes()
+            self.remote_descriptor(f"tags/org.{name}.lance", descriptor.read_text())
+            if name == "changed":
+                part.write_text("changed")
+
+        result, output = self.run_cli("--dry-run")
+
+        self.assertEqual(result, 0, output)
+        self.assertIn("Skip [UNCHANGED] tags/org.same.lance", output)
+        self.assertIn("Upload [EXISTING] tags/org.changed.lance", output)
+        self.assertIn("Would upload: 1; skipped unchanged: 1", output)
+        self.assertEqual({path: path.read_bytes() for path in descriptors}, descriptors)
+        self.assertFalse(self.catalog.exists())
+        self.api.upload_folder.assert_not_called()
+        self.api.upload_file.assert_not_called()
+        self.api.create_commit.assert_not_called()
+        self.input.assert_not_called()
+
+    def test_skipped_dataset_is_kept_when_pruning(self):
+        directory = self.dataset().parent.parent
+        write_dataset_hash(directory)
+        self.remote_descriptor("tags/org.repo.lance", (directory / DESCRIPTOR).read_text())
+        self.api.list_repo_files.return_value.append("gone.lance/data/old.lance")
+
+        result, output = self.run_cli("--prune")
+
+        self.assertEqual(result, 0, output)
+        self.api.upload_folder.assert_not_called()
+        operations = self.api.create_commit.call_args.kwargs["operations"]
+        self.assertEqual([op.path_in_repo for op in operations], ["gone.lance"])
+
+    def test_descriptor_download_failure_stops_before_upload_prune_or_source_edits(self):
+        self.dataset()
+        self.api.hf_hub_download.side_effect = RuntimeError("connection failed")
+
+        result, output = self.run_cli("--prune")
+
+        self.assertEqual(result, 1, output)
+        self.assertIn("connection failed", output)
+        self.api.upload_folder.assert_not_called()
+        self.api.create_commit.assert_not_called()
+        self.input.assert_not_called()
+        self.assertFalse(self.catalog.exists())
+
+    def test_failed_upload_is_retried_despite_updated_local_hash(self):
+        part = self.dataset()
+        directory = part.parent.parent
+        write_dataset_hash(directory)
+        self.remote_descriptor("tags/org.repo.lance", (directory / DESCRIPTOR).read_text())
+        part.write_text("changed")
+        self.api.upload_folder.side_effect = [RuntimeError("upload failed"), None]
+
+        self.assertEqual(self.run_cli()[0], 1)
+        result, output = self.run_cli()
+
+        self.assertEqual(result, 0, output)
+        self.assertEqual(self.api.upload_folder.call_count, 2)
+
+    def test_hashing_runs_concurrently_with_configured_worker_limit(self):
+        for name in ("one", "two", "three", "four"):
+            self.dataset(f"tags/org.{name}.lance")
+        for workers in (1, 2):
+            with self.subTest(workers=workers):
+                barrier = threading.Barrier(workers)
+                lock = threading.Lock()
+                active = peak = 0
+
+                def hash_one(directory, *, persist=True):
+                    nonlocal active, peak
+                    with lock:
+                        active += 1
+                        peak = max(peak, active)
+                    try:
+                        barrier.wait(timeout=5)
+                        return write_dataset_hash(directory, persist=persist)
+                    finally:
+                        with lock:
+                            active -= 1
+
+                with patch("quarry_tools.hf_sync.write_dataset_hash", side_effect=hash_one) as hashing:
+                    result, output = self.run_cli("--hash-workers", str(workers))
+                self.assertEqual(result, 0, output)
+                self.assertEqual(hashing.call_count, 4)
+                self.assertEqual(peak, workers)
+
+    def test_hash_failure_prevents_uploads_pruning_and_source_edits(self):
+        self.dataset()
+        with patch("quarry_tools.hf_sync.write_dataset_hash", side_effect=OSError("read failed")):
+            result, output = self.run_cli("--prune")
+        self.assertEqual(result, 1, output)
+        self.assertIn("read failed", output)
+        self.api.upload_folder.assert_not_called()
+        self.api.create_commit.assert_not_called()
+        self.input.assert_not_called()
+        self.assertFalse(self.catalog.exists())
+
+    def test_nonpositive_hash_worker_count_is_rejected(self):
+        self.dataset()
+        for workers in ("0", "-1"):
+            with self.subTest(workers=workers), self.assertRaises(SystemExit) as error:
+                self.run_cli("--hash-workers", workers)
+            self.assertEqual(error.exception.code, 2)
+        self.api_class.assert_not_called()
 
     def test_hash_changes_with_contents_paths_and_storage_metadata(self):
         part = self.dataset()

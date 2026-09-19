@@ -8,7 +8,7 @@ public sealed record DatasetAttribution(string Name, string? Alias, string Sourc
 public static class DatasetCatalog
 {
     public static IReadOnlyList<DatasetAttribution> Entries { get; } = Load();
-    private static readonly Dictionary<string, string> Names = BuildNames();
+    private static readonly Dictionary<string, string> Names = BuildNames(Entries);
 
     private static DatasetAttribution[] Load()
     {
@@ -18,10 +18,10 @@ public static class DatasetCatalog
         return JsonConvert.DeserializeObject<DatasetAttribution[]>(reader.ReadToEnd());
     }
 
-    private static Dictionary<string, string> BuildNames()
+    internal static Dictionary<string, string> BuildNames(IEnumerable<DatasetAttribution> entries)
     {
         Dictionary<string, string> names = new(StringComparer.OrdinalIgnoreCase);
-        foreach (DatasetAttribution entry in Entries)
+        foreach (DatasetAttribution entry in entries)
         {
             names.Add(entry.Name, entry.Name);
             if (entry.Alias is not null)

@@ -68,7 +68,7 @@ From this extension's directory, use the `quarry` CLI (requires [uv](https://doc
 ./quarry prep /path/to/data.parquet
 ```
 
-Quarry prints the source row count and available columns, then asks which to keep. Enter column names in the order you want, separated by semicolons. Rename any column with `original_name=new_name`; a bare name keeps its existing name:
+Quarry prints the source row count and available columns, then asks which to keep. Press Enter without typing a selection to keep all displayed columns with their original names and order. Or enter column names in the order you want, separated by semicolons. Rename any column with `original_name=new_name`; a bare name keeps its existing name:
 
 ```text
 Columns to keep: caption=prompt;tags;rating=score

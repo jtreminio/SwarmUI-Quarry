@@ -525,6 +525,11 @@
         "sourceUrl": "https://huggingface.co/datasets/huzaib/stable-diffusion-prompts"
     },
     {
+        "name": "tags/jgreely.c1ga",
+        "alias": null,
+        "sourceUrl": "https://github.com/jgreely/c1ga"
+    },
+    {
         "name": "tags/jtatman.stable-diffusion-prompts-stats-full-uncensored",
         "alias": null,
         "sourceUrl": "https://huggingface.co/datasets/jtatman/stable-diffusion-prompts-stats-full-uncensored"

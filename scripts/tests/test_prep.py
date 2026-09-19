@@ -202,11 +202,30 @@ class PrepTests(unittest.TestCase):
     def test_invalid_interactive_selection_reprompts(self):
         source = self.write_source(".csv")
         result, _, stderr, prompt = self.run_cli(
-            ["prep", str(source)], ["missing", "", "Caption=prompt"],
+            ["prep", str(source)], ["missing", "; ;", "Caption=prompt"],
         )
         self.assertEqual(result, 0, stderr)
         self.assertEqual(prompt.call_count, 3)
         self.assertIn("not found", stderr)
+
+    def test_enter_keeps_all_columns_with_original_names_and_order(self):
+        source = self.write_source(".csv")
+        for index, responses in enumerate(([""], [" \t "], ["missing", ""])):
+            with self.subTest(responses=responses):
+                output = self.root / f"default-{index}.lance"
+                result, stdout, stderr, prompt = self.run_cli(
+                    ["prep", str(source), "-o", str(output)], responses,
+                )
+                self.assertEqual(result, 0, stderr)
+                self.assertEqual(prompt.call_count, len(responses))
+                self.assertIn("Press Enter to keep all available columns", stdout)
+                self.assertIn("Prompt column: Caption", stdout)
+                table = logical_reader(lance.dataset(str(output)), output).read_all()
+                self.assertEqual(table.schema.names, ["ID", "Caption", "tags", "drop"])
+                self.assertEqual(table.to_pylist(), [
+                    {"ID": 1, "Caption": "Hello!", "tags": "Art", "drop": "unused"},
+                    {"ID": 4, "Caption": "World", "tags": "Photo", "drop": "unused"},
+                ])
 
     def test_cancel_or_invalid_selection_leaves_no_output(self):
         source = self.write_source(".csv")

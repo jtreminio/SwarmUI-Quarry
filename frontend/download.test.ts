@@ -212,6 +212,24 @@ describe("renderRemoteFolderHeaderRow", () => {
 });
 
 describe("sourceRepoUrl", () => {
+    const withCatalog = (
+        entries: typeof datasetSources,
+        check: (download: typeof import("./download")) => void,
+    ): void => {
+        try {
+            jest.isolateModules(() => {
+                jest.doMock("../dataset-sources.json", () => entries);
+                check(
+                    jest.requireActual<typeof import("./download")>(
+                        "./download",
+                    ),
+                );
+            });
+        } finally {
+            jest.dontMock("../dataset-sources.json");
+        }
+    };
+
     it.each(
         datasetSources,
     )("uses verified attribution for $name and its optional alias", (entry) => {
@@ -221,23 +239,63 @@ describe("sourceRepoUrl", () => {
             }
             expect(sourceRepoUrl(name)).toBe(entry.sourceUrl);
             expect(sourceRepoUrl(name.toUpperCase())).toBe(entry.sourceUrl);
-            expect(sourceRepoUrl(name.split("/").pop())).toBe(entry.sourceUrl);
         }
     });
 
-    it("credits jgreely on GitHub and keeps sources without URLs unlinked", () => {
-        expect(sourceRepoUrl("nl/jgreely-c1ga")).toBe(
-            "https://github.com/jgreely/c1ga",
+    it("uses verified attribution for unambiguous short names and aliases", () => {
+        withCatalog(
+            [
+                {
+                    name: "nl/org.example",
+                    alias: "nl/old-name",
+                    sourceUrl: "https://example.com/source",
+                },
+                { name: "tags/org.unlinked", alias: null, sourceUrl: null },
+            ],
+            ({ sourceRepoUrl: resolve }) => {
+                for (const name of ["org.example", "old-name", "OLD-NAME"]) {
+                    expect(resolve(name)).toBe("https://example.com/source");
+                }
+                expect(resolve("tags/org.unlinked")).toBeNull();
+                expect(resolve("org.unlinked")).toBeNull();
+            },
         );
-        expect(sourceRepoUrl("nl/jgreely.c1ga")).toBe(
-            "https://github.com/jgreely/c1ga",
+    });
+
+    it("keeps datasets with the same short name distinct", () => {
+        withCatalog(
+            [
+                {
+                    name: "nl/org.example",
+                    alias: "nl/old-name",
+                    sourceUrl: "https://example.com/nl",
+                },
+                {
+                    name: "tags/org.example",
+                    alias: null,
+                    sourceUrl: "https://example.com/tags",
+                },
+            ],
+            ({ sourceRepoUrl: resolve, renderRemoteDatasets: render }) => {
+                const html = render([
+                    makeRemote("nl/org.example"),
+                    makeRemote("tags/org.example"),
+                ]);
+                expect(html).toContain('data-dataset="nl/org.example"');
+                expect(html).toContain('data-dataset="tags/org.example"');
+                expect(resolve("NL/ORG.EXAMPLE")).toBe(
+                    "https://example.com/nl",
+                );
+                expect(resolve("TAGS/ORG.EXAMPLE")).toBe(
+                    "https://example.com/tags",
+                );
+                expect(resolve("old-name")).toBe("https://example.com/nl");
+                // Ambiguous short names have no catalog override; normal repo inference applies.
+                expect(resolve("org.example")).toBe(
+                    "https://huggingface.co/datasets/org/example",
+                );
+            },
         );
-        expect(sourceRepoUrl("tags/CyberHarem")).toBe(
-            "https://huggingface.co/CyberHarem",
-        );
-        expect(sourceRepoUrl("tags/civitai.author_prompts")).toBeNull();
-        expect(sourceRepoUrl("tags/civitai")).toBeNull();
-        expect(sourceRepoUrl("tags/moescape")).toBeNull();
     });
 
     it("infers an uncataloged dataset's source repo", () => {

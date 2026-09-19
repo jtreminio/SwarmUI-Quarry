@@ -33,7 +33,7 @@ public class DatasetCatalogTests : IDisposable
     }
 
     [Fact]
-    public void Catalog_ResolvesEveryExplicitAliasAndRootName_CaseInsensitively()
+    public void Catalog_ResolvesEveryExplicitNameAndAlias_CaseInsensitively()
     {
         Assert.Equal(25, DatasetCatalog.Entries.Count(entry => entry.Alias is not null));
         foreach (DatasetAttribution entry in DatasetCatalog.Entries)
@@ -46,11 +46,48 @@ public class DatasetCatalogTests : IDisposable
                 }
                 Assert.Equal(entry.Name, DatasetCatalog.CanonicalName(alias));
                 Assert.Equal(entry.Name, DatasetCatalog.CanonicalName(alias.ToUpperInvariant()));
-                Assert.Equal(entry.Name, DatasetCatalog.CanonicalName(alias[(alias.LastIndexOf('/') + 1)..]));
             }
         }
         Assert.Equal("custom/Chat-Error-tinystories-gpt4-train", DatasetCatalog.CanonicalName("custom/Chat-Error-tinystories-gpt4-train"));
         Assert.Null(DatasetCatalog.CanonicalName(null));
+    }
+
+    [Fact]
+    public void Catalog_ResolvesUnambiguousRootNamesAndAliases_CaseInsensitively()
+    {
+        var names = DatasetCatalog.BuildNames([
+            new("nl/org.example", "nl/old-name", "https://example.com/source"),
+        ]);
+        foreach (string name in new[] { "nl/org.example", "nl/old-name", "org.example", "old-name" })
+        {
+            Assert.Equal("nl/org.example", names[name]);
+            Assert.Equal("nl/org.example", names[name.ToUpperInvariant()]);
+        }
+    }
+
+    [Fact]
+    public void Catalog_KeepsDatasetsWithTheSameLeafNameDistinct()
+    {
+        var names = DatasetCatalog.BuildNames([
+            new("nl/org.example", "nl/old-name", "https://example.com/nl"),
+            new("tags/org.example", null, "https://example.com/tags"),
+        ]);
+        Assert.Equal("nl/org.example", names["NL/ORG.EXAMPLE"]);
+        Assert.Equal("tags/org.example", names["TAGS/ORG.EXAMPLE"]);
+        Assert.Equal("nl/org.example", names["OLD-NAME"]);
+        Assert.False(names.ContainsKey("org.example"));
+        Assert.False(names.ContainsKey("ORG.EXAMPLE"));
+    }
+
+    [Fact]
+    public void Catalog_ExplicitRootNameTakesPrecedenceOverShortcuts()
+    {
+        var names = DatasetCatalog.BuildNames([
+            new("nl/org.example", null, "https://example.com/nl"),
+            new("org.example", null, "https://example.com/root"),
+        ]);
+        Assert.Equal("nl/org.example", names["nl/org.example"]);
+        Assert.Equal("org.example", names["ORG.EXAMPLE"]);
     }
 
     [Fact]
