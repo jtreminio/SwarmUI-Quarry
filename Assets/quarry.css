@@ -1,3 +1,11 @@
+:root {
+    /* Keep status text close to the theme's readable foreground; pure accents
+       are reserved for backgrounds, borders, and progress bars. */
+    --quarry-status-error: color-mix(in srgb, var(--text) 80%, var(--red));
+    --quarry-status-success: color-mix(in srgb, var(--text) 80%, var(--green));
+    --quarry-status-warning: color-mix(in srgb, var(--text) 80%, var(--yellow));
+}
+
 .quarry-settings {
     margin-bottom: 1rem;
 }
@@ -260,7 +268,7 @@
 }
 
 .quarry-dataset-error-msg {
-    color: var(--red);
+    color: var(--quarry-status-error);
     font-size: 0.9em;
 }
 
@@ -271,11 +279,11 @@
 }
 
 .quarry-message-success {
-    color: var(--green);
+    color: var(--quarry-status-success);
 }
 
 .quarry-message-error {
-    color: var(--red);
+    color: var(--quarry-status-error);
 }
 
 .quarry-setting-row {
@@ -342,7 +350,7 @@
 }
 
 .quarry-preview-error {
-    color: var(--red);
+    color: var(--quarry-status-error);
     padding: 0.5rem;
 }
 
@@ -424,7 +432,7 @@
 }
 
 .quarry-download-error {
-    color: var(--red);
+    color: var(--quarry-status-error);
 }
 
 .quarry-download-message {
@@ -434,11 +442,11 @@
 }
 
 .quarry-download-message-success {
-    color: var(--green);
+    color: var(--quarry-status-success);
 }
 
 .quarry-download-message-error {
-    color: var(--red);
+    color: var(--quarry-status-error);
 }
 
 .quarry-download-message-info {
@@ -470,14 +478,14 @@
 }
 
 .quarry-remote-check {
-    color: var(--green);
+    color: var(--quarry-status-success);
     font-weight: 700;
 }
 
 .quarry-remote-update {
     display: inline-block;
     margin-left: 0.5em;
-    color: var(--yellow);
+    color: var(--quarry-status-warning);
     font-family: var(--bs-body-font-family, sans-serif);
     font-size: 0.85em;
     font-weight: 600;
@@ -623,7 +631,7 @@
 }
 
 .quarry-runquery-invalid {
-    color: var(--yellow);
+    color: var(--quarry-status-warning);
     padding: 0.5rem 0;
 }
 
@@ -834,7 +842,7 @@
 }
 
 .imagesearch-notice-error {
-    color: var(--red);
+    color: var(--quarry-status-error);
 }
 
 .imagesearch-notice-info {
@@ -842,11 +850,11 @@
 }
 
 .imagesearch-notice-warning {
-    color: var(--yellow);
+    color: var(--quarry-status-warning);
 }
 
 .imagesearch-notice-success {
-    color: var(--green);
+    color: var(--quarry-status-success);
 }
 
 .imagesearch-controls {
