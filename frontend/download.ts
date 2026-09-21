@@ -1,4 +1,5 @@
 import datasetSources from "../dataset-sources.json";
+import { bindRepairButton } from "./repair";
 import type {
     AvailableDatasetsResponse,
     DownloadStatusResponse,
@@ -23,6 +24,8 @@ const MESSAGE_ID = "quarry-download-message";
 const PROGRESS_ID = "quarry-download-progress";
 const START_ID = "quarry-download-start";
 const REFRESH_ID = "quarry-download-refresh";
+const REPAIR_ID = "quarry-repair-datasets";
+let repairing = false;
 const POLL_MS = 800;
 
 const hasUpdate = (dataset: RemoteDatasetDto): boolean =>
@@ -316,7 +319,8 @@ const updateStartButtonState = (): void => {
     const start = document.getElementById(START_ID) as HTMLButtonElement | null;
     if (start) {
         const selected = rowCheckboxes().filter((cb) => cb.checked);
-        start.disabled = downloadingName !== null || selected.length === 0;
+        start.disabled =
+            repairing || downloadingName !== null || selected.length === 0;
         start.textContent =
             selected.length > 0 &&
             selected.every((cb) => cb.dataset.update === "true")
@@ -337,6 +341,13 @@ const updateSelectAllState = (): void => {
 };
 
 const setControlsDownloading = (downloading: boolean): void => {
+    downloading = downloading || repairing;
+    const repair = document.getElementById(
+        REPAIR_ID,
+    ) as HTMLButtonElement | null;
+    if (repair) {
+        repair.disabled = downloading;
+    }
     const body = document.getElementById(BODY_ID);
     if (body) {
         for (const cb of Array.from(
@@ -709,11 +720,13 @@ const ensureDownloadModal = (): void => {
                     <div id="${BODY_ID}" class="quarry-download-body"></div>
                     <div id="${PROGRESS_ID}" class="quarry-download-progress" style="display: none;"></div>
                     <div id="${MESSAGE_ID}" class="quarry-download-message"></div>
+                    <div id="quarry-repair-status" class="quarry-repair-status" role="status" aria-live="polite"></div>
                 </div>
                 <div class="modal-footer quarry-download-footer">
                     <div class="quarry-download-footer-actions">
                         <button type="button" id="${START_ID}" class="btn btn-primary basic-button" disabled>Download</button>
                         <button type="button" id="${REFRESH_ID}" class="btn btn-secondary basic-button">Refresh</button>
+                        <button type="button" id="${REPAIR_ID}" class="btn btn-secondary basic-button" title="Fix casing errors caused by stale downloaded versions using existing local files. No dataset download is needed; previous metadata is backed up.">Repair datasets</button>
                     </div>
                     <button type="button" class="btn btn-secondary basic-button" data-bs-dismiss="modal">Close</button>
                 </div>
@@ -727,6 +740,13 @@ const ensureDownloadModal = (): void => {
     document
         .getElementById(REFRESH_ID)
         ?.addEventListener("click", () => loadAvailable(true));
+    bindRepairButton(
+        () => onChanged?.(),
+        (busy) => {
+            repairing = busy;
+            setControlsDownloading(downloadingName !== null);
+        },
+    );
     document
         .getElementById(BODY_ID)
         ?.addEventListener("change", bodyChangeHandler);

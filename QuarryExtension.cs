@@ -35,6 +35,7 @@ public class QuarryExtension : Extension
         API.RegisterAPICall(QuarryPreviewDataset, false, Permissions.FundamentalGenerateTabAccess);
         API.RegisterAPICall(QuarryClearPreviewCache, true, Permissions.FundamentalGenerateTabAccess);
         API.RegisterAPICall(QuarryCleanTempFiles, true, Permissions.FundamentalGenerateTabAccess);
+        API.RegisterAPICall(QuarryRepairDatasets, true, Permissions.InstallFeatures);
         API.RegisterAPICall(QuarryResolveReferences, false, Permissions.FundamentalGenerateTabAccess);
         API.RegisterAPICall(QuarryRunQuery, false, Permissions.FundamentalGenerateTabAccess);
         API.RegisterAPICall(QuarryInstallRequirements, true, Permissions.InstallFeatures);
@@ -395,6 +396,33 @@ public class QuarryExtension : Extension
     }
 
     private static string GetHfToken(Session session) => session?.User?.GetGenericData("huggingface_api", "key") ?? "";
+
+    public async Task<JObject> QuarryRepairDatasets(Session session)
+    {
+        if (!DatasetManager.MutationGate.Wait(0))
+        {
+            return new JObject { ["success"] = false, ["error"] = "A dataset download or repair is already running. Wait for it to finish." };
+        }
+        try
+        {
+            DatasetRepairResult result = await Task.Run(DatasetManager.RepairDatasets);
+            return new JObject
+            {
+                ["success"] = true,
+                ["checked"] = result.Checked,
+                ["repaired"] = result.Repaired,
+                ["issues"] = new JArray(result.Issues.Select(issue => new JObject { ["dataset"] = issue.Dataset, ["error"] = issue.Error })),
+            };
+        }
+        catch (Exception ex)
+        {
+            return new JObject { ["success"] = false, ["error"] = ex.Message };
+        }
+        finally
+        {
+            DatasetManager.MutationGate.Release();
+        }
+    }
 
     public async Task<JObject> QuarryListAvailableDatasets(Session session, bool refresh = false)
     {

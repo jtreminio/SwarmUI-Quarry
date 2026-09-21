@@ -571,6 +571,7 @@ public sealed class DuckDbQueryBackend : IQueryBackend, IDisposable
     private readonly Conn _shared = new();
     private readonly object _lock = new();
     private readonly object _writeLock = new();
+    private readonly ReaderWriterLockSlim _maintenance = new();
 
     public ColumnSchema GetSchema(string datasetPath)
     {
@@ -675,6 +676,37 @@ public sealed class DuckDbQueryBackend : IQueryBackend, IDisposable
     }
 
     public void RunPooled(IReadOnlyList<Action<IDatasetReader>> jobs, int maxParallelism)
+    {
+        _maintenance.EnterReadLock();
+        try
+        {
+            RunPooledCore(jobs, maxParallelism);
+        }
+        finally
+        {
+            _maintenance.ExitReadLock();
+        }
+    }
+
+    internal T WithMaintenance<T>(Func<T> action)
+    {
+        _maintenance.EnterWriteLock();
+        try
+        {
+            lock (_lock)
+            {
+                _shared.Reset();
+                try { return action(); }
+                finally { _shared.Reset(); }
+            }
+        }
+        finally
+        {
+            _maintenance.ExitWriteLock();
+        }
+    }
+
+    private static void RunPooledCore(IReadOnlyList<Action<IDatasetReader>> jobs, int maxParallelism)
     {
         if (jobs is null || jobs.Count == 0)
         {

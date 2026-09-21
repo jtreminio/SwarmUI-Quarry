@@ -1,20 +1,23 @@
 import io
 import json
+import shutil
 import sys
 import tempfile
 import threading
 import unittest
+import zipfile
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
+from huggingface_hub import CommitOperationAdd, CommitOperationDelete
 from huggingface_hub.errors import RemoteEntryNotFoundError
 import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from quarry_tools.cli import main
-from quarry_tools.hf_sync import UPLOAD_IGNORES, catalog_lookup, load_catalog, remote_datasets, write_dataset_hash
+from quarry_tools.hf_sync import catalog_lookup, load_catalog, remote_datasets, write_dataset_hash
 from quarry_tools.storage import DESCRIPTOR, read_descriptor
 
 
@@ -32,9 +35,11 @@ class SyncTests(unittest.TestCase):
         self.addCleanup(api_patch.stop)
         self.api = self.api_class.return_value
         self.api.repo_info.side_effect = self.repo_info
-        self.api.upload_folder.side_effect = lambda **kw: self.events.append(("upload", kw["path_in_repo"]))
-        self.api.upload_file.side_effect = lambda **kw: self.events.append(("upload", kw["path_in_repo"]))
-        self.api.create_commit.side_effect = lambda **kw: self.events.append(("prune", kw))
+        self.lance_commits = Mock(side_effect=self.upload_commit)
+        self.prune_commits = Mock(side_effect=self.prune_commit)
+        self.api.create_commit.side_effect = lambda **kw: (
+            self.lance_commits(**kw) if kw["commit_message"].startswith("Sync ") else self.prune_commits(**kw))
+        self.api.upload_file.side_effect = self.upload_file
         self.api.list_repo_files.return_value = []
         self.remote_descriptors = {}
         self.api.hf_hub_download.side_effect = self.download_descriptor
@@ -43,6 +48,18 @@ class SyncTests(unittest.TestCase):
         input_patch = patch("builtins.input", side_effect=self.answer)
         self.input = input_patch.start()
         self.addCleanup(input_patch.stop)
+
+    def upload_commit(self, **kwargs):
+        self.events.append(("upload", kwargs["commit_message"][5:] + ".lance"))
+        return SimpleNamespace(oid="uploaded-sha")
+
+    def upload_file(self, **kwargs):
+        self.events.append(("upload", kwargs["path_in_repo"]))
+        return SimpleNamespace(oid="uploaded-sha")
+
+    def prune_commit(self, **kwargs):
+        self.events.append(("prune", kwargs))
+        return SimpleNamespace(oid="pruned-sha")
 
     def download_descriptor(self, **kwargs):
         filename = kwargs["filename"]
@@ -57,7 +74,11 @@ class SyncTests(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(contents)
         self.remote_descriptors[filename] = path
-        self.api.list_repo_files.return_value.append(filename)
+        # Model a complete published copy by default, not just its descriptor.
+        local = self.local / repo_path
+        files = ([f"{repo_path}/{p.relative_to(local).as_posix()}" for p in local.rglob("*") if p.is_file()]
+                 if local.is_dir() else [filename])
+        self.api.list_repo_files.return_value = sorted(set(self.api.list_repo_files.return_value + files))
 
     def repo_info(self, **kwargs):
         if kwargs["repo_id"] == "owner/collection":
@@ -107,10 +128,13 @@ class SyncTests(unittest.TestCase):
         self.assertEqual(result, 0, output)
         self.assertIn("1 dataset(s)", output)
         self.api.upload_file.assert_not_called()
-        self.api.upload_folder.assert_called_once_with(
-            folder_path=str(directory), path_in_repo="jgreely.c1ga.lance",
-            ignore_patterns=UPLOAD_IGNORES, repo_id="owner/collection", repo_type="dataset",
-            revision="main", commit_message="Sync jgreely.c1ga")
+        self.lance_commits.assert_called_once()
+        kwargs = self.lance_commits.call_args.kwargs
+        self.assertEqual(kwargs["parent_commit"], "snapshot-sha")
+        self.assertEqual(kwargs["commit_message"], "Sync jgreely.c1ga")
+        self.assertEqual({op.path_in_repo for op in kwargs["operations"]}, {
+            "jgreely.c1ga.lance/data/part.lance", "jgreely.c1ga.lance/quarry-storage.json",
+            "jgreely.c1ga.lance/_versions/latest_version_hint.json"})
         self.assertEqual(len(json.loads((directory / DESCRIPTOR).read_text())["datasetHash"]), 64)
         self.assertEqual(load_catalog(self.catalog), [
             {"name": "jgreely.c1ga", "alias": None,
@@ -132,7 +156,7 @@ class SyncTests(unittest.TestCase):
         self.assertIn("New source to check: org.repo", output)
         self.assertFalse((directory / DESCRIPTOR).exists())
         self.assertFalse(self.catalog.exists())
-        self.api.upload_folder.assert_not_called()
+        self.lance_commits.assert_not_called()
         self.api.upload_file.assert_not_called()
         self.input.assert_not_called()
 
@@ -161,11 +185,11 @@ class SyncTests(unittest.TestCase):
             self.assertIsNone(entry["alias"])
             self.assertNotIn("aliases", entry)
         self.assertFalse(self.input.called)
-        self.api.upload_folder.assert_called_with(
-            folder_path=str(self.local / "tags/org.repo.two.lance"),
-            ignore_patterns=UPLOAD_IGNORES,
-            path_in_repo="tags/org.repo.two.lance", repo_id="owner/collection", repo_type="dataset",
-            revision="main", commit_message="Sync tags/org.repo.two")
+        kwargs = self.lance_commits.call_args.kwargs
+        self.assertEqual(kwargs["parent_commit"], "uploaded-sha")
+        self.assertEqual(kwargs["commit_message"], "Sync tags/org.repo.two")
+        self.assertTrue(all(op.path_in_repo.startswith("tags/org.repo.two.lance/")
+                            for op in kwargs["operations"]))
 
     def test_sync_publishes_hash_in_existing_storage_metadata(self):
         part = self.dataset()
@@ -174,8 +198,11 @@ class SyncTests(unittest.TestCase):
                     "optimized": {"version": 1, "lance_version": 3}}
         (directory / DESCRIPTOR).write_text(json.dumps(metadata))
         uploaded = []
-        self.api.upload_folder.side_effect = lambda **kw: uploaded.append(
-            json.loads((Path(kw["folder_path"]) / DESCRIPTOR).read_text()))
+        def capture(**kwargs):
+            descriptor = next(op for op in kwargs["operations"] if op.path_in_repo.endswith("/" + DESCRIPTOR))
+            uploaded.append(json.loads(Path(descriptor.path_or_fileobj).read_text()))
+            return self.upload_commit(**kwargs)
+        self.lance_commits.side_effect = capture
         result, output = self.run_cli()
         self.assertEqual(result, 0, output)
         self.assertEqual(len(uploaded[0]["datasetHash"]), 64)
@@ -210,7 +237,7 @@ class SyncTests(unittest.TestCase):
         self.assertEqual(result, 0, output)
         self.assertIn("Skip [UNCHANGED] tags/org.repo.lance", output)
         self.assertIn("0 uploaded; 1 skipped unchanged", output)
-        self.api.upload_folder.assert_not_called()
+        self.lance_commits.assert_not_called()
         self.api.upload_file.assert_not_called()
         self.api.hf_hub_download.assert_called_once_with(
             repo_id="owner/collection", repo_type="dataset", revision="snapshot-sha",
@@ -231,11 +258,190 @@ class SyncTests(unittest.TestCase):
         result, output = self.run_cli()
 
         self.assertEqual(result, 0, output)
-        self.assertEqual([call.kwargs["path_in_repo"] for call in self.api.upload_folder.call_args_list],
-                         ["tags/org.changed.lance", "tags/org.new.lance"])
+        self.assertEqual([call.kwargs["commit_message"] for call in self.lance_commits.call_args_list],
+                         ["Sync tags/org.changed", "Sync tags/org.new"])
         self.api.upload_file.assert_called_once()
         self.assertEqual(self.api.upload_file.call_args.kwargs["path_in_repo"], "tags/org.file.csv")
         self.assertIn("3 uploaded; 1 skipped unchanged", output)
+
+    def test_matching_hash_with_stale_files_repairs_in_one_scoped_commit(self):
+        directory = self.dataset().parent.parent
+        manifest = directory / "_versions/18446744073709551613.manifest"
+        manifest.parent.mkdir()
+        manifest.write_text("current version 2")
+        hidden = directory / ".cache/upload.json"
+        hidden.parent.mkdir()
+        hidden.write_text("local cache")
+        write_dataset_hash(directory)
+        before = {p: p.read_bytes() for p in directory.rglob("*") if p.is_file()}
+        self.remote_descriptor("tags/org.repo.lance", (directory / DESCRIPTOR).read_text())
+        # Hidden local files never belong in the published snapshot.
+        self.api.list_repo_files.return_value.remove("tags/org.repo.lance/.cache/upload.json")
+        stale = {"tags/org.repo.lance/_versions/18446744073709551604.manifest",
+                 "tags/org.repo.lance/data/old.lance", "tags/org.repo.lance/_indices/old/index.lance"}
+        unrelated = {"tags/org.repo.lance-other/data/keep.lance", "tags/other.lance/data/keep.lance",
+                     "README.md", ".gitattributes", "dataset-sources.json"}
+        self.api.list_repo_files.return_value.extend(stale | unrelated)
+
+        result, output = self.run_cli("--revision", "publish")
+
+        self.assertEqual(result, 0, output)
+        self.assertIn("Repair [FILE SET] tags/org.repo.lance: 3 obsolete, 0 missing", output)
+        self.api.create_commit.assert_called_once()
+        self.api.upload_folder.assert_not_called()
+        kwargs = self.api.create_commit.call_args.kwargs
+        self.assertEqual(kwargs["revision"], "publish")
+        self.assertEqual(kwargs["parent_commit"], "snapshot-sha")
+        deletions = {op.path_in_repo for op in kwargs["operations"] if isinstance(op, CommitOperationDelete)}
+        additions = {op.path_in_repo for op in kwargs["operations"] if isinstance(op, CommitOperationAdd)}
+        self.assertEqual(deletions, stale)
+        self.assertEqual(additions, {"tags/org.repo.lance/data/part.lance",
+                                     "tags/org.repo.lance/_versions/18446744073709551613.manifest",
+                                     "tags/org.repo.lance/quarry-storage.json"})
+        self.assertTrue(all(not op.is_folder for op in kwargs["operations"] if isinstance(op, CommitOperationDelete)))
+        self.assertEqual({p: p.read_bytes() for p in before}, before)
+        self.prune_commits.assert_not_called()
+
+    def test_matching_hash_with_missing_file_is_not_skipped(self):
+        directory = self.dataset().parent.parent
+        write_dataset_hash(directory)
+        self.remote_descriptor("tags/org.repo.lance", (directory / DESCRIPTOR).read_text())
+        self.api.list_repo_files.return_value.remove("tags/org.repo.lance/data/part.lance")
+
+        result, output = self.run_cli()
+
+        self.assertEqual(result, 0, output)
+        self.assertIn("Repair [FILE SET] tags/org.repo.lance: 0 obsolete, 1 missing", output)
+        self.api.create_commit.assert_called_once()
+        self.assertTrue(all(isinstance(op, CommitOperationAdd)
+                            for op in self.api.create_commit.call_args.kwargs["operations"]))
+
+    def test_dry_run_reports_stale_files_despite_matching_hash_without_mutations(self):
+        directory = self.dataset().parent.parent
+        write_dataset_hash(directory)
+        self.remote_descriptor("tags/org.repo.lance", (directory / DESCRIPTOR).read_text())
+        stale = "tags/org.repo.lance/_versions/old.manifest"
+        self.api.list_repo_files.return_value.append(stale)
+        before = {p: p.read_bytes() for p in directory.rglob("*") if p.is_file()}
+
+        result, output = self.run_cli("--dry-run")
+
+        self.assertEqual(result, 0, output)
+        self.assertIn("Repair [FILE SET]", output)
+        self.assertIn(f"Remove obsolete file {stale}", output)
+        self.assertIn("Would upload: 1; skipped unchanged: 0", output)
+        self.assertIn("Would remove obsolete files inside uploaded datasets: 1", output)
+        self.assertEqual({p: p.read_bytes() for p in before}, before)
+        self.api.create_commit.assert_not_called()
+        self.api.upload_folder.assert_not_called()
+        self.api.upload_file.assert_not_called()
+        self.input.assert_not_called()
+        self.assertFalse(self.catalog.exists())
+
+    def test_upload_conflict_stops_without_unconditional_retry_or_prune(self):
+        self.dataset("tags/org.first.lance")
+        self.dataset("tags/org.second.lance")
+        self.lance_commits.side_effect = RuntimeError("parent commit changed")
+
+        result, output = self.run_cli("--prune")
+
+        self.assertEqual(result, 1, output)
+        self.assertIn("parent commit changed", output)
+        self.api.create_commit.assert_called_once()
+        self.assertEqual(self.api.create_commit.call_args.kwargs["parent_commit"], "snapshot-sha")
+        self.api.upload_folder.assert_not_called()
+        self.prune_commits.assert_not_called()
+        self.input.assert_not_called()
+        self.assertFalse(self.catalog.exists())
+
+    def test_parent_commit_advances_after_both_single_file_and_lance_uploads(self):
+        self.dataset("tags/org.first.csv")
+        self.dataset("tags/org.second.lance")
+        self.dataset("tags/org.third.lance")
+        self.api.upload_file.side_effect = None
+        self.api.upload_file.return_value = SimpleNamespace(oid="file-sha")
+        self.lance_commits.side_effect = [SimpleNamespace(oid="second-sha"), SimpleNamespace(oid="third-sha")]
+
+        result, output = self.run_cli()
+
+        self.assertEqual(result, 0, output)
+        self.assertEqual(self.api.upload_file.call_args.kwargs["parent_commit"], "snapshot-sha")
+        self.assertEqual([call.kwargs["parent_commit"] for call in self.lance_commits.call_args_list],
+                         ["file-sha", "second-sha"])
+        self.assertTrue(all(call.kwargs["revision"] == "snapshot-sha"
+                            for call in self.api.hf_hub_download.call_args_list))
+
+    def test_inventory_lookup_failure_stops_before_hashing_or_writes(self):
+        directory = self.dataset().parent.parent
+        self.api.list_repo_files.side_effect = RuntimeError("listing failed")
+
+        result, output = self.run_cli("--prune")
+
+        self.assertEqual(result, 1, output)
+        self.assertIn("listing failed", output)
+        self.assertFalse((directory / DESCRIPTOR).exists())
+        self.api.create_commit.assert_not_called()
+        self.api.upload_file.assert_not_called()
+        self.input.assert_not_called()
+
+    def test_real_lance_snapshot_recovers_from_higher_version_legacy_manifest(self):
+        import lance
+        import pyarrow as pa
+        from quarry_tools.storage import logical_reader
+
+        extracted = self.work / "fixture"
+        with zipfile.ZipFile(Path(__file__).resolve().parents[2] / "Tests/Fixtures/lance-v22.zip") as archive:
+            archive.extractall(extracted)
+        directory = self.local / "tags/org.repo.lance"
+        directory.parent.mkdir()
+        shutil.copytree(extracted / "sample.lance", directory)
+        write_dataset_hash(directory)
+        current = lance.dataset(directory)
+        expected = logical_reader(current, directory).read_all()
+
+        # Model the original additive upload: old high-version files survive
+        # alongside the rebuilt low-version data and matching new descriptor.
+        published_root = self.work / "published"
+        published = published_root / "tags/org.repo.lance"
+        legacy = pa.table({"prompt": ["Legacy Prompt"], "prompt__lc": ["legacy prompt"]})
+        for version in range(current.version + 1):
+            lance.write_dataset(legacy, published, mode="create" if version == 0 else "overwrite")
+        shutil.copytree(directory, published, dirs_exist_ok=True)
+        self.assertGreater(lance.dataset(published).version, current.version)
+        self.assertNotIn("prompt__case", lance.dataset(published).schema.names)
+        self.remote_descriptors["tags/org.repo.lance/" + DESCRIPTOR] = published / DESCRIPTOR
+        self.api.list_repo_files.return_value = [p.relative_to(published_root).as_posix()
+                                                 for p in published.rglob("*") if p.is_file()]
+
+        def publish(**kwargs):
+            for operation in kwargs["operations"]:
+                target = published_root / operation.path_in_repo
+                if isinstance(operation, CommitOperationDelete):
+                    target.unlink()
+                else:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(operation.path_or_fileobj, target)
+            return self.upload_commit(**kwargs)
+
+        self.lance_commits.side_effect = publish
+        result, output = self.run_cli()
+
+        self.assertEqual(result, 0, output)
+        self.assertIn("Repair [FILE SET]", output)
+        self.api.create_commit.assert_called_once()
+        recovered = lance.dataset(published)
+        self.assertEqual(recovered.version, current.version)
+        self.assertEqual(logical_reader(recovered, published).read_all(), expected)
+        self.assertEqual(write_dataset_hash(published, persist=False), write_dataset_hash(directory, persist=False))
+
+        # Once repaired, an unchanged rerun truly skips publication.
+        self.api.list_repo_files.return_value = [p.relative_to(published_root).as_posix()
+                                                 for p in published.rglob("*") if p.is_file()]
+        self.api.create_commit.reset_mock()
+        result, output = self.run_cli()
+        self.assertEqual(result, 0, output)
+        self.assertIn("Skip [UNCHANGED]", output)
+        self.api.create_commit.assert_not_called()
 
     def test_stale_local_hash_cannot_hide_content_or_metadata_edits(self):
         for change in ("content", "metadata"):
@@ -250,12 +456,12 @@ class SyncTests(unittest.TestCase):
                     metadata = json.loads((directory / DESCRIPTOR).read_text())
                     metadata["optimized"] = {"version": 1, "lance_version": 2}
                     (directory / DESCRIPTOR).write_text(json.dumps(metadata))
-                self.api.upload_folder.reset_mock()
+                self.lance_commits.reset_mock()
 
                 result, output = self.run_cli(directory=directory)
 
                 self.assertEqual(result, 0, output)
-                self.api.upload_folder.assert_called_once()
+                self.lance_commits.assert_called_once()
                 self.assertNotEqual(json.loads((directory / DESCRIPTOR).read_text())["datasetHash"], previous)
 
     def test_missing_or_invalid_remote_hash_never_skips_upload(self):
@@ -265,10 +471,10 @@ class SyncTests(unittest.TestCase):
                          '{"datasetHash": 123}', '[]', 'not json'):
             with self.subTest(contents=contents):
                 self.remote_descriptor("tags/org.repo.lance", contents)
-                self.api.upload_folder.reset_mock()
+                self.lance_commits.reset_mock()
                 result, output = self.run_cli()
                 self.assertEqual(result, 0, output)
-                self.api.upload_folder.assert_called_once()
+                self.lance_commits.assert_called_once()
 
     def test_dry_run_compares_fresh_hashes_without_writing_local_changes(self):
         descriptors = {}
@@ -290,9 +496,9 @@ class SyncTests(unittest.TestCase):
         self.assertIn("Would upload: 1; skipped unchanged: 1", output)
         self.assertEqual({path: path.read_bytes() for path in descriptors}, descriptors)
         self.assertFalse(self.catalog.exists())
-        self.api.upload_folder.assert_not_called()
+        self.lance_commits.assert_not_called()
         self.api.upload_file.assert_not_called()
-        self.api.create_commit.assert_not_called()
+        self.prune_commits.assert_not_called()
         self.input.assert_not_called()
 
     def test_skipped_dataset_is_kept_when_pruning(self):
@@ -304,8 +510,8 @@ class SyncTests(unittest.TestCase):
         result, output = self.run_cli("--prune")
 
         self.assertEqual(result, 0, output)
-        self.api.upload_folder.assert_not_called()
-        operations = self.api.create_commit.call_args.kwargs["operations"]
+        self.lance_commits.assert_not_called()
+        operations = self.prune_commits.call_args.kwargs["operations"]
         self.assertEqual([op.path_in_repo for op in operations], ["gone.lance"])
 
     def test_descriptor_download_failure_stops_before_upload_prune_or_source_edits(self):
@@ -316,8 +522,8 @@ class SyncTests(unittest.TestCase):
 
         self.assertEqual(result, 1, output)
         self.assertIn("connection failed", output)
-        self.api.upload_folder.assert_not_called()
-        self.api.create_commit.assert_not_called()
+        self.lance_commits.assert_not_called()
+        self.prune_commits.assert_not_called()
         self.input.assert_not_called()
         self.assertFalse(self.catalog.exists())
 
@@ -327,13 +533,13 @@ class SyncTests(unittest.TestCase):
         write_dataset_hash(directory)
         self.remote_descriptor("tags/org.repo.lance", (directory / DESCRIPTOR).read_text())
         part.write_text("changed")
-        self.api.upload_folder.side_effect = [RuntimeError("upload failed"), None]
+        self.lance_commits.side_effect = [RuntimeError("upload failed"), SimpleNamespace(oid="uploaded-sha")]
 
         self.assertEqual(self.run_cli()[0], 1)
         result, output = self.run_cli()
 
         self.assertEqual(result, 0, output)
-        self.assertEqual(self.api.upload_folder.call_count, 2)
+        self.assertEqual(self.lance_commits.call_count, 2)
 
     def test_hashing_runs_concurrently_with_configured_worker_limit(self):
         for name in ("one", "two", "three", "four"):
@@ -368,8 +574,8 @@ class SyncTests(unittest.TestCase):
             result, output = self.run_cli("--prune")
         self.assertEqual(result, 1, output)
         self.assertIn("read failed", output)
-        self.api.upload_folder.assert_not_called()
-        self.api.create_commit.assert_not_called()
+        self.lance_commits.assert_not_called()
+        self.prune_commits.assert_not_called()
         self.input.assert_not_called()
         self.assertFalse(self.catalog.exists())
 
@@ -474,28 +680,30 @@ class SyncTests(unittest.TestCase):
         result, output = self.run_cli("--prune")
         self.assertEqual(result, 0, output)
         self.assertEqual([e[0] for e in self.events], ["upload", "prune", "verify"])
-        kwargs = self.api.create_commit.call_args.kwargs
+        kwargs = self.prune_commits.call_args.kwargs
         self.assertEqual(kwargs["parent_commit"], "snapshot-sha")
         self.assertEqual({(op.path_in_repo, op.is_folder) for op in kwargs["operations"]},
                          {("tags/gone.lance", True), ("nl/old.csv", False)})
-        self.api.list_repo_files.assert_called_once_with(
+        self.assertEqual(self.api.list_repo_files.call_count, 2)
+        self.api.list_repo_files.assert_called_with(
             repo_id="owner/collection", repo_type="dataset", revision="snapshot-sha")
 
-    def test_without_prune_no_remote_deletions(self):
+    def test_without_prune_keeps_other_remote_datasets(self):
         self.dataset()
         self.api.list_repo_files.return_value = ["tags/gone.lance/data/old.lance"]
         self.assertEqual(self.run_cli()[0], 0)
-        self.api.create_commit.assert_not_called()
-        self.api.list_repo_files.assert_not_called()
+        self.prune_commits.assert_not_called()
+        self.api.list_repo_files.assert_called_once_with(
+            repo_id="owner/collection", repo_type="dataset", revision="snapshot-sha")
 
     def test_upload_failure_skips_pruning_prompts_and_catalog_edits(self):
         self.dataset()
-        self.api.upload_folder.side_effect = RuntimeError("upload failed")
+        self.lance_commits.side_effect = RuntimeError("upload failed")
         result, output = self.run_cli("--prune")
         self.assertEqual(result, 1, output)
         self.assertFalse(self.catalog.exists())
         self.input.assert_not_called()
-        self.api.create_commit.assert_not_called()
+        self.prune_commits.assert_not_called()
         self.assertFalse(any(event[0] == "verify" for event in self.events))
 
     def test_dry_run_previews_without_remote_or_local_mutations(self):
@@ -508,8 +716,8 @@ class SyncTests(unittest.TestCase):
         self.assertFalse(self.catalog.exists())
         self.assertEqual(self.events, [])
         self.assertFalse((self.local / "tags/org.repo.lance" / DESCRIPTOR).exists())
-        self.api.upload_folder.assert_not_called()
-        self.api.create_commit.assert_not_called()
+        self.lance_commits.assert_not_called()
+        self.prune_commits.assert_not_called()
         self.input.assert_not_called()
 
     def test_dry_run_marks_new_remote_paths_independently_of_source_catalog(self):
@@ -537,9 +745,9 @@ class SyncTests(unittest.TestCase):
                     repo_id="owner/collection", repo_type="dataset", revision="snapshot-sha")
         self.assertEqual(self.catalog.read_bytes(), before)
         self.assertEqual(self.events, [])
-        self.api.upload_folder.assert_not_called()
+        self.lance_commits.assert_not_called()
         self.api.upload_file.assert_not_called()
-        self.api.create_commit.assert_not_called()
+        self.prune_commits.assert_not_called()
         self.input.assert_not_called()
 
     def test_scans_supported_files_excludes_hidden_and_keeps_lance_internal_files(self):
@@ -552,7 +760,7 @@ class SyncTests(unittest.TestCase):
         self.write_catalog([])
         result, output = self.run_cli()
         self.assertEqual(result, 0, output)
-        self.assertEqual(self.api.upload_folder.call_count, 1)
+        self.assertEqual(self.lance_commits.call_count, 1)
         self.api.upload_file.assert_called_once()
         self.assertEqual(self.api.upload_file.call_args.kwargs["path_in_repo"], "tags/org.csv.csv")
         self.assertEqual(len(load_catalog(self.catalog)), 2)
@@ -586,11 +794,11 @@ class SyncTests(unittest.TestCase):
     def test_prune_conflict_does_not_retry_unconditionally(self):
         self.dataset()
         self.api.list_repo_files.return_value = ["gone.lance/data/one.lance"]
-        self.api.create_commit.side_effect = RuntimeError("parent commit changed")
+        self.prune_commits.side_effect = RuntimeError("parent commit changed")
         result, output = self.run_cli("--prune")
         self.assertEqual(result, 1, output)
-        self.api.create_commit.assert_called_once()
-        self.assertEqual(self.api.create_commit.call_args.kwargs["parent_commit"], "snapshot-sha")
+        self.prune_commits.assert_called_once()
+        self.assertEqual(self.prune_commits.call_args.kwargs["parent_commit"], "snapshot-sha")
 
     def test_catalog_root_names_and_ambiguous_leaves(self):
         entries = [{"name": "org.root", "sourceUrl": None}, {"name": "a/org.repo"}, {"name": "b/org.repo"}]

@@ -13,7 +13,6 @@ from .storage import DESCRIPTOR, read_descriptor
 
 DEFAULT_CATALOG = Path(__file__).resolve().parents[2] / "dataset-sources.json"
 DEFAULT_REPO = "jtreminio/prompt-dataset"
-UPLOAD_IGNORES = [".*", "**/.*", "**/.*/**"]
 
 
 @dataclass(frozen=True)
@@ -150,19 +149,25 @@ def remote_datasets(files: list[str]) -> set[str]:
     return datasets
 
 
+def dataset_files(directory: Path) -> dict[str, Path]:
+    """The exact published file set, excluding hidden local caches."""
+    return {path.relative_to(directory).as_posix(): path
+            for path in sorted(directory.rglob("*"))
+            if path.is_file() and not any(part.startswith(".") for part in path.relative_to(directory).parts)}
+
+
 def write_dataset_hash(directory: Path, *, persist: bool = True) -> str:
     descriptor = directory / DESCRIPTOR
     read_descriptor(directory)
     metadata = json.loads(descriptor.read_text(encoding="utf-8")) if descriptor.exists() else {"version": 1, "columns": {}}
     previous_hash = metadata.pop("datasetHash", None)
     entries = []
-    for path in sorted(directory.rglob("*")):
-        relative = path.relative_to(directory)
-        if not path.is_file() or path == descriptor or any(part.startswith(".") for part in relative.parts):
+    for relative, path in dataset_files(directory).items():
+        if path == descriptor:
             continue
         with path.open("rb") as file:
             digest = hashlib.file_digest(file, "sha256").hexdigest()
-        entries.append([relative.as_posix(), digest])
+        entries.append([relative, digest])
     # Include storage metadata, but not the hash field itself.
     metadata_bytes = json.dumps(metadata, sort_keys=True, separators=(",", ":")).encode("utf-8")
     entries.append([DESCRIPTOR, hashlib.sha256(metadata_bytes).hexdigest()])
@@ -278,7 +283,7 @@ def _record_sources(datasets, entries, catalog, api, no_input: bool) -> int:
 
 
 def cmd_sync(args) -> int:
-    from huggingface_hub import CommitOperationDelete, HfApi
+    from huggingface_hub import CommitOperationAdd, CommitOperationDelete, HfApi
     from .hf import _resolve_token
 
     root = Path(args.directory).expanduser().resolve()
@@ -290,35 +295,57 @@ def cmd_sync(args) -> int:
             raise ValueError(f"catalog parent directory does not exist: {catalog.parent}")
         api = HfApi(token=_resolve_token())
         snapshot = api.repo_info(repo_id=args.repo, repo_type="dataset", revision=args.revision).sha
+        parent_commit = snapshot
         local_paths = {d.repo_path for d in datasets}
         print(f"Sync {root} -> {args.repo} @ {args.revision}: {len(datasets)} dataset(s)", file=sys.stderr)
-        if args.dry_run:
-            remote = remote_datasets(api.list_repo_files(repo_id=args.repo, repo_type="dataset", revision=snapshot))
+        remote_files = set(api.list_repo_files(repo_id=args.repo, repo_type="dataset", revision=snapshot))
+        remote = remote_datasets(remote_files)
         local_hashes = hash_datasets(datasets, args.hash_workers, persist=not args.dry_run)
-        uploaded = skipped = 0
+        uploaded = skipped = obsolete_count = 0
         for dataset in datasets:
+            obsolete = []
             if dataset.path.is_dir():
+                files = dataset_files(dataset.path)
+                # Hashing creates the descriptor on real runs; dry runs must plan it too.
+                files.setdefault(DESCRIPTOR, dataset.path / DESCRIPTOR)
+                prefix = dataset.repo_path + "/"
+                expected = {prefix + name for name in files}
+                published = {name for name in remote_files if name.startswith(prefix)}
+                obsolete = sorted(published - expected)
                 remote_hash = remote_dataset_hash(api, args.repo, snapshot, dataset.repo_path)
-                if remote_hash == local_hashes[dataset.repo_path]:
+                if remote_hash == local_hashes[dataset.repo_path] and published == expected:
                     print(f"  Skip [UNCHANGED] {dataset.repo_path}", file=sys.stderr)
                     skipped += 1
                     continue
+                if remote_hash == local_hashes[dataset.repo_path]:
+                    print(f"  Repair [FILE SET] {dataset.repo_path}: {len(obsolete)} obsolete, "
+                          f"{len(expected - published)} missing file(s)", file=sys.stderr)
             if args.dry_run:
                 status = "NEW" if dataset.repo_path not in remote else "EXISTING"
                 print(f"  Upload [{status}] {dataset.repo_path}", file=sys.stderr)
+                for filename in obsolete:
+                    print(f"    Remove obsolete file {filename}", file=sys.stderr)
             else:
-                print(f"  Upload {dataset.repo_path}", file=sys.stderr)
+                print(f"  Upload {dataset.repo_path} ({len(obsolete)} obsolete file(s) to remove)", file=sys.stderr)
                 kwargs = dict(repo_id=args.repo, repo_type="dataset", revision=args.revision,
-                              commit_message=f"Sync {dataset.name}")
+                              parent_commit=parent_commit, commit_message=f"Sync {dataset.name}")
                 if dataset.path.is_dir():
-                    api.upload_folder(folder_path=str(dataset.path), path_in_repo=dataset.repo_path,
-                                      ignore_patterns=UPLOAD_IGNORES, **kwargs)
+                    # upload_folder may publish multiple commits. Lance manifests, data,
+                    # indexes, and the descriptor must become visible together, including
+                    # deletion of old higher-version manifests from earlier builds.
+                    operations = [CommitOperationDelete(path_in_repo=name, is_folder=False) for name in obsolete]
+                    operations.extend(CommitOperationAdd(path_in_repo=prefix + name, path_or_fileobj=str(path))
+                                      for name, path in files.items())
+                    commit = api.create_commit(operations=operations, **kwargs)
                 else:
-                    api.upload_file(path_or_fileobj=str(dataset.path), path_in_repo=dataset.repo_path, **kwargs)
+                    commit = api.upload_file(path_or_fileobj=str(dataset.path), path_in_repo=dataset.repo_path, **kwargs)
+                parent_commit = commit.oid
             uploaded += 1
+            obsolete_count += len(obsolete)
         if args.dry_run:
             print(f"New datasets: {len(local_paths - remote)}; already on HF: {len(local_paths & remote)}", file=sys.stderr)
             print(f"Would upload: {uploaded}; skipped unchanged: {skipped}", file=sys.stderr)
+            print(f"Would remove obsolete files inside uploaded datasets: {obsolete_count}", file=sys.stderr)
             if args.prune:
                 for path in sorted(remote - local_paths):
                     print(f"  Prune {path}", file=sys.stderr)
@@ -329,6 +356,7 @@ def cmd_sync(args) -> int:
             print("Dry run: no uploads, deletions, catalog edits, or prompts.", file=sys.stderr)
             return 0
         print(f"Sync completed: {uploaded} uploaded; {skipped} skipped unchanged.", file=sys.stderr)
+        print(f"Obsolete files removed inside uploaded datasets: {obsolete_count}", file=sys.stderr)
         if args.prune:
             # HF rejects parent_commit deletions if the branch changes after this snapshot.
             snapshot = api.repo_info(repo_id=args.repo, repo_type="dataset", revision=args.revision).sha
@@ -357,7 +385,8 @@ def register(subparsers) -> None:
     parser = subparsers.add_parser(
         "sync", help="upload local Quarry datasets and record their original sources",
         description="Upload datasets to an existing Hugging Face dataset repo, skipping Lance datasets "
-                    "whose content hashes match the published storage descriptors. After uploads finish, "
+                    "whose content hashes and file sets match. Each Lance dataset is replaced in one commit, "
+                    "removing obsolete remote files inside it even without --prune. After uploads finish, "
                     "verify inferred sources for new catalog names and prompt for unresolved URLs. "
                     "Enter NONE to record that a dataset has no source URL.",
     )

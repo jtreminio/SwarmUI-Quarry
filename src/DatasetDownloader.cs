@@ -337,6 +337,10 @@ public static class DatasetDownloader
             {
                 return (false, $"A download is already in progress ({_status.Dataset}).", 0);
             }
+            if (!DatasetManager.MutationGate.Wait(0))
+            {
+                return (false, "Dataset repair is in progress. Wait for it to finish before downloading.", 0);
+            }
             id = ++_idCounter;
             _cancel = new CancellationTokenSource();
             cts = _cancel;
@@ -442,6 +446,10 @@ public static class DatasetDownloader
             SafeDeleteDir(tempDir);
             SetState(id, s => { s.State = "error"; s.Error = ex.Message; });
             Logs.Error($"Quarry: dataset download '{target.Name}' failed: {ex.ReadableString()}");
+        }
+        finally
+        {
+            DatasetManager.MutationGate.Release();
         }
     }
 

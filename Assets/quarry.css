@@ -931,3 +931,12 @@
     min-width: 16rem;
     font-weight: 600;
 }
+.quarry-repair-status {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    margin: 0.5rem 0;
+}
+
+.quarry-repair-status:empty {
+    display: none;
+}

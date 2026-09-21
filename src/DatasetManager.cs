@@ -16,6 +16,7 @@ public static class DatasetManager
     public static bool IsActive => !string.IsNullOrWhiteSpace(DatasetsFolder);
     private static readonly ConcurrentDictionary<string, DatasetEntry> Datasets = new();
     private static readonly object SyncLock = new();
+    internal static readonly SemaphoreSlim MutationGate = new(1, 1);
     public const int DefaultPreviewLimit = 100;
     public const int MaxPreviewLimit = 10000;
     private static DuckDbQueryBackend _backend;
@@ -402,6 +403,16 @@ public static class DatasetManager
         catch (Exception ex)
         {
             return (false, 0, null, ex.Message);
+        }
+    }
+
+    internal static DatasetRepairResult RepairDatasets()
+    {
+        lock (SyncLock)
+        {
+            DatasetRepairResult result = Backend.WithMaintenance(() => DatasetRepair.RepairAll(DatasetsFolder));
+            SyncCore();
+            return result;
         }
     }
 

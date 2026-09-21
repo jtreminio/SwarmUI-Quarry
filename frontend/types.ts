@@ -42,6 +42,14 @@ export interface CleanTempResponse {
     error?: string;
 }
 
+export interface RepairDatasetsResponse {
+    success: boolean;
+    checked?: number;
+    repaired?: number;
+    issues?: { dataset: string; error: string }[];
+    error?: string;
+}
+
 export interface PreviewResponse {
     success: boolean;
     dataset?: string;

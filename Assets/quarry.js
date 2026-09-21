@@ -1838,6 +1838,11 @@
       sourceUrl: "https://huggingface.co/datasets/huzaib/stable-diffusion-prompts"
     },
     {
+      name: "tags/jgreely.c1ga",
+      alias: null,
+      sourceUrl: "https://github.com/jgreely/c1ga"
+    },
+    {
       name: "tags/jtatman.stable-diffusion-prompts-stats-full-uncensored",
       alias: null,
       sourceUrl: "https://huggingface.co/datasets/jtatman/stable-diffusion-prompts-stats-full-uncensored"
@@ -1959,6 +1964,59 @@
     }
   ];
 
+  // frontend/repair.ts
+  var bindRepairButton = (onChanged2, onBusy) => {
+    const button = document.getElementById(
+      "quarry-repair-datasets"
+    );
+    const status = document.getElementById("quarry-repair-status");
+    button?.addEventListener("click", () => {
+      if (button.disabled || !status) {
+        return;
+      }
+      button.disabled = true;
+      onBusy?.(true);
+      button.textContent = "Repairing…";
+      status.textContent = "Checking local datasets. No dataset downloads are needed.";
+      status.className = "quarry-repair-status";
+      const finish = () => {
+        button.disabled = false;
+        button.textContent = "Repair datasets";
+        onBusy?.(false);
+      };
+      const fail = (error) => {
+        finish();
+        status.className = "quarry-repair-status quarry-message-error";
+        status.textContent = `Repair failed: ${String(error)}. Refresh the dataset list before retrying.`;
+      };
+      genericRequest(
+        "QuarryRepairDatasets",
+        {},
+        (data) => {
+          if (!data.success) {
+            fail(data.error ?? "unknown error");
+            return;
+          }
+          finish();
+          const repaired = data.repaired ?? 0;
+          const checked = data.checked ?? 0;
+          const issues = data.issues ?? [];
+          const summary = repaired > 0 ? `Repaired ${repaired.toLocaleString()} of ${checked.toLocaleString()} checked datasets without downloading data. Previous metadata was backed up locally.` : `Checked ${checked.toLocaleString()} datasets. No stale-version repairs were made.`;
+          status.textContent = [
+            summary,
+            ...issues.map(
+              (issue) => `${issue.dataset}: ${issue.error}`
+            )
+          ].join("\n");
+          status.className = `quarry-repair-status ${issues.length > 0 ? "quarry-message-error" : "quarry-message-success"}`;
+          onChanged2();
+        },
+        0,
+        fail
+      );
+    });
+  };
+
   // frontend/download.ts
   var MODAL_ID = "quarry-download-modal";
   var BODY_ID = "quarry-download-body";
@@ -1966,6 +2024,8 @@
   var PROGRESS_ID = "quarry-download-progress";
   var START_ID = "quarry-download-start";
   var REFRESH_ID = "quarry-download-refresh";
+  var REPAIR_ID = "quarry-repair-datasets";
+  var repairing = false;
   var POLL_MS2 = 800;
   var hasUpdate = (dataset) => dataset.installed && dataset.updateAvailable === true;
   var folderUpdateCount = (node) => node.items.filter(hasUpdate).length + node.folders.reduce((count, child) => count + folderUpdateCount(child), 0);
@@ -2161,7 +2221,7 @@
     const start = document.getElementById(START_ID);
     if (start) {
       const selected = rowCheckboxes().filter((cb) => cb.checked);
-      start.disabled = downloadingName !== null || selected.length === 0;
+      start.disabled = repairing || downloadingName !== null || selected.length === 0;
       start.textContent = selected.length > 0 && selected.every((cb) => cb.dataset.update === "true") ? "Update selected" : "Download selected";
     }
   };
@@ -2176,6 +2236,13 @@
     all.indeterminate = checked > 0 && checked < boxes.length;
   };
   var setControlsDownloading = (downloading) => {
+    downloading = downloading || repairing;
+    const repair = document.getElementById(
+      REPAIR_ID
+    );
+    if (repair) {
+      repair.disabled = downloading;
+    }
     const body2 = document.getElementById(BODY_ID);
     if (body2) {
       for (const cb of Array.from(
@@ -2524,11 +2591,13 @@
                     <div id="${BODY_ID}" class="quarry-download-body"></div>
                     <div id="${PROGRESS_ID}" class="quarry-download-progress" style="display: none;"></div>
                     <div id="${MESSAGE_ID}" class="quarry-download-message"></div>
+                    <div id="quarry-repair-status" class="quarry-repair-status" role="status" aria-live="polite"></div>
                 </div>
                 <div class="modal-footer quarry-download-footer">
                     <div class="quarry-download-footer-actions">
                         <button type="button" id="${START_ID}" class="btn btn-primary basic-button" disabled>Download</button>
                         <button type="button" id="${REFRESH_ID}" class="btn btn-secondary basic-button">Refresh</button>
+                        <button type="button" id="${REPAIR_ID}" class="btn btn-secondary basic-button" title="Fix casing errors caused by stale downloaded versions using existing local files. No dataset download is needed; previous metadata is backed up.">Repair datasets</button>
                     </div>
                     <button type="button" class="btn btn-secondary basic-button" data-bs-dismiss="modal">Close</button>
                 </div>
@@ -2538,6 +2607,13 @@
     modal.querySelector('[data-bs-dismiss="modal"]')?.addEventListener("click", hideDownloadModal);
     document.getElementById(START_ID)?.addEventListener("click", startBatch);
     document.getElementById(REFRESH_ID)?.addEventListener("click", () => loadAvailable(true));
+    bindRepairButton(
+      () => onChanged?.(),
+      (busy) => {
+        repairing = busy;
+        setControlsDownloading(downloadingName !== null);
+      }
+    );
     document.getElementById(BODY_ID)?.addEventListener("change", bodyChangeHandler);
     document.getElementById(BODY_ID)?.addEventListener("click", bodyClickHandler);
     document.getElementById(PROGRESS_ID)?.addEventListener("click", progressClickHandler);
