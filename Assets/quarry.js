@@ -1493,6 +1493,11 @@
       sourceUrl: "https://huggingface.co/datasets/jorgevipo/image_prompts_dataset"
     },
     {
+      name: "nl/jtreminio.artist_styles",
+      alias: null,
+      sourceUrl: "https://huggingface.co/jtreminio"
+    },
+    {
       name: "nl/juliaturc.captioned-cartoons",
       alias: null,
       sourceUrl: "https://huggingface.co/datasets/juliaturc/captioned-cartoons"
@@ -1621,6 +1626,11 @@
       name: "nl/SilentAntagonist.vintage-photography-450k-high-quality-captions",
       alias: null,
       sourceUrl: "https://huggingface.co/datasets/SilentAntagonist/vintage-photography-450k-high-quality-captions"
+    },
+    {
+      name: "nl/stablellama.erotic-image-prompts",
+      alias: null,
+      sourceUrl: "https://huggingface.co/datasets/stablellama/erotic-image-prompts"
     },
     {
       name: "nl/svjack.conceptual_captions_3m_en_tiny",

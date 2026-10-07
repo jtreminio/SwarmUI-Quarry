@@ -370,6 +370,8 @@ def cmd_sync(args) -> int:
                                               for path in removed])
         result = _record_sources(datasets, entries, catalog, api, args.no_input)
         print(f"Source catalog: {catalog}", file=sys.stderr)
+        if catalog == DEFAULT_CATALOG.resolve():
+            print("Make sure to run npm run build", file=sys.stderr)
         return result
     except KeyboardInterrupt:
         print("\nSync interrupted. Rerun to resume uploads and source recording.", file=sys.stderr)
