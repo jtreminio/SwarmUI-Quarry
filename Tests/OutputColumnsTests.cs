@@ -1,4 +1,5 @@
 using System.IO;
+using SwarmUI.Accounts;
 using SwarmUI.Text2Image;
 using Xunit;
 
@@ -143,6 +144,56 @@ public class OutputColumnsTests : IDisposable
             T2IParamInput.LateSpecialParameterHandlers.RemoveRange(lateHandlers, T2IParamInput.LateSpecialParameterHandlers.Count - lateHandlers);
         }
         Assert.NotNull(QueryRunner.Run("<q:portraits:subject[unknown]>", 25).Invalid);
+    }
+
+    [Fact]
+    public void RepeatWarnings_AppearAgainAfterTenMoreGenerateRequests()
+    {
+        using GlobalStateFixture state = new();
+        var behavior = T2IParamTypes.WildcardSeedBehavior;
+        int earlyHandlers = T2IParamInput.SpecialParameterHandlers.Count;
+        int lateHandlers = T2IParamInput.LateSpecialParameterHandlers.Count;
+        try
+        {
+            T2IParamTypes.WildcardSeedBehavior = new(new("Wildcard Seed Behavior", "", "Random", ID: "wildcardseedbehavior"));
+            PromptTagHandler.Initialize();
+            Session session = new();
+
+            List<string> warningsFor(long requestId, Session activeSession, bool pinned = false)
+            {
+                T2IParamInput input = new(null)
+                {
+                    SourceSession = activeSession,
+                    UserRequestId = requestId,
+                    WildcardRandom = new Random(123)
+                };
+                if (pinned)
+                {
+                    input.ExtraMeta[PromptTagHandler.WildcardSeedPinnedKey] = true;
+                }
+                T2IPromptHandling.PromptTagContext context = new() { Input = input };
+                Assert.Equal("goth portrait", T2IPromptHandling.ProcessPromptLike("<q:characters[prompt=goth]>", context, false));
+                return input.ExtraMeta.TryGetValue("parser_warnings", out object value) ? (List<string>)value : [];
+            }
+
+            string smallPoolWarning = Assert.Single(warningsFor(1001, session));
+            Assert.Contains("matched only 1 row(s)", smallPoolWarning);
+            Assert.Empty(warningsFor(1001, session)); // Another image from the same request.
+            for (long requestId = 1002; requestId <= 1011; requestId++)
+            {
+                Assert.Empty(warningsFor(requestId, session));
+            }
+            Assert.Equal(smallPoolWarning, Assert.Single(warningsFor(1012, session)));
+            Assert.Empty(warningsFor(1013, session));
+            Assert.Equal(smallPoolWarning, Assert.Single(warningsFor(1013, new Session())));
+            Assert.Contains("Wildcard Seed is pinned", Assert.Single(warningsFor(1013, session, pinned: true)));
+        }
+        finally
+        {
+            T2IParamTypes.WildcardSeedBehavior = behavior;
+            T2IParamInput.SpecialParameterHandlers.RemoveRange(earlyHandlers, T2IParamInput.SpecialParameterHandlers.Count - earlyHandlers);
+            T2IParamInput.LateSpecialParameterHandlers.RemoveRange(lateHandlers, T2IParamInput.LateSpecialParameterHandlers.Count - lateHandlers);
+        }
     }
 
     public void Dispose()

@@ -1,5 +1,7 @@
+using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 using FreneticUtilities.FreneticExtensions;
+using SwarmUI.Accounts;
 using SwarmUI.Text2Image;
 using SwarmUI.Utils;
 
@@ -262,8 +264,15 @@ public static class PromptTagHandler
     }
 
     private const long SmallPoolWarningThreshold = 250;
+    private const long RepeatWarningCooldownRequests = 10;
+    private static readonly ConditionalWeakTable<Session, RepeatWarningState> RepeatWarningStates = new();
 
-    // Warns (once per input, deduped by message) when <q:> is likely to visibly repeat: a pinned wildcard
+    private sealed class RepeatWarningState
+    {
+        public readonly Dictionary<string, long> LastShownRequestIds = new(StringComparer.Ordinal);
+    }
+
+    // Warns when <q:> is likely to visibly repeat: a pinned wildcard
     // seed returns the same row every generation, and a small filtered pool repeats at the birthday-paradox
     // floor no matter how uniform the draw is. Only fires for filtered queries; a bare dataset reference over
     // millions of rows never warns.
@@ -286,10 +295,28 @@ public static class PromptTagHandler
     private static void WarnOnce(T2IPromptHandling.PromptTagContext context, string message)
     {
         List<string> warnings = context.Input.ExtraMeta.GetOrCreate("parser_warnings", () => new List<string>()) as List<string>;
-        if (!warnings.Contains(message))
+        if (warnings.Contains(message))
         {
-            context.TrackWarning(message);
+            return;
         }
+        // Images within one Generate request share UserRequestId. Keep the cooldown per session and
+        // exact message so other warnings still appear immediately. Weak keys release ended sessions.
+        Session session = context.Input.SourceSession;
+        if (session is not null && context.Input.UserRequestId > 0)
+        {
+            RepeatWarningState state = RepeatWarningStates.GetValue(session, _ => new());
+            lock (state)
+            {
+                long requestId = context.Input.UserRequestId;
+                if (state.LastShownRequestIds.TryGetValue(message, out long lastShownId)
+                    && requestId - lastShownId <= RepeatWarningCooldownRequests)
+                {
+                    return;
+                }
+                state.LastShownRequestIds[message] = requestId;
+            }
+        }
+        context.TrackWarning(message);
     }
 
     private sealed record PlanDraft(DatasetEntry Entry, string PromptColumn, IReadOnlyList<string> OutputColumns, SqlFilter Filter);
