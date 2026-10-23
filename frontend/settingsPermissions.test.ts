@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "@jest/globals";
-import { quarry } from "./settings";
+import { mountImageSearchFolders, quarry } from "./settings";
 import type { SettingsResponse } from "./types";
 
 const originalRequest = globalThis.genericRequest;
@@ -20,7 +20,18 @@ describe("image search settings permissions", () => {
             requirementsInstalled: true,
             canViewImageHistory,
             datasetsFolder: "Data/Quarry",
-            datasets: [],
+            datasets: [
+                {
+                    name: "kept",
+                    columns: [{ name: "prompt", kind: "scalar" }],
+                    resolvedPromptColumn: "prompt",
+                    configuredPromptColumn: "prompt",
+                    configuredTagColumns: ["prompt"],
+                    rowCount: 1,
+                    error: null,
+                    enabled: false,
+                },
+            ],
             ...(canViewImageHistory
                 ? {
                       imageSearchDirectories: [
@@ -41,17 +52,25 @@ describe("image search settings permissions", () => {
                 callback(response as T);
             } else if (name === "QuarrySaveSettings") {
                 saves.push(data as Record<string, unknown>);
+                callback(response as T);
             }
         };
         document.body.innerHTML = '<div id="quarry-tab-body"></div>';
         quarry.init();
-        const setting = document.querySelector(
-            ".quarry-search-folder-setting",
-        ) as HTMLElement;
-        expect(setting.hidden).toBe(!canViewImageHistory);
         expect(
-            setting.querySelectorAll("[data-quarry-search-folder-check]")
-                .length,
+            document.querySelector(
+                "#quarry-form .quarry-search-folder-setting",
+            ),
+        ).toBeNull();
+        const panel = document.createElement("div");
+        document.body.append(panel);
+        let allowed = false;
+        mountImageSearchFolders(panel, (value) => {
+            allowed = value;
+        });
+        expect(allowed).toBe(canViewImageHistory);
+        expect(
+            panel.querySelectorAll("[data-quarry-search-folder-check]").length,
         ).toBe(canViewImageHistory ? 3 : 0);
         document
             .getElementById("quarry-form")
@@ -60,10 +79,43 @@ describe("image search settings permissions", () => {
             );
         expect(saves).toHaveLength(1);
         expect(saves[0].datasetsFolder).toBe("Data/Quarry");
+        expect(saves[0]).not.toHaveProperty("imageSearchDirectoriesJson");
         if (canViewImageHistory) {
-            expect(saves[0].imageSearchDirectoriesJson).toBe('["Starred"]');
+            (
+                document.getElementById("quarry-folder") as HTMLInputElement
+            ).value = "unsaved-folder";
+            (
+                document.getElementById(
+                    "quarry-add-to-existing-tag",
+                ) as HTMLInputElement
+            ).checked = false;
+            (
+                panel.querySelector(
+                    "[data-save-search-folders]",
+                ) as HTMLButtonElement
+            ).click();
+            expect(saves[1].imageSearchDirectoriesJson).toBe('["Starred"]');
+            expect(saves[1].datasetsFolder).toBe("Data/Quarry");
+            expect(saves[1].addToExistingTag).toBe(true);
+            expect(saves[1].promptColumnsJson).toBe('{"kept":"prompt"}');
+            expect(saves[1].tagColumnsJson).toBe('{"kept":["prompt"]}');
+            expect(saves[1].disabledDatasetsJson).toBe('["kept"]');
+            expect(
+                (document.getElementById("quarry-folder") as HTMLInputElement)
+                    .value,
+            ).toBe("unsaved-folder");
+            expect(
+                (
+                    document.getElementById(
+                        "quarry-add-to-existing-tag",
+                    ) as HTMLInputElement
+                ).checked,
+            ).toBe(false);
         } else {
-            expect(saves[0]).not.toHaveProperty("imageSearchDirectoriesJson");
+            expect(panel.hidden).toBe(true);
+            expect(
+                panel.querySelector("[data-save-search-folders]"),
+            ).toBeNull();
         }
     });
 });

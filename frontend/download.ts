@@ -108,8 +108,8 @@ export const renderRemoteDatasetRow = (
         ? ` data-parent="${escapeHtml(container)}"`
         : "";
     const check = installed
-        ? `<span class="quarry-remote-check" title="Installed">✓</span> `
-        : "";
+        ? `<span class="quarry-remote-check" title="Installed">✓ Installed</span>`
+        : '<span class="quarry-remote-available">Not installed</span>';
     const update = updateAvailable
         ? ' <span class="quarry-remote-update">Update available!</span>'
         : "";
@@ -120,9 +120,10 @@ export const renderRemoteDatasetRow = (
           : "Select to download";
     return `<tr class="${rowClass}${hiddenClass}" data-dataset="${name}"${parentAttr} style="--quarry-depth: ${depth}">
         <td class="quarry-remote-selcell">
-            <input type="checkbox" class="quarry-remote-select" data-dataset="${name}" data-installed="${installed}" data-update="${updateAvailable}" title="${title}" />
+            <input type="checkbox" class="quarry-remote-select" data-dataset="${name}" data-installed="${installed}" data-update="${updateAvailable}" title="${title}" aria-label="Select ${name}" />
         </td>
-        <td class="quarry-remote-name">${check}${renderRemoteDatasetName(dataset.name, displayName)}${update}</td>
+        <td class="quarry-remote-name">${renderRemoteDatasetName(dataset.name, displayName)}</td>
+        <td class="quarry-remote-status">${check}${update}</td>
         <td class="quarry-remote-size">${formatBytes(dataset.sizeBytes)}</td>
     </tr>`;
 };
@@ -145,7 +146,7 @@ export const renderRemoteFolderHeaderRow = (
         ? ` data-parent="${escapeHtml(container)}"`
         : "";
     return `<tr class="quarry-folder-row${collapsedClass}${hiddenClass}" data-folder="${path}"${parentAttr} style="--quarry-depth: ${depth}">
-        <td colspan="3">
+        <td colspan="4">
             <button type="button" class="quarry-folder-toggle" data-folder="${path}" aria-expanded="${!collapsed}" title="Show or hide the datasets in this folder">
                 <span class="quarry-folder-caret" aria-hidden="true"></span>
                 <span class="quarry-folder-name">${escapeHtml(node.name)}</span>
@@ -196,9 +197,11 @@ export const renderRemoteDatasets = (
         .map((dataset) => renderRemoteDatasetRow(dataset))
         .join("");
     return `<table class="quarry-remote-table">
+        <colgroup><col class="quarry-remote-col-select"><col><col class="quarry-remote-col-status"><col class="quarry-remote-col-size"></colgroup>
         <thead><tr>
-            <th class="quarry-remote-selcell"><input type="checkbox" class="quarry-remote-selectall" title="Select all" /></th>
+            <th class="quarry-remote-selcell"><input type="checkbox" class="quarry-remote-selectall" title="Select all" aria-label="Select all datasets" /></th>
             <th>Dataset</th>
+            <th>Status</th>
             <th>Size</th>
         </tr></thead>
         <tbody>${folderRows}${looseRows}</tbody>
@@ -271,8 +274,7 @@ const renderNote = (): string => {
 const renderList = (): void => {
     const body = document.getElementById(BODY_ID);
     if (body) {
-        body.innerHTML =
-            renderNote() + renderRemoteDatasets(currentList, expandedFolders);
+        body.innerHTML = `<div class="quarry-download-summary">${renderNote()}</div><div class="quarry-download-list" tabindex="0" role="region" aria-label="Available datasets">${renderRemoteDatasets(currentList, expandedFolders)}</div>`;
     }
     updateSelectAllState();
     updateStartButtonState();
@@ -710,25 +712,26 @@ const ensureDownloadModal = (): void => {
     modal.id = MODAL_ID;
     modal.tabIndex = -1;
     modal.setAttribute("role", "dialog");
+    modal.setAttribute("aria-labelledby", "quarry-download-title");
     modal.innerHTML = `
         <div class="modal-dialog modal-lg quarry-download-dialog" role="document">
             <div class="modal-content">
                 <div class="modal-header">
-                    <h5 class="modal-title">Download Datasets</h5>
+                    <h5 class="modal-title" id="quarry-download-title">Download datasets</h5>
                 </div>
                 <div class="modal-body">
                     <div id="${BODY_ID}" class="quarry-download-body"></div>
                     <div id="${PROGRESS_ID}" class="quarry-download-progress" style="display: none;"></div>
-                    <div id="${MESSAGE_ID}" class="quarry-download-message"></div>
+                    <div id="${MESSAGE_ID}" class="quarry-download-message" role="status"></div>
                     <div id="quarry-repair-status" class="quarry-repair-status" role="status" aria-live="polite"></div>
                 </div>
                 <div class="modal-footer quarry-download-footer">
                     <div class="quarry-download-footer-actions">
-                        <button type="button" id="${START_ID}" class="btn btn-primary basic-button" disabled>Download</button>
-                        <button type="button" id="${REFRESH_ID}" class="btn btn-secondary basic-button">Refresh</button>
-                        <button type="button" id="${REPAIR_ID}" class="btn btn-secondary basic-button" title="Fix casing errors caused by stale downloaded versions using existing local files. No dataset download is needed; previous metadata is backed up.">Repair datasets</button>
+                        <button type="button" id="${START_ID}" class="basic-button quarry-download-primary" disabled>Download selected</button>
+                        <button type="button" id="${REFRESH_ID}" class="basic-button">Refresh</button>
+                        <button type="button" id="${REPAIR_ID}" class="basic-button" title="Fix casing errors caused by stale downloaded versions using existing local files. No dataset download is needed; previous metadata is backed up.">Repair datasets</button>
                     </div>
-                    <button type="button" class="btn btn-secondary basic-button" data-bs-dismiss="modal">Close</button>
+                    <button type="button" class="basic-button" data-bs-dismiss="modal">Close</button>
                 </div>
             </div>
         </div>`;

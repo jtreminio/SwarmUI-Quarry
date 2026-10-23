@@ -82,7 +82,7 @@ public class OutputColumnsTests : IDisposable
         QueryRunResult result = QueryRunner.Run("<q:characters,creatures,other:pose,missing,appearance,clothing>", 25);
         Assert.Null(result.Invalid);
         Assert.Equal(3, result.Total);
-        Assert.Equal(new[] { "standing, silver hair, black jacket", "red hair", "flying, scales" }, result.Rows.Select(row => row.Prompt));
+        Assert.Equal(new[] { "standing, silver hair, black jacket", "red hair", "flying, scales" }.Order(), result.Rows.Select(row => row.Prompt).Order());
         Assert.DoesNotContain(result.Datasets, dataset => dataset.Name == "other");
     }
 
@@ -100,7 +100,7 @@ public class OutputColumnsTests : IDisposable
     {
         QueryRunResult result = QueryRunner.Run("<q:characters,creatures[tags=goth]:appearance,clothing>", 25);
         Assert.Null(result.Invalid);
-        Assert.Equal(new[] { "silver hair, black jacket", "scales" }, result.Rows.Select(row => row.Prompt));
+        Assert.Equal(new[] { "silver hair, black jacket", "scales" }.Order(), result.Rows.Select(row => row.Prompt).Order());
     }
 
     [Fact]
@@ -108,7 +108,7 @@ public class OutputColumnsTests : IDisposable
     {
         QueryRunResult result = QueryRunner.Run("<q:characters:missing>", 25);
         Assert.Null(result.Invalid);
-        Assert.Equal(new[] { "goth portrait", "punk portrait" }, result.Rows.Select(row => row.Prompt));
+        Assert.Equal(new[] { "goth portrait", "punk portrait" }.Order(), result.Rows.Select(row => row.Prompt).Order());
     }
 
     [Fact]

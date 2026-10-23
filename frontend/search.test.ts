@@ -1,12 +1,57 @@
 import { describe, expect, it } from "@jest/globals";
 import {
     buildSearchRequest,
+    initImageSearch,
     loadMoreState,
     operatorsForType,
     opNeedsValue,
     resultsInfoText,
     rowToObject,
 } from "./search";
+import { IMAGE_SEARCH_BODY_ID } from "./searchtab";
+
+describe("Image Search folder settings", () => {
+    it("opens its own folder settings without placing controls in Quarry", () => {
+        const originalRequest = globalThis.genericRequest;
+        globalThis.genericRequest = <T>(
+            name: string,
+            _data: object,
+            callback: (response: T) => void,
+        ): void => {
+            if (name === "QuarryGetSettings")
+                callback({
+                    success: true,
+                    canViewImageHistory: true,
+                    datasets: [],
+                    imageSearchDirectories: [""],
+                    imageSearchDirectoryOptions: ["raw"],
+                } as T);
+        };
+        try {
+            document.body.innerHTML = `<div id="${IMAGE_SEARCH_BODY_ID}"></div>`;
+            initImageSearch();
+            const button = document.getElementById(
+                "imagesearch-folders-toggle",
+            ) as HTMLButtonElement;
+            const panel = document.getElementById(
+                "imagesearch-folders-settings",
+            ) as HTMLElement;
+            expect(button.hidden).toBe(false);
+            expect(panel.hidden).toBe(true);
+            button.click();
+            expect(panel.hidden).toBe(false);
+            expect(button.getAttribute("aria-expanded")).toBe("true");
+            expect(
+                panel.querySelector("[data-save-search-folders]"),
+            ).not.toBeNull();
+            button.click();
+            expect(panel.hidden).toBe(true);
+        } finally {
+            globalThis.genericRequest = originalRequest;
+            document.body.innerHTML = "";
+        }
+    });
+});
 
 describe("operatorsForType", () => {
     // The catalog is now served by the backend (single source of truth); the client just looks types up in it.

@@ -179,16 +179,48 @@ public sealed class DuckDbQueryBackend : IQueryBackend, IDisposable
             return Convert.ToInt64(cmd.ExecuteScalar());
         }
 
-        public List<string> GetPrompts(string datasetPath, IReadOnlyList<string> promptColumns, SqlFilter filter, int limit, long offset)
+        public List<string> GetPrompts(string datasetPath, IReadOnlyList<string> promptColumns, SqlFilter filter, int limit, long offset, bool randomize = false, long? matchingCount = null)
         {
             if (promptColumns.Count == 0)
             {
                 return [];
             }
             DatasetSource source = PrepareSource(datasetPath);
+            if (randomize && source.RequiresLance && (filter.IsEmpty || matchingCount > 0))
+            {
+                // Lance supports native physical LIMIT/OFFSET reads. Draw offsets
+                // without replacement before formatting large structured prompts,
+                // rather than scanning and formatting every row to sort randomly.
+                long total = CountRows(datasetPath, SqlFilter.None);
+                long matches = filter.IsEmpty ? total : matchingCount.Value;
+                int wanted = (int)Math.Min(matches, Math.Max(0, limit));
+                if (wanted == 0)
+                {
+                    return [];
+                }
+                if (matches >= total / 4d)
+                {
+                    List<string> sampled = [];
+                    int attempts = (int)Math.Min(total, Math.Min(int.MaxValue, (long)wanted * 4));
+                    foreach (long index in RandomOffsets(total, attempts))
+                    {
+                        var candidate = GetCandidateAt(datasetPath, promptColumns, filter, index);
+                        if (candidate.Matches)
+                        {
+                            sampled.Add(candidate.Value);
+                        }
+                        if (sampled.Count == wanted)
+                        {
+                            return sampled;
+                        }
+                    }
+                    // Discard a partial draw before the exact fallback. Sampling
+                    // distinct physical offsets keeps matches equally likely.
+                }
+            }
             if (filter.Output is not null)
             {
-                return GetNestedPrompts(datasetPath, source, filter, limit, offset);
+                return GetNestedPrompts(datasetPath, source, filter, limit, offset, randomize);
             }
 
             using DuckDBCommand cmd = _connection.CreateCommand();
@@ -196,7 +228,7 @@ public sealed class DuckDbQueryBackend : IQueryBackend, IDisposable
             Dictionary<string, string> casing = layout.Columns;
             List<string> projection = OutputProjection(promptColumns, casing, layout.Helpers.Select(h => h.Physical));
             cmd.CommandText =
-                $"SELECT {string.Join(", ", projection.Select(SqlText.QuoteIdentifier))} FROM {source.FromExpression}{Where(filter)} LIMIT {Math.Max(0, limit)} OFFSET {offset};";
+                $"SELECT {string.Join(", ", projection.Select(SqlText.QuoteIdentifier))} FROM {source.FromExpression}{Where(filter)}{(randomize ? " ORDER BY random()" : "")} LIMIT {Math.Max(0, limit)} OFFSET {offset};";
             Bind(cmd, filter);
             using DuckDBDataReader reader = cmd.ExecuteReader();
             List<string> prompts = [];
@@ -218,7 +250,7 @@ public sealed class DuckDbQueryBackend : IQueryBackend, IDisposable
             {
                 using DuckDBCommand nested = _connection.CreateCommand();
                 nested.CommandText = $"WITH __quarry_physical AS MATERIALIZED (SELECT * FROM {source.FromExpression} LIMIT 1 OFFSET {Math.Max(0, index)}) "
-                    + $"SELECT {NestedProjection(filter.Output)}, ({filter.WhereClause}) FROM __quarry_physical;";
+                    + $"SELECT {NestedProjection(filter.Output)}, {(filter.IsEmpty ? "TRUE" : $"({filter.WhereClause})")} FROM __quarry_physical;";
                 Bind(nested, filter);
                 using DuckDBDataReader selected = nested.ExecuteReader();
                 if (!selected.Read())
@@ -273,11 +305,11 @@ public sealed class DuckDbQueryBackend : IQueryBackend, IDisposable
                 "__quarry_candidates", $" ORDER BY {ordinal}", candidates);
         }
 
-        private List<string> GetNestedPrompts(string datasetPath, DatasetSource source, SqlFilter filter, int limit, long offset)
+        private List<string> GetNestedPrompts(string datasetPath, DatasetSource source, SqlFilter filter, int limit, long offset, bool randomize)
         {
             var relation = CandidateSource(datasetPath, source, filter);
             using DuckDBCommand cmd = _connection.CreateCommand();
-            cmd.CommandText = $"{relation.Prefix}SELECT {NestedProjection(filter.Output)} FROM {relation.From}{Where(filter)}{relation.Order} LIMIT {Math.Max(0, limit)} OFFSET {Math.Max(0, offset)};";
+            cmd.CommandText = $"{relation.Prefix}SELECT {NestedProjection(filter.Output)} FROM {relation.From}{Where(filter)}{(randomize ? " ORDER BY random()" : relation.Order)} LIMIT {Math.Max(0, limit)} OFFSET {Math.Max(0, offset)};";
             Bind(cmd, filter, relation.UsesCandidates);
             using DuckDBDataReader reader = cmd.ExecuteReader();
             List<string> result = [];
@@ -337,13 +369,86 @@ public sealed class DuckDbQueryBackend : IQueryBackend, IDisposable
         }
 
         public (List<string> Columns, List<List<string>> Rows) GetSampleRows(string datasetPath, int limit)
+            => GetSampleRows(datasetPath, limit, false);
+
+        public (List<string> Columns, List<List<string>> Rows) GetSampleRows(string datasetPath, int limit, bool randomize)
         {
             DatasetSource source = PrepareSource(datasetPath);
+            if (randomize && source.RequiresLance && limit > 0)
+            {
+                var sampleLayout = CasingStorage.LoadLayout(datasetPath);
+                List<string> columns = [];
+                List<List<string>> rows = [];
+                foreach (long index in RandomOffsets(CountRows(datasetPath, SqlFilter.None), limit))
+                {
+                    using DuckDBCommand selected = _connection.CreateCommand();
+                    selected.CommandText = $"SELECT * FROM {source.FromExpression} LIMIT 1 OFFSET {index};";
+                    using DuckDBDataReader selectedReader = selected.ExecuteReader();
+                    var sample = Drain(selectedReader, sampleLayout.Columns, sampleLayout.Helpers.Select(h => h.Physical));
+                    columns = sample.Columns;
+                    rows.AddRange(sample.Rows);
+                }
+                if (columns.Count > 0)
+                {
+                    return (columns, rows);
+                }
+            }
             using DuckDBCommand cmd = _connection.CreateCommand();
-            cmd.CommandText = $"SELECT * FROM {source.FromExpression} LIMIT {Math.Max(0, limit)};";
+            cmd.CommandText = $"SELECT * FROM {source.FromExpression}{(randomize ? " ORDER BY random()" : "")} LIMIT {Math.Max(0, limit)};";
             using DuckDBDataReader reader = cmd.ExecuteReader();
             var layout = CasingStorage.LoadLayout(datasetPath);
             return Drain(reader, layout.Columns, layout.Helpers.Select(h => h.Physical));
+        }
+
+        private static long[] RandomOffsets(long count, int limit)
+        {
+            int size = (int)Math.Min(count, Math.Max(0, limit));
+            HashSet<long> selected = [];
+            // Floyd's algorithm gives a uniform sample without replacement in
+            // exactly size draws, including when the whole dataset is requested.
+            for (long next = count - size; next < count; next++)
+            {
+                long draw = Random.Shared.NextInt64(next + 1);
+                if (!selected.Add(draw))
+                {
+                    selected.Add(next);
+                }
+            }
+            long[] offsets = [.. selected];
+            Random.Shared.Shuffle(offsets);
+            return offsets;
+        }
+
+        public ColumnValueProfile ProfileColumn(string datasetPath, string columnName, ExploreLimits limits)
+        {
+            ColumnSchema schema = GetSchema(datasetPath);
+            if (!schema.TryGet(columnName, out ColumnInfo column) || column.IsCasingPatch || column.IsSearchHelper)
+            {
+                throw new QueryException($"Unknown column '{columnName}'.");
+            }
+            if (column.Kind != ColumnKind.Scalar || column.IsNumeric || column.DataType != "VARCHAR")
+            {
+                return ColumnValueProfile.Rejected("unsupported");
+            }
+            DatasetSource source = PrepareSource(datasetPath);
+            Dictionary<string, string> casing = CasingStorage.Load(datasetPath);
+            string projection = SqlText.QuoteIdentifier(column.Name);
+            if (column.CasingColumn is not null)
+            {
+                projection += ", " + SqlText.QuoteIdentifier(column.CasingColumn);
+            }
+            using DuckDBCommand cmd = _connection.CreateCommand();
+            cmd.CommandText = $"SELECT {projection} FROM {source.FromExpression};";
+            using DuckDBDataReader reader = cmd.ExecuteReader();
+            IEnumerable<string> Values()
+            {
+                while (reader.Read())
+                {
+                    object value = ReadValue(reader, column.Name, casing);
+                    yield return value is null or DBNull ? null : (string)value;
+                }
+            }
+            return ColumnValueProfile.Analyze(Values(), limits);
         }
 
         public void WriteImageHistory(string indexDir, string lancePath, IReadOnlyList<string> stagingJsonPaths, string livePathsJsonPath)
@@ -614,6 +719,36 @@ public sealed class DuckDbQueryBackend : IQueryBackend, IDisposable
         {
             return _shared.GetSampleRows(datasetPath, limit);
         }
+    }
+
+    // Interactive sampling gets a fresh connection and random draw, independent
+    // of deterministic prompt-generation offsets and cached preview rows.
+    public List<string> GetRandomPrompts(string datasetPath, IReadOnlyList<string> columns, SqlFilter filter, int limit, long? matchingCount = null)
+        => Scan(reader => reader.GetPrompts(datasetPath, columns, filter, limit, 0, randomize: true, matchingCount: matchingCount));
+
+    public (List<string> Columns, List<List<string>> Rows) GetRandomSampleRows(string datasetPath, int limit)
+        => Scan(reader => reader.GetSampleRows(datasetPath, limit, randomize: true));
+
+    private T Scan<T>(Func<Conn, T> action)
+    {
+        _maintenance.EnterReadLock();
+        try
+        {
+            _scanGate.Wait();
+            try
+            {
+                using Conn reader = new(forScan: true);
+                return action(reader);
+            }
+            finally { _scanGate.Release(); }
+        }
+        finally { _maintenance.ExitReadLock(); }
+    }
+
+    public ColumnValueProfile ProfileColumn(string datasetPath, string column, ExploreLimits limits)
+    {
+        limits.Validate();
+        return Scan(reader => reader.ProfileColumn(datasetPath, column, limits));
     }
 
     public void WriteImageHistory(string indexDir, string lancePath, IReadOnlyList<string> stagingJsonPaths, string livePathsJsonPath)

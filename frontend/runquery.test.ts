@@ -302,6 +302,20 @@ describe("highlightPrompt", () => {
 });
 
 describe("renderRunQueryResponse", () => {
+    it("distinguishes missing sample output from a query with no matches", () => {
+        const view = renderRunQueryResponse({
+            total: 12,
+            datasets: [{ name: "a", matches: 12 }],
+            results: [],
+            truncated: true,
+        });
+        expect(view.summary).toContain("12 prompts");
+        expect(view.body).toContain("no sample output was returned");
+        expect(view.body).not.toContain("No matching rows");
+        expect(
+            renderRunQueryResponse({ total: 0, results: [] }).body,
+        ).toContain("No matching rows");
+    });
     it("renders an invalid-input notice without a summary", () => {
         const view = renderRunQueryResponse({ invalid: "bad <syntax>" });
         expect(view.summary).toBe("");

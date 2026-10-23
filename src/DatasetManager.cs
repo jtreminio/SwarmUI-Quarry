@@ -18,7 +18,17 @@ public static class DatasetManager
     private static readonly object SyncLock = new();
     internal static readonly SemaphoreSlim MutationGate = new(1, 1);
     public const int DefaultPreviewLimit = 100;
-    public const int MaxPreviewLimit = 10000;
+    public const int MaxPreviewLimit = 100;
+    public static ExploreLimits ExploreValueLimits { get; set; } = new(ExploreLimits.DefaultUniqueValues, ExploreLimits.DefaultValueLength);
+    private static readonly ConcurrentDictionary<string, ColumnProfileCache> ColumnProfiles = new();
+
+    public static ColumnValueProfile GetColumnValueProfile(string name, string column, ExploreLimits limits)
+    {
+        DatasetEntry entry = Resolve(name) ?? throw new QueryException($"Unknown dataset '{name}'.");
+        string folder = Path.Combine(CacheFolder, "column-values");
+        ColumnProfileCache cache = ColumnProfiles.GetOrAdd(folder, path => new ColumnProfileCache(path));
+        return cache.Get(entry.Path, column, limits, () => Backend.ProfileColumn(entry.Path, column, limits));
+    }
     private static DuckDbQueryBackend _backend;
     public static DuckDbQueryBackend Backend => _backend ??= new DuckDbQueryBackend();
     private static readonly SingleFlight<string, ColumnSchema> _schemaFlight = new(StringComparer.Ordinal);
@@ -253,6 +263,25 @@ public static class DatasetManager
         catch (Exception ex)
         {
             return (false, null, ex.Message);
+        }
+    }
+
+    public static (bool Success, List<string> Columns, List<List<string>> Rows, string Error) RandomPreviewDataset(string name, int limit)
+    {
+        DatasetEntry entry = Resolve(name);
+        if (entry is null)
+        {
+            return (false, null, null, $"Unknown dataset '{name}'.");
+        }
+        try
+        {
+            (List<string> columns, List<List<string>> rows) = Backend.GetRandomSampleRows(entry.Path, Math.Clamp(limit, 1, MaxPreviewLimit));
+            (columns, rows) = ColumnSchema.StripCompanions(columns, rows);
+            return (true, columns, rows, null);
+        }
+        catch (Exception ex)
+        {
+            return (false, null, null, ex.Message);
         }
     }
 

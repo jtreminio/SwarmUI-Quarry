@@ -1,4 +1,5 @@
 import { IMAGE_SEARCH_BODY_ID } from "./searchtab";
+import { mountImageSearchFolders } from "./settings";
 import type {
     ImageFieldDto,
     ImageFieldsResponse,
@@ -177,10 +178,12 @@ const skeletonHtml = (): string =>
             <div class="imagesearch-title-row">
                 <span class="imagesearch-title">Search your image history</span>
                 <span class="imagesearch-scan-controls">
+                    <button type="button" class="basic-button" id="imagesearch-folders-toggle" aria-expanded="false" aria-controls="imagesearch-folders-settings" hidden>Search folders</button>
                     <button type="button" class="basic-button" id="imagesearch-rescan">Rescan history</button>
                     <button type="button" class="basic-button" id="imagesearch-cancel-scan" style="display:none">Cancel</button>
                 </span>
             </div>
+            <div id="imagesearch-folders-settings" class="imagesearch-folders-settings" hidden></div>
             <div class="imagesearch-progress quarry-dl-progress" id="imagesearch-progress" style="display:none">
                 <div class="quarry-dl-bar" id="imagesearch-progress-bar"></div>
             </div>
@@ -744,6 +747,13 @@ const wireEvents = (): void => {
     el("imagesearch-loadmore-btn")?.addEventListener("click", loadMore);
     el("imagesearch-rescan")?.addEventListener("click", startRescan);
     el("imagesearch-cancel-scan")?.addEventListener("click", cancelRescan);
+    el("imagesearch-folders-toggle")?.addEventListener("click", () => {
+        const panel = el("imagesearch-folders-settings");
+        const button = el("imagesearch-folders-toggle");
+        if (!panel || !button) return;
+        panel.hidden = !panel.hidden;
+        button.setAttribute("aria-expanded", String(!panel.hidden));
+    });
     el("imagesearch-sort")?.addEventListener("change", runSearch);
 
     el("imagesearch-filters")?.addEventListener("change", (event) => {
@@ -781,6 +791,12 @@ export const initImageSearch = (): void => {
     container.dataset.built = "true";
     container.innerHTML = skeletonHtml();
     wireEvents();
+    const folders = el("imagesearch-folders-settings");
+    if (folders)
+        mountImageSearchFolders(folders, (allowed) => {
+            const button = el("imagesearch-folders-toggle");
+            if (button) button.hidden = !allowed;
+        });
     loadFields(() => {
         ensureOneFilterRow();
         if (available && hasIndex) {

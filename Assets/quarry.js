@@ -583,26 +583,31 @@
     }
     return insertNewTag(value, cursorPos, name);
   };
-  var insertQuarryTag = (name) => {
+  var editPrompt = (compute) => {
     let [promptBox, cursorPos] = uiImprover.getLastSelectedTextbox();
-    if (!promptBox) {
+    if (!promptBox || promptBox.closest(".quarry-explore")) {
       promptBox = getRequiredElementById(
         "alt_prompt_textbox"
       );
       cursorPos = promptBox.value.length;
     }
-    const edit = computePromptEdit(
-      promptBox.value,
-      cursorPos,
-      name,
-      addToExistingTag
-    );
+    const edit = compute(promptBox.value, cursorPos);
     promptBox.value = edit.value;
     promptBox.selectionStart = edit.cursor;
     promptBox.selectionEnd = edit.cursor;
     promptBox.focus();
     triggerChangeFor(promptBox);
     recomputeReferences();
+  };
+  var insertQuarryTag = (name) => {
+    editPrompt(
+      (value, cursor) => computePromptEdit(value, cursor, name, addToExistingTag)
+    );
+  };
+  var insertQuarryQuery = (query) => {
+    editPrompt(
+      (value, cursor) => insertNewTag(value, cursor, query.slice(3, -1))
+    );
   };
 
   // frontend/searchtab.ts
@@ -665,649 +670,6 @@
         }
       });
     }
-  };
-
-  // frontend/search.ts
-  var POLL_MS = 800;
-  var SEARCH_LIMIT = 2e3;
-  var LOAD_MORE_SIZE = 1e3;
-  var operatorsForType = (catalog, type) => catalog[type] ?? [];
-  var opNeedsValue = (op) => op !== "is_true" && op !== "is_false";
-  var buildSearchRequest = (rows) => rows.filter(
-    (row) => row.field && row.op && (!opNeedsValue(row.op) || row.value.trim() !== "")
-  ).map((row) => ({
-    field: row.field,
-    op: row.op,
-    value: opNeedsValue(row.op) ? row.value : ""
-  }));
-  var rowToObject = (columns, row) => {
-    const obj = {};
-    for (let i = 0; i < columns.length; i++) {
-      obj[columns[i]] = row[i] ?? "";
-    }
-    return obj;
-  };
-  var resultsInfoText = (hasIndex2, shown, total2) => {
-    if (!hasIndex2) {
-      return "";
-    }
-    if (total2 === 0) {
-      return "No matching images.";
-    }
-    if (shown < total2) {
-      return `Showing ${shown} of ${total2} matches.`;
-    }
-    return `${total2} match${total2 === 1 ? "" : "es"}.`;
-  };
-  var loadMoreState = (available2, hasIndex2, shown, total2, pageSize, busy) => {
-    const remaining = total2 - shown;
-    if (!available2 || !hasIndex2 || remaining <= 0) {
-      return { visible: false, disabled: true, label: "" };
-    }
-    const next = Math.min(pageSize, remaining);
-    return {
-      visible: true,
-      disabled: busy,
-      label: busy ? "Loading…" : `Load ${next} more (${remaining} remaining)`
-    };
-  };
-  var coreFields = [];
-  var discoveredFields = [];
-  var operatorCatalog = {};
-  var available = true;
-  var hasIndex = false;
-  var total = 0;
-  var scanPollTimer = null;
-  var browser = null;
-  var loadedFiles = [];
-  var loadMoreBusy = false;
-  var searchPending = false;
-  var searchGeneration = 0;
-  var body = () => document.getElementById(IMAGE_SEARCH_BODY_ID);
-  var el = (id) => document.getElementById(id);
-  var request = (url, data, onOk, onErr) => {
-    genericRequest(
-      url,
-      data,
-      onOk,
-      0,
-      onErr ? (e) => onErr(typeof e === "string" ? e : "Request failed.") : null
-    );
-  };
-  var fieldOptionsHtml = () => {
-    const core = coreFields.map(
-      (field) => `<option value="${escapeHtml(field.name)}" data-type="${field.type}">${escapeHtml(field.label)}</option>`
-    ).join("");
-    const discovered = discoveredFields.map(
-      (name) => `<option value="${escapeHtml(name)}" data-type="discovered">${escapeHtml(name)}</option>`
-    ).join("");
-    const discoveredGroup = discovered ? `<optgroup label="Discovered fields">${discovered}</optgroup>` : "";
-    return `<optgroup label="Fields">${core}</optgroup>${discoveredGroup}`;
-  };
-  var opOptionsHtml = (type) => operatorsForType(operatorCatalog, type).map(
-    (op) => `<option value="${escapeHtml(op.value)}">${escapeHtml(op.label)}</option>`
-  ).join("");
-  var filterRowHtml = () => `<div class="imagesearch-filter-row">
-        <select class="imagesearch-field auto-dropdown">${fieldOptionsHtml()}</select>
-        <select class="imagesearch-op auto-dropdown">${opOptionsHtml(firstFieldType())}</select>
-        <input type="text" class="imagesearch-value auto-text" placeholder="value" autocomplete="off">
-        <button type="button" class="basic-button imagesearch-remove" title="Remove this filter">✕</button>
-    </div>`;
-  var firstFieldType = () => coreFields[0]?.type ?? "text";
-  var skeletonHtml = () => `<div class="imagesearch-top">
-        <div class="imagesearch-header">
-            <div class="imagesearch-title-row">
-                <span class="imagesearch-title">Search your image history</span>
-                <span class="imagesearch-scan-controls">
-                    <button type="button" class="basic-button" id="imagesearch-rescan">Rescan history</button>
-                    <button type="button" class="basic-button" id="imagesearch-cancel-scan" style="display:none">Cancel</button>
-                </span>
-            </div>
-            <div class="imagesearch-progress quarry-dl-progress" id="imagesearch-progress" style="display:none">
-                <div class="quarry-dl-bar" id="imagesearch-progress-bar"></div>
-            </div>
-            <div class="imagesearch-status" id="imagesearch-status"></div>
-            <div class="imagesearch-notice" id="imagesearch-notice"></div>
-        </div>
-        <div class="imagesearch-controls" id="imagesearch-controls">
-            <div class="imagesearch-filters" id="imagesearch-filters"></div>
-            <div class="imagesearch-actions">
-                <button type="button" class="basic-button" id="imagesearch-add-filter">+ Add filter</button>
-                <span class="imagesearch-spacer"></span>
-                <label for="imagesearch-sort">Sort:</label>
-                <select id="imagesearch-sort" class="auto-dropdown">
-                    <option value="date-desc">Newest first</option>
-                    <option value="date-asc">Oldest first</option>
-                    <option value="name-asc">Name A–Z</option>
-                    <option value="name-desc">Name Z–A</option>
-                </select>
-                <button type="button" class="basic-button imagesearch-search-button" id="imagesearch-search">Search</button>
-            </div>
-        </div>
-        <div class="imagesearch-results-info" id="imagesearch-results-info"></div>
-    </div>
-    <div class="browser_container imagesearch-results-browser" id="imagesearch-results-browser"></div>
-    <div class="imagesearch-loadmore" id="imagesearch-loadmore" style="display:none">
-        <button type="button" class="basic-button imagesearch-loadmore-button" id="imagesearch-loadmore-btn">Load more</button>
-    </div>`;
-  var readFilters = () => {
-    const rows = [];
-    for (const row of Array.from(
-      document.querySelectorAll(".imagesearch-filter-row")
-    )) {
-      const field = row.querySelector(".imagesearch-field")?.value ?? "";
-      const op = row.querySelector(".imagesearch-op")?.value ?? "";
-      const value = row.querySelector(".imagesearch-value")?.value ?? "";
-      rows.push({ field, op, value });
-    }
-    return rows;
-  };
-  var sortParams = () => {
-    const value = el("imagesearch-sort")?.value ?? "date-desc";
-    const [sortBy, dir] = value.split("-");
-    return { sortBy, sortDescending: dir !== "asc" };
-  };
-  var basename = (path) => {
-    const slash = path.lastIndexOf("/");
-    return slash >= 0 ? path.slice(slash + 1) : path;
-  };
-  var toBrowserFile = (obj) => {
-    const path = obj.path ?? "";
-    return {
-      name: path,
-      data: {
-        src: `${getImageOutPrefix()}/${path}`,
-        fullsrc: path,
-        name: basename(path),
-        metadata: obj.full_metadata ?? ""
-      }
-    };
-  };
-  var listResults = (_folder, _isRefresh, callback, _depth) => {
-    searchGeneration++;
-    searchPending = true;
-    loadMoreBusy = false;
-    if (!available) {
-      loadedFiles = [];
-      searchPending = false;
-      updateResultsUI();
-      callback([], []);
-      return;
-    }
-    const { sortBy, sortDescending } = sortParams();
-    const filters = buildSearchRequest(readFilters());
-    request(
-      "QuarrySearchImageHistory",
-      {
-        filtersJson: JSON.stringify(filters),
-        sortBy,
-        sortDescending,
-        limit: SEARCH_LIMIT,
-        offset: 0
-      },
-      (data) => {
-        searchPending = false;
-        available = data.available ?? true;
-        hasIndex = data.hasIndex ?? false;
-        total = data.total ?? 0;
-        const columns = data.columns ?? [];
-        loadedFiles = (data.rows ?? []).map(
-          (row) => toBrowserFile(rowToObject(columns, row))
-        );
-        updateResultsUI();
-        reflectAvailability();
-        applyWarnings(data.warnings ?? []);
-        callback([], loadedFiles);
-      },
-      (message) => {
-        searchPending = false;
-        setNotice(message, "error");
-        loadedFiles = [];
-        updateResultsUI();
-        callback([], []);
-      }
-    );
-  };
-  var selectResult = (file, div) => {
-    selectOutputInHistory(file, div);
-    const results = el("imagesearch-results-browser");
-    if (!results) {
-      return;
-    }
-    for (const block of Array.from(
-      results.getElementsByClassName("image-block")
-    )) {
-      block.classList.toggle("image-block-current", block === div);
-    }
-  };
-  var ensureBrowser = () => {
-    if (browser) {
-      return;
-    }
-    browser = new GenPageBrowserClass(
-      "imagesearch-results-browser",
-      listResults,
-      "quarryimagesearch",
-      "Thumbnails",
-      describeOutputFile,
-      selectResult
-    );
-    browser.showDepth = false;
-    browser.showUpFolder = false;
-    browser.showFilter = false;
-    browser.allowMultiSelect = true;
-    body()?.addEventListener("scroll", () => {
-      const scroller = body();
-      if (scroller) {
-        browserUtil.makeVisible(scroller);
-      }
-    });
-  };
-  var runSearch = () => {
-    if (!available) {
-      return;
-    }
-    ensureBrowser();
-    browser?.lightRefresh();
-    updateLoadMore();
-  };
-  var appendResults = (newFiles) => {
-    const startId = loadedFiles.length;
-    loadedFiles = loadedFiles.concat(newFiles);
-    if (!browser?.contentDiv || newFiles.length === 0) {
-      return;
-    }
-    browser.lastFiles = loadedFiles;
-    if (browser.lastListCache) {
-      browser.lastListCache.files = loadedFiles;
-    }
-    browser.buildContentList(browser.contentDiv, newFiles, null, startId);
-    if (browser.headerCount) {
-      browser.headerCount.textContent = String(loadedFiles.length);
-    }
-  };
-  var loadMore = () => {
-    if (!available || searchPending || loadMoreBusy || loadedFiles.length >= total || !browser?.contentDiv) {
-      return;
-    }
-    const gen = searchGeneration;
-    loadMoreBusy = true;
-    updateLoadMore();
-    const { sortBy, sortDescending } = sortParams();
-    const filters = buildSearchRequest(readFilters());
-    request(
-      "QuarrySearchImageHistory",
-      {
-        filtersJson: JSON.stringify(filters),
-        sortBy,
-        sortDescending,
-        limit: LOAD_MORE_SIZE,
-        offset: loadedFiles.length
-      },
-      (data) => {
-        if (gen !== searchGeneration) {
-          return;
-        }
-        loadMoreBusy = false;
-        total = data.total ?? total;
-        const columns = data.columns ?? [];
-        appendResults(
-          (data.rows ?? []).map(
-            (row) => toBrowserFile(rowToObject(columns, row))
-          )
-        );
-        updateResultsUI();
-      },
-      (message) => {
-        if (gen !== searchGeneration) {
-          return;
-        }
-        loadMoreBusy = false;
-        setNotice(message || "Could not load more results.", "error");
-        updateLoadMore();
-      }
-    );
-  };
-  var setNotice = (text, type = "info") => {
-    const notice = el("imagesearch-notice");
-    if (notice) {
-      notice.textContent = text;
-      notice.className = text ? `imagesearch-notice imagesearch-notice-${type}` : "imagesearch-notice";
-    }
-  };
-  var applyWarnings = (warnings) => {
-    if (warnings.length) {
-      setNotice(warnings.join(" "), "warning");
-    } else if ((el("imagesearch-notice")?.className ?? "").includes(
-      "imagesearch-notice-warning"
-    )) {
-      setNotice("");
-    }
-  };
-  var updateResultsInfo = () => {
-    const info = el("imagesearch-results-info");
-    if (info) {
-      info.textContent = resultsInfoText(hasIndex, loadedFiles.length, total);
-    }
-  };
-  var updateLoadMore = () => {
-    const wrap = el("imagesearch-loadmore");
-    const button = el("imagesearch-loadmore-btn");
-    if (!wrap || !button) {
-      return;
-    }
-    const state = loadMoreState(
-      available,
-      hasIndex,
-      loadedFiles.length,
-      total,
-      LOAD_MORE_SIZE,
-      loadMoreBusy || searchPending
-    );
-    wrap.style.display = state.visible ? "" : "none";
-    button.disabled = state.disabled;
-    if (state.visible) {
-      button.textContent = state.label;
-    }
-  };
-  var updateResultsUI = () => {
-    updateResultsInfo();
-    updateLoadMore();
-  };
-  var reflectAvailability = () => {
-    const controls = el("imagesearch-controls");
-    const rescan = el("imagesearch-rescan");
-    const results = el("imagesearch-results-browser");
-    const loadmore = el("imagesearch-loadmore");
-    if (!available) {
-      if (controls) {
-        controls.style.display = "none";
-      }
-      if (results) {
-        results.style.display = "none";
-      }
-      if (loadmore) {
-        loadmore.style.display = "none";
-      }
-      if (rescan) {
-        rescan.disabled = true;
-      }
-      setNotice(
-        "Image Search needs Quarry's Lance reader. Open the Quarry tab and install requirements, then come back.",
-        "error"
-      );
-      return;
-    }
-    if (rescan) {
-      rescan.disabled = false;
-    }
-    if (controls) {
-      controls.style.display = "";
-    }
-    if (results) {
-      results.style.display = "";
-    }
-    if (!hasIndex) {
-      setNotice(
-        "Your image history hasn't been indexed yet. Click “Rescan history” to build the search index.",
-        "info"
-      );
-    } else if ((el("imagesearch-notice")?.className ?? "").includes(
-      "imagesearch-notice-info"
-    )) {
-      setNotice("");
-    }
-  };
-  var loadFields = (then) => {
-    request(
-      "QuarryImageHistoryFields",
-      {},
-      (data) => {
-        if (data.success) {
-          coreFields = data.coreFields ?? [];
-          discoveredFields = data.discoveredFields ?? [];
-          operatorCatalog = data.operators ?? {};
-          available = data.available ?? true;
-          hasIndex = data.hasIndex ?? false;
-          refreshFieldDropdowns();
-          reflectAvailability();
-        }
-        then?.();
-      },
-      (message) => {
-        setNotice(message, "error");
-        then?.();
-      }
-    );
-  };
-  var refreshFieldDropdowns = () => {
-    for (const fieldSelect of Array.from(
-      document.querySelectorAll(".imagesearch-field")
-    )) {
-      const previous = fieldSelect.value;
-      fieldSelect.innerHTML = fieldOptionsHtml();
-      if (Array.from(fieldSelect.options).some((o) => o.value === previous)) {
-        fieldSelect.value = previous;
-      }
-    }
-  };
-  var addFilterRow = () => {
-    const container = el("imagesearch-filters");
-    if (!container) {
-      return;
-    }
-    container.insertAdjacentHTML("beforeend", filterRowHtml());
-  };
-  var ensureOneFilterRow = () => {
-    if (!document.querySelector(".imagesearch-filter-row")) {
-      addFilterRow();
-    }
-  };
-  var onFieldChanged = (row) => {
-    const fieldSelect = row.querySelector(".imagesearch-field");
-    const opSelect = row.querySelector(".imagesearch-op");
-    const value = row.querySelector(".imagesearch-value");
-    if (!fieldSelect || !opSelect) {
-      return;
-    }
-    const selected = fieldSelect.options[fieldSelect.selectedIndex];
-    const type = selected?.getAttribute("data-type") ?? "text";
-    opSelect.innerHTML = opOptionsHtml(type);
-    if (value) {
-      value.style.display = opNeedsValue(opSelect.value) ? "" : "none";
-    }
-  };
-  var onOpChanged = (row) => {
-    const opSelect = row.querySelector(".imagesearch-op");
-    const value = row.querySelector(".imagesearch-value");
-    if (opSelect && value) {
-      value.style.display = opNeedsValue(opSelect.value) ? "" : "none";
-    }
-  };
-  var setScanUI = (scanning) => {
-    const rescan = el("imagesearch-rescan");
-    const cancel = el("imagesearch-cancel-scan");
-    const progress = el("imagesearch-progress");
-    if (rescan) {
-      rescan.disabled = scanning;
-    }
-    if (cancel) {
-      cancel.style.display = scanning ? "" : "none";
-    }
-    if (progress) {
-      progress.style.display = scanning ? "" : "none";
-    }
-  };
-  var renderScanStatus = (status) => {
-    const bar = el("imagesearch-progress-bar");
-    const statusEl = el("imagesearch-status");
-    const totalFiles = status.filesTotal ?? 0;
-    const done = status.filesDone ?? 0;
-    const percent = totalFiles > 0 ? Math.min(100, Math.round(done / totalFiles * 100)) : 0;
-    if (bar) {
-      bar.style.width = `${percent}%`;
-    }
-    if (statusEl) {
-      if (status.state === "scanning") {
-        statusEl.textContent = `Scanning… ${done} / ${totalFiles} files (${status.filesIndexed ?? 0} indexed)`;
-      } else if (status.state === "finalizing") {
-        statusEl.textContent = "Writing index…";
-      } else if (status.state === "starting") {
-        statusEl.textContent = "Starting…";
-      } else {
-        statusEl.textContent = "";
-      }
-    }
-  };
-  var stopScanPolling = () => {
-    if (scanPollTimer) {
-      clearTimeout(scanPollTimer);
-      scanPollTimer = null;
-    }
-  };
-  var pollScanOnce = () => {
-    scanPollTimer = null;
-    request(
-      "QuarryImageHistoryStatus",
-      {},
-      (status) => {
-        if (!status.success) {
-          scanPollTimer = setTimeout(pollScanOnce, POLL_MS);
-          return;
-        }
-        renderScanStatus(status);
-        if (status.active) {
-          scanPollTimer = setTimeout(pollScanOnce, POLL_MS);
-          return;
-        }
-        finishScan(status);
-      },
-      () => {
-        scanPollTimer = setTimeout(pollScanOnce, POLL_MS);
-      }
-    );
-  };
-  var finishScan = (status) => {
-    stopScanPolling();
-    setScanUI(false);
-    available = status.available ?? available;
-    hasIndex = status.hasIndex ?? hasIndex;
-    const statusEl = el("imagesearch-status");
-    if (status.state === "error") {
-      setNotice(
-        `Scan failed: ${status.scanError ?? "unknown error"}`,
-        "error"
-      );
-    } else if (status.state === "cancelled") {
-      if (statusEl) {
-        statusEl.textContent = "Scan cancelled.";
-      }
-    } else if (status.state === "done") {
-      if (statusEl) {
-        statusEl.textContent = `Done — indexed ${status.filesIndexed ?? 0}, pruned ${status.filesPruned ?? 0}.`;
-      }
-      loadFields(() => runSearch());
-    }
-  };
-  var startRescan = () => {
-    setScanUI(true);
-    setNotice("");
-    const statusEl = el("imagesearch-status");
-    if (statusEl) {
-      statusEl.textContent = "Starting…";
-    }
-    request(
-      "QuarryRescanImageHistory",
-      {},
-      () => {
-        if (!scanPollTimer) {
-          pollScanOnce();
-        }
-      },
-      (message) => {
-        setScanUI(false);
-        setNotice(message || "Could not start the scan.", "error");
-      }
-    );
-  };
-  var cancelRescan = () => {
-    request(
-      "QuarryCancelImageHistoryScan",
-      {},
-      () => {
-      },
-      () => {
-      }
-    );
-  };
-  var resumeScanIfActive = () => {
-    request(
-      "QuarryImageHistoryStatus",
-      {},
-      (status) => {
-        if (status.success && status.active) {
-          setScanUI(true);
-          renderScanStatus(status);
-          if (!scanPollTimer) {
-            pollScanOnce();
-          }
-        }
-      },
-      () => {
-      }
-    );
-  };
-  var wireEvents = () => {
-    if (!body()) {
-      return;
-    }
-    el("imagesearch-add-filter")?.addEventListener("click", addFilterRow);
-    el("imagesearch-search")?.addEventListener("click", runSearch);
-    el("imagesearch-loadmore-btn")?.addEventListener("click", loadMore);
-    el("imagesearch-rescan")?.addEventListener("click", startRescan);
-    el("imagesearch-cancel-scan")?.addEventListener("click", cancelRescan);
-    el("imagesearch-sort")?.addEventListener("change", runSearch);
-    el("imagesearch-filters")?.addEventListener("change", (event) => {
-      const target = event.target;
-      const row = target?.closest(".imagesearch-filter-row");
-      if (!row) {
-        return;
-      }
-      if (target?.classList.contains("imagesearch-field")) {
-        onFieldChanged(row);
-      } else if (target?.classList.contains("imagesearch-op")) {
-        onOpChanged(row);
-      }
-    });
-    el("imagesearch-filters")?.addEventListener("click", (event) => {
-      const target = event.target;
-      if (target?.closest(".imagesearch-remove")) {
-        target.closest(".imagesearch-filter-row")?.remove();
-        ensureOneFilterRow();
-      }
-    });
-    el("imagesearch-filters")?.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") {
-        event.preventDefault();
-        runSearch();
-      }
-    });
-  };
-  var initImageSearch = () => {
-    const container = body();
-    if (!container || container.dataset.built === "true") {
-      return;
-    }
-    container.dataset.built = "true";
-    container.innerHTML = skeletonHtml();
-    wireEvents();
-    loadFields(() => {
-      ensureOneFilterRow();
-      if (available && hasIndex) {
-        runSearch();
-      }
-      resumeScanIfActive();
-    });
   };
 
   // dataset-sources.json
@@ -2036,7 +1398,7 @@
   var REFRESH_ID = "quarry-download-refresh";
   var REPAIR_ID = "quarry-repair-datasets";
   var repairing = false;
-  var POLL_MS2 = 800;
+  var POLL_MS = 800;
   var hasUpdate = (dataset) => dataset.installed && dataset.updateAvailable === true;
   var folderUpdateCount = (node) => node.items.filter(hasUpdate).length + node.folders.reduce((count, child) => count + folderUpdateCount(child), 0);
   var sourceOverrides = /* @__PURE__ */ new Map();
@@ -2091,14 +1453,15 @@
     const rowClass = installed ? "quarry-remote-row quarry-remote-installed" : "quarry-remote-row";
     const hiddenClass = hidden ? " quarry-row-hidden" : "";
     const parentAttr = container ? ` data-parent="${escapeHtml(container)}"` : "";
-    const check = installed ? `<span class="quarry-remote-check" title="Installed">✓</span> ` : "";
+    const check = installed ? `<span class="quarry-remote-check" title="Installed">✓ Installed</span>` : '<span class="quarry-remote-available">Not installed</span>';
     const update = updateAvailable ? ' <span class="quarry-remote-update">Update available!</span>' : "";
     const title = updateAvailable ? "Update available! Select to update" : installed ? "Already installed — select to redownload" : "Select to download";
     return `<tr class="${rowClass}${hiddenClass}" data-dataset="${name}"${parentAttr} style="--quarry-depth: ${depth}">
         <td class="quarry-remote-selcell">
-            <input type="checkbox" class="quarry-remote-select" data-dataset="${name}" data-installed="${installed}" data-update="${updateAvailable}" title="${title}" />
+            <input type="checkbox" class="quarry-remote-select" data-dataset="${name}" data-installed="${installed}" data-update="${updateAvailable}" title="${title}" aria-label="Select ${name}" />
         </td>
-        <td class="quarry-remote-name">${check}${renderRemoteDatasetName(dataset.name, displayName)}${update}</td>
+        <td class="quarry-remote-name">${renderRemoteDatasetName(dataset.name, displayName)}</td>
+        <td class="quarry-remote-status">${check}${update}</td>
         <td class="quarry-remote-size">${formatBytes(dataset.sizeBytes)}</td>
     </tr>`;
   };
@@ -2112,7 +1475,7 @@
     const collapsedClass = collapsed ? " quarry-collapsed" : "";
     const parentAttr = container ? ` data-parent="${escapeHtml(container)}"` : "";
     return `<tr class="quarry-folder-row${collapsedClass}${hiddenClass}" data-folder="${path}"${parentAttr} style="--quarry-depth: ${depth}">
-        <td colspan="3">
+        <td colspan="4">
             <button type="button" class="quarry-folder-toggle" data-folder="${path}" aria-expanded="${!collapsed}" title="Show or hide the datasets in this folder">
                 <span class="quarry-folder-caret" aria-hidden="true"></span>
                 <span class="quarry-folder-name">${escapeHtml(node.name)}</span>
@@ -2144,9 +1507,11 @@
     const folderRows = folders.map((folder) => renderRemoteFolderNode(folder, 0, expandedFolders3)).join("");
     const looseRows = loose.map((dataset) => renderRemoteDatasetRow(dataset)).join("");
     return `<table class="quarry-remote-table">
+        <colgroup><col class="quarry-remote-col-select"><col><col class="quarry-remote-col-status"><col class="quarry-remote-col-size"></colgroup>
         <thead><tr>
-            <th class="quarry-remote-selcell"><input type="checkbox" class="quarry-remote-selectall" title="Select all" /></th>
+            <th class="quarry-remote-selcell"><input type="checkbox" class="quarry-remote-selectall" title="Select all" aria-label="Select all datasets" /></th>
             <th>Dataset</th>
+            <th>Status</th>
             <th>Size</th>
         </tr></thead>
         <tbody>${folderRows}${looseRows}</tbody>
@@ -2203,7 +1568,7 @@
   var renderList = () => {
     const body2 = document.getElementById(BODY_ID);
     if (body2) {
-      body2.innerHTML = renderNote() + renderRemoteDatasets(currentList, expandedFolders);
+      body2.innerHTML = `<div class="quarry-download-summary">${renderNote()}</div><div class="quarry-download-list" tabindex="0" role="region" aria-label="Available datasets">${renderRemoteDatasets(currentList, expandedFolders)}</div>`;
     }
     updateSelectAllState();
     updateStartButtonState();
@@ -2346,7 +1711,7 @@
     }
   };
   var scheduleNextPoll = () => {
-    pollTimer = setTimeout(pollOnce, POLL_MS2);
+    pollTimer = setTimeout(pollOnce, POLL_MS);
   };
   var pollOnce = () => {
     pollTimer = null;
@@ -2591,25 +1956,26 @@
     modal.id = MODAL_ID;
     modal.tabIndex = -1;
     modal.setAttribute("role", "dialog");
+    modal.setAttribute("aria-labelledby", "quarry-download-title");
     modal.innerHTML = `
         <div class="modal-dialog modal-lg quarry-download-dialog" role="document">
             <div class="modal-content">
                 <div class="modal-header">
-                    <h5 class="modal-title">Download Datasets</h5>
+                    <h5 class="modal-title" id="quarry-download-title">Download datasets</h5>
                 </div>
                 <div class="modal-body">
                     <div id="${BODY_ID}" class="quarry-download-body"></div>
                     <div id="${PROGRESS_ID}" class="quarry-download-progress" style="display: none;"></div>
-                    <div id="${MESSAGE_ID}" class="quarry-download-message"></div>
+                    <div id="${MESSAGE_ID}" class="quarry-download-message" role="status"></div>
                     <div id="quarry-repair-status" class="quarry-repair-status" role="status" aria-live="polite"></div>
                 </div>
                 <div class="modal-footer quarry-download-footer">
                     <div class="quarry-download-footer-actions">
-                        <button type="button" id="${START_ID}" class="btn btn-primary basic-button" disabled>Download</button>
-                        <button type="button" id="${REFRESH_ID}" class="btn btn-secondary basic-button">Refresh</button>
-                        <button type="button" id="${REPAIR_ID}" class="btn btn-secondary basic-button" title="Fix casing errors caused by stale downloaded versions using existing local files. No dataset download is needed; previous metadata is backed up.">Repair datasets</button>
+                        <button type="button" id="${START_ID}" class="basic-button quarry-download-primary" disabled>Download selected</button>
+                        <button type="button" id="${REFRESH_ID}" class="basic-button">Refresh</button>
+                        <button type="button" id="${REPAIR_ID}" class="basic-button" title="Fix casing errors caused by stale downloaded versions using existing local files. No dataset download is needed; previous metadata is backed up.">Repair datasets</button>
                     </div>
-                    <button type="button" class="btn btn-secondary basic-button" data-bs-dismiss="modal">Close</button>
+                    <button type="button" class="basic-button" data-bs-dismiss="modal">Close</button>
                 </div>
             </div>
         </div>`;
@@ -2643,6 +2009,1349 @@
     ensureDownloadModal();
     showDownloadModal();
     loadAvailable();
+  };
+
+  // frontend/exploreDatasets.ts
+  var exploreColumns = (dataset) => dataset.columns.flatMap((column) => [
+    column,
+    ...(column.fields ?? []).map((field) => ({
+      name: `${column.name}.${field.name}`,
+      kind: "scalar",
+      numeric: field.numeric
+    }))
+  ]);
+  var sameType = (left, right) => left.kind === right.kind && !!left.numeric === !!right.numeric;
+  var sharedExploreColumns = (datasets2) => datasets2.length ? exploreColumns(datasets2[0]).filter(
+    (column) => datasets2.every(
+      (dataset) => exploreColumns(dataset).some(
+        (candidate) => candidate.name.toLowerCase() === column.name.toLowerCase() && sameType(column, candidate)
+      )
+    )
+  ) : [];
+  var datasetCompatibility = (dataset, current, used) => {
+    if (dataset.error || !dataset.columns.length)
+      return dataset.error || "Dataset has no available fields.";
+    const columns = exploreColumns(dataset);
+    for (const name of used) {
+      const candidate = columns.find(
+        (column) => column.name.toLowerCase() === name.toLowerCase()
+      );
+      if (!candidate) return `Missing field: ${name}`;
+      const existing = current.find(
+        (column) => column.name.toLowerCase() === name.toLowerCase()
+      );
+      if (existing && !sameType(existing, candidate))
+        return `Different field type: ${name}`;
+    }
+    return "";
+  };
+
+  // frontend/runquery.ts
+  var RUNQUERY_DEFAULT_MAX = 25;
+  var RUNQUERY_MIN_MAX = 1;
+  var MODAL_ID2 = "quarry-runquery-modal";
+  var QUERY_ID = "quarry-runquery-query";
+  var MAX_ID = "quarry-runquery-max";
+  var RUN_ID = "quarry-runquery-run";
+  var SUMMARY_ID = "quarry-runquery-summary";
+  var RESULTS_ID = "quarry-runquery-results";
+  var EXAMPLE_QUERY = "<q:tags/**[tags=girl; tags!=anthro]>";
+  var clampMaxResults = (value) => {
+    const num = typeof value === "number" ? value : Number.parseInt(String(value ?? ""), 10);
+    if (!Number.isFinite(num) || num <= 0) {
+      return RUNQUERY_DEFAULT_MAX;
+    }
+    return Math.max(Math.trunc(num), RUNQUERY_MIN_MAX);
+  };
+  var commonDatasetPrefix = (names) => {
+    if (names.length < 2) {
+      return "";
+    }
+    let prefix = names[0];
+    for (const name of names.slice(1)) {
+      let at = 0;
+      while (at < prefix.length && at < name.length && prefix[at] === name[at]) {
+        at++;
+      }
+      prefix = prefix.slice(0, at);
+      if (prefix.length === 0) {
+        return "";
+      }
+    }
+    const slash = prefix.lastIndexOf("/");
+    if (slash < 0) {
+      return "";
+    }
+    const folder = prefix.slice(0, slash + 1);
+    return names.every((name) => name.length > folder.length) ? folder : "";
+  };
+  var runQueryPoolText = (total2, datasetCount, prefix = "") => {
+    const prompts = `${total2.toLocaleString()} prompt${total2 === 1 ? "" : "s"}`;
+    const datasets2 = `${datasetCount.toLocaleString()} dataset${datasetCount === 1 ? "" : "s"}`;
+    const scope = prefix ? ` under ${prefix}` : "";
+    return `${prompts} · ${datasets2}${scope}`;
+  };
+  var runQueryPreviewText = (shown, truncated) => {
+    if (shown <= 0) {
+      return "";
+    }
+    return truncated ? `${shown.toLocaleString()} sampled below` : `all ${shown.toLocaleString()} shown below`;
+  };
+  var summaryRow = (label, value) => `<div class="quarry-runquery-summary-row"><span class="quarry-runquery-summary-label">${label}</span><span class="quarry-runquery-summary-value">${escapeHtml(value)}</span></div>`;
+  var renderRunQuerySummary = (total2, datasetCount, shown, truncated, prefix = "") => {
+    const preview = runQueryPreviewText(shown, truncated);
+    return `<div class="quarry-runquery-summary">${summaryRow(
+      "Pool",
+      runQueryPoolText(total2, datasetCount, prefix)
+    )}${preview ? summaryRow("Preview", preview) : ""}</div>`;
+  };
+  var formatShare = (matches, total2) => {
+    if (total2 <= 0 || matches <= 0) {
+      return "";
+    }
+    const pct = matches / total2 * 100;
+    return pct < 1 ? "<1%" : `${Math.round(pct)}%`;
+  };
+  var datasetRow = (dataset, prefix, total2, max) => {
+    const shown = prefix ? dataset.name.slice(prefix.length) : dataset.name;
+    const raw = max > 0 ? dataset.matches / max * 100 : 0;
+    const width = raw > 0 ? Math.max(raw, 2) : 0;
+    return `<div class="quarry-runquery-dataset-row"><span class="quarry-runquery-dataset-name" title="${escapeHtml(dataset.name)}">${escapeHtml(shown)}</span><span class="quarry-runquery-dataset-count">${dataset.matches.toLocaleString()}</span><span class="quarry-runquery-dataset-share">${escapeHtml(formatShare(dataset.matches, total2))}</span><span class="quarry-runquery-dataset-bar"><span style="width: ${width.toFixed(1)}%"></span></span></div>`;
+  };
+  var renderRunQueryDatasetCounts = (datasets2) => {
+    if (!datasets2 || datasets2.length === 0) {
+      return "";
+    }
+    const total2 = datasets2.reduce((sum, dataset) => sum + dataset.matches, 0);
+    const max = datasets2.reduce(
+      (best, dataset) => Math.max(best, dataset.matches),
+      0
+    );
+    const prefix = commonDatasetPrefix(datasets2.map((dataset) => dataset.name));
+    const rows = datasets2.map((dataset) => datasetRow(dataset, prefix, total2, max)).join("");
+    return `<div class="quarry-runquery-datasets">${rows}</div>`;
+  };
+  var COPY_GLYPH = "&#x29C9;";
+  var highlightPrompt = (prompt, highlights) => {
+    const needles = (highlights ?? []).filter((term) => term.length > 0);
+    if (needles.length === 0) {
+      return escapeHtml(prompt);
+    }
+    const pattern = needles.slice().sort((a, b) => b.length - a.length).map(escapeRegExp).join("|");
+    const regex = new RegExp(pattern, "gi");
+    let out = "";
+    let last = 0;
+    for (const match of prompt.matchAll(regex)) {
+      const start = match.index ?? 0;
+      out += escapeHtml(prompt.slice(last, start));
+      out += `<mark class="quarry-runquery-hl">${escapeHtml(match[0])}</mark>`;
+      last = start + match[0].length;
+    }
+    out += escapeHtml(prompt.slice(last));
+    return out;
+  };
+  var groupResultsByDataset = (results) => {
+    const groups = [];
+    const indexOf = /* @__PURE__ */ new Map();
+    for (const row of results) {
+      let at = indexOf.get(row.dataset);
+      if (at === void 0) {
+        at = groups.length;
+        indexOf.set(row.dataset, at);
+        groups.push({ dataset: row.dataset, prompts: [] });
+      }
+      groups[at].prompts.push(row.prompt);
+    }
+    return groups;
+  };
+  var renderResultRow = (prompt, highlights, headingHtml = "") => `<tr><td class="quarry-runquery-result-prompt">${headingHtml}<div class="quarry-runquery-prompt-text">${highlightPrompt(prompt, highlights)}</div></td><td class="quarry-runquery-result-copy"><button type="button" class="basic-button quarry-runquery-copy" title="Copy prompt" aria-label="Copy prompt">${COPY_GLYPH}</button></td></tr>`;
+  var renderResultTable = (rowsHtml) => `<table class="quarry-preview-table simple-table quarry-runquery-table"><colgroup><col class="quarry-runquery-col-prompt"><col class="quarry-runquery-col-copy"></colgroup><tbody>${rowsHtml}</tbody></table>`;
+  var renderDatasetGroup = (dataset, prompts, highlights) => {
+    const rows = prompts.map((prompt) => renderResultRow(prompt, highlights)).join("");
+    return `<div class="quarry-runquery-dataset-group">
+        <div class="quarry-runquery-dataset-heading">${escapeHtml(dataset)}</div>
+        ${renderResultTable(rows)}
+    </div>`;
+  };
+  var renderRunQueryResults = (results, highlights = []) => {
+    if (!results || results.length === 0) {
+      return `<div class="quarry-preview-empty">No matching rows.</div>`;
+    }
+    return groupResultsByDataset(results).map(
+      (group) => renderDatasetGroup(group.dataset, group.prompts, highlights)
+    ).join("");
+  };
+  var renderRunQueryResponse = (data) => {
+    if (data.invalid) {
+      return {
+        summary: "",
+        body: `<div class="quarry-runquery-invalid">${escapeHtml(data.invalid)}</div>`
+      };
+    }
+    if (data.error) {
+      return {
+        summary: "",
+        body: `<div class="quarry-preview-error">${escapeHtml(data.error)}</div>`
+      };
+    }
+    const datasets2 = data.datasets ?? [];
+    const results = data.results ?? [];
+    return {
+      summary: renderRunQuerySummary(
+        data.total ?? 0,
+        datasets2.length,
+        results.length,
+        data.truncated ?? false,
+        commonDatasetPrefix(datasets2.map((dataset) => dataset.name))
+      ),
+      body: renderRunQueryDatasetCounts(datasets2) + (results.length === 0 && (data.total ?? 0) > 0 ? '<div class="quarry-preview-empty">Matching rows were counted, but no sample output was returned.</div>' : renderRunQueryResults(results, data.highlights ?? []))
+    };
+  };
+  var runBusy = false;
+  var updateRunControls = () => {
+    const run = document.getElementById(RUN_ID);
+    if (run) {
+      run.disabled = runBusy;
+    }
+  };
+  var showView = (view) => {
+    const summaryEl = document.getElementById(SUMMARY_ID);
+    if (summaryEl) {
+      summaryEl.innerHTML = view.summary;
+    }
+    const bodyEl = document.getElementById(RESULTS_ID);
+    if (bodyEl) {
+      bodyEl.innerHTML = view.body;
+    }
+  };
+  var runQuery = () => {
+    if (runBusy) {
+      return;
+    }
+    const queryEl = document.getElementById(
+      QUERY_ID
+    );
+    const maxEl = document.getElementById(MAX_ID);
+    if (!queryEl || !document.getElementById(RESULTS_ID)) {
+      return;
+    }
+    const query = queryEl.value.trim();
+    if (!query) {
+      showView({
+        summary: "",
+        body: `<div class="quarry-runquery-invalid">Enter a &lt;q:&gt; query to run.</div>`
+      });
+      return;
+    }
+    const maxResults = clampMaxResults(maxEl?.value);
+    if (maxEl) {
+      maxEl.value = String(maxResults);
+    }
+    runBusy = true;
+    updateRunControls();
+    showView({
+      summary: "",
+      body: `<div class="quarry-preview-loading">Running…</div>`
+    });
+    genericRequest(
+      "QuarryRunQuery",
+      { query, maxResults },
+      (data) => {
+        runBusy = false;
+        updateRunControls();
+        showView(renderRunQueryResponse(data));
+      }
+    );
+  };
+  var handleResultsClick = (event) => {
+    const button = event.target?.closest(
+      ".quarry-runquery-copy"
+    );
+    if (!button) {
+      return;
+    }
+    const promptEl = button.closest("tr")?.querySelector(".quarry-runquery-prompt-text");
+    const prompt = promptEl?.textContent ?? "";
+    if (typeof copyText === "function") {
+      copyText(prompt);
+    }
+    if (typeof doNoticePopover === "function") {
+      doNoticePopover("Copied!", "notice-pop-green");
+    }
+  };
+  var ensureRunQueryModal = () => {
+    if (document.getElementById(MODAL_ID2)) {
+      return;
+    }
+    const modal = document.createElement("div");
+    modal.className = "modal";
+    modal.id = MODAL_ID2;
+    modal.tabIndex = -1;
+    modal.setAttribute("role", "dialog");
+    modal.innerHTML = `
+        <div class="modal-dialog modal-lg quarry-runquery-dialog" role="document">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Run Query</h5>
+                </div>
+                <div class="modal-body">
+                    <div class="quarry-runquery-controls">
+                        <label for="${QUERY_ID}" class="quarry-runquery-label">Query — paste a <code>&lt;q:&gt;</code> prompt tag (or just its inner part)</label>
+                        <textarea id="${QUERY_ID}" class="auto-text quarry-runquery-input" rows="3" placeholder="${escapeHtml(EXAMPLE_QUERY)}" spellcheck="false"></textarea>
+                        <div class="quarry-runquery-options">
+                            <div id="${SUMMARY_ID}" class="quarry-runquery-summary-slot"></div>
+                            <label for="${MAX_ID}" class="quarry-runquery-max-label">Max results</label>
+                            <input type="number" id="${MAX_ID}" class="auto-text quarry-runquery-max" value="${RUNQUERY_DEFAULT_MAX}" min="${RUNQUERY_MIN_MAX}">
+                            <button type="button" id="${RUN_ID}" class="basic-button quarry-runquery-run" title="Run the query and show the matching rows (Ctrl+Enter in the query box also runs)">Run</button>
+                        </div>
+                    </div>
+                    <div id="${RESULTS_ID}" class="quarry-runquery-results"></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary basic-button" data-bs-dismiss="modal">Close</button>
+                </div>
+            </div>
+        </div>`;
+    document.body.appendChild(modal);
+    modal.querySelector('[data-bs-dismiss="modal"]')?.addEventListener("click", hideRunQueryModal);
+    document.getElementById(RESULTS_ID)?.addEventListener("click", handleResultsClick);
+    document.getElementById(RUN_ID)?.addEventListener("click", runQuery);
+    document.getElementById(QUERY_ID)?.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+        event.preventDefault();
+        runQuery();
+      }
+    });
+    document.getElementById(MAX_ID)?.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        runQuery();
+      }
+    });
+  };
+  var showRunQueryModal = () => {
+    if (typeof $ === "function") {
+      $(`#${MODAL_ID2}`).modal("show");
+    }
+  };
+  var hideRunQueryModal = () => {
+    if (typeof $ === "function") {
+      $(`#${MODAL_ID2}`).modal("hide");
+    }
+  };
+  var openRunQueryModal = () => {
+    ensureRunQueryModal();
+    showRunQueryModal();
+    document.getElementById(QUERY_ID)?.focus();
+  };
+
+  // frontend/explore.ts
+  var textOperators = [
+    ["=", "Contains any"],
+    ["==", "Contains all"],
+    ["!=", "Contains none"]
+  ];
+  var lengthOperators = [
+    ["+=", "Length at least"],
+    ["-=", "Length at most"]
+  ];
+  var isComparison = (operator) => operator === "+=" || operator === "-=";
+  var numberOperators = [
+    ["+=", "At least"],
+    ["-=", "At most"]
+  ];
+  var isNumber = (column) => column?.kind === "scalar" && column.numeric === true;
+  var canSuggestValue = (value) => value.trim().length > 0 && !/[,;[\]<>|]/.test(value);
+  var quoteSeparator = (value) => JSON.stringify(value).replace(/</g, "\\u003c").replace(/>/g, "\\u003e");
+  var buildExploreQuery = (dataset, filters, outputs = [], format = {}) => {
+    const flags = [
+      format.keys ? "keys" : "",
+      format.recordSeparator !== void 0 && format.recordSeparator !== ", " ? `rs=${quoteSeparator(format.recordSeparator)}` : "",
+      format.fieldSeparator !== void 0 && format.fieldSeparator !== ", " ? `fs=${quoteSeparator(format.fieldSeparator)}` : ""
+    ].filter(Boolean);
+    return `<q:${dataset}${filters.length ? `[${filters.map((filter) => `${filter.column}${filter.operator}${filter.values.join(",")}`).join(";")}]` : ""}${outputs.length ? `:${outputs.join(",")}` : ""}${flags.length ? `|${flags.join(";")}` : ""}>`;
+  };
+  var DatasetExplorer = class {
+    constructor(host, dataset, renderRows, close, newSample = () => {
+    }, onViewChange = () => {
+    }, availableDatasets = [dataset], onSourceChange = () => {
+    }, mountDatasetSettings2) {
+      this.host = host;
+      this.dataset = dataset;
+      this.renderRows = renderRows;
+      this.close = close;
+      this.newSample = newSample;
+      this.onViewChange = onViewChange;
+      this.availableDatasets = availableDatasets;
+      this.onSourceChange = onSourceChange;
+      this.mountDatasetSettings = mountDatasetSettings2;
+      this.datasets = [dataset];
+      this.fields = sharedExploreColumns(this.datasets);
+      this.filters = [this.blankFilter()];
+      host.innerHTML = `<div class="quarry-explore">
+            <div class="quarry-explore-top"><button type="button" class="basic-button quarry-explore-manage" data-action="choose-datasets" aria-expanded="false">Choose datasets</button><div class="quarry-explore-scope"></div>
+            <div class="quarry-explore-dataset-picker" hidden>
+                <label>Find a dataset<input type="search" class="quarry-explore-dataset-search auto-text" placeholder="Search datasets"></label>
+                <p class="quarry-explore-note">Use only starts a new query. Add keeps your filters and output choices. Selected datasets are highlighted.</p>
+                <div class="quarry-explore-dataset-options"></div>
+                <div class="quarry-explore-picker-footer"><button type="button" class="basic-button quarry-explore-primary" data-action="close-datasets">Back to query</button></div>
+            </div>
+            <div class="quarry-explore-tabs" role="tablist" aria-label="Explore views">
+                <button type="button" role="tab" class="quarry-explore-tab" data-view="fields" aria-pressed="true" aria-selected="true">Query</button>
+                <button type="button" role="tab" class="quarry-explore-tab" data-view="rows" aria-pressed="false" aria-selected="false">Full records</button>
+                <button type="button" role="tab" class="quarry-explore-tab" data-view="settings" aria-pressed="false" aria-selected="false">Dataset settings</button>
+            </div>
+            </div>
+            <div class="quarry-explore-fields-view">
+                <div class="quarry-explore-editor" role="region" aria-label="Query controls" tabindex="0">
+                <section aria-label="Filters">
+                    <h6 class="quarry-explore-section-label">Filters</h6>
+                    <div class="quarry-explore-filters"></div>
+                    <div class="quarry-explore-filter-actions"><button type="button" class="basic-button" data-action="add">+ Add filter</button><button type="button" class="basic-button" data-action="clear-filters">Clear filters</button></div>
+                    <p class="quarry-explore-note">Text matching ignores case. Commas separate terms. All filter rows must match.</p>
+                </section>
+                <section class="quarry-explore-output" aria-label="Columns to print">
+                    <label>Columns to print<select class="quarry-explore-output-add auto-dropdown" aria-label="Add column to print"><option value="">Add column…</option>${this.fields.map((column) => `<option value="${escapeHtml(column.name)}">${escapeHtml(column.name)}</option>`).join("")}</select></label>
+                    <div class="quarry-explore-output-selected"></div>
+                    <button type="button" class="basic-button quarry-explore-format-toggle" data-action="format" aria-expanded="false">Formatting options</button>
+                </section>
+                </div>
+            <div class="quarry-explore-draft">
+                <div class="quarry-explore-error" role="status"></div>
+                <code class="quarry-explore-query"></code>
+                <div class="quarry-actions">
+                    <button type="button" class="basic-button quarry-explore-primary" data-action="test">Test query</button>
+                    <button type="button" class="basic-button" data-action="use">Use in prompt</button>
+                    <button type="button" class="basic-button" data-action="copy">Copy tag</button>
+                    <span class="quarry-explore-result-status quarry-explore-note" role="status"></span>
+                </div>
+                <div class="quarry-explore-results" aria-live="polite"></div>
+            </div>
+            </div>
+            <div class="quarry-explore-rows-view" hidden><div class="quarry-explore-source"></div><p class="quarry-explore-rows-caption">100 random records with every column. Query filters do not apply.</p><div class="quarry-explore-rows" hidden></div></div>
+            <div class="quarry-explore-settings-view" hidden><div class="quarry-explore-settings-source"></div><div class="quarry-explore-settings-content"></div></div>
+            <div class="quarry-explore-field quarry-explore-popover" role="dialog" aria-label="Filter values" hidden></div>
+            <section class="quarry-explore-format-panel" aria-label="Formatting options" hidden>
+                <div class="quarry-explore-popover-content">
+                    <label class="quarry-explore-keys-label"><input class="quarry-explore-keys" type="checkbox"> Include field names</label>
+                    <div class="quarry-format-setting"><label>Join selected columns with<textarea class="quarry-explore-record-separator auto-text" rows="1" aria-label="Record separator">, </textarea></label>
+                    <p class="quarry-explore-note">Two columns: <code>prompt = portrait</code> and <code>style = watercolor</code>.<br>Printed text: <code class="quarry-explore-record-example"></code></p></div>
+                    <div class="quarry-format-setting"><label>Separate nested JSON fields with<textarea class="quarry-explore-field-separator auto-text" rows="1" aria-label="Field separator">, </textarea></label>
+                    <p class="quarry-explore-note">For a JSON column such as <code>prompt</code>: <code>{"hair":"blonde","expression":"smiling"}</code>.<br>Printing the whole column gives: <code class="quarry-explore-field-example"></code><br>Also separates values in a simple list.</p></div>
+                </div>
+            </section>
+        </div>`;
+      this.element(".quarry-explore").append(
+        this.element(".quarry-explore-dataset-picker")
+      );
+      this.element(".quarry-explore-editor").append(
+        this.element(".quarry-explore-format-panel")
+      );
+      host.addEventListener("click", this.click);
+      host.addEventListener("input", this.edit, true);
+      host.addEventListener("change", this.edit, true);
+      host.addEventListener("focusin", this.focus);
+      host.addEventListener("keydown", this.keydown);
+      host.addEventListener("dragstart", this.dragstart);
+      host.addEventListener("dragover", this.dragover);
+      host.addEventListener("drop", this.drop);
+      host.addEventListener("dragend", this.clearDropMarker);
+      host.addEventListener("dragleave", this.dragleave);
+      this.renderScope();
+      this.renderFilters();
+      this.renderOutput();
+      this.renderFormatExamples();
+      this.selectRow(0);
+      this.renderDraft();
+      this.setView("fields");
+    }
+    host;
+    dataset;
+    renderRows;
+    close;
+    newSample;
+    onViewChange;
+    availableDatasets;
+    onSourceChange;
+    mountDatasetSettings;
+    selected = 0;
+    filters = [];
+    outputs = [];
+    format = {};
+    fields;
+    datasets;
+    datasetSearch = "";
+    request = 0;
+    draftQuery = "";
+    resultsQuery = "";
+    pendingQuery = null;
+    openValueRow = null;
+    disposed = false;
+    valueRequest = 0;
+    valueBusy = false;
+    valueSearch = "";
+    valueResponse = null;
+    recurringFields = /* @__PURE__ */ new Map();
+    valueItems = [];
+    searchTimer = null;
+    settingsCleanup = null;
+    dispose() {
+      this.disposed = true;
+      this.settingsCleanup?.();
+      if (this.searchTimer) clearTimeout(this.searchTimer);
+      this.host.removeEventListener("click", this.click);
+      this.host.removeEventListener("input", this.edit, true);
+      this.host.removeEventListener("change", this.edit, true);
+      this.host.removeEventListener("focusin", this.focus);
+      this.host.removeEventListener("keydown", this.keydown);
+      this.host.removeEventListener("dragstart", this.dragstart);
+      this.host.removeEventListener("dragover", this.dragover);
+      this.host.removeEventListener("drop", this.drop);
+      this.host.removeEventListener("dragend", this.clearDropMarker);
+      this.host.removeEventListener("dragleave", this.dragleave);
+    }
+    setView(view) {
+      this.element(".quarry-explore-dataset-picker").hidden = true;
+      this.element(".quarry-explore-manage").setAttribute(
+        "aria-expanded",
+        "false"
+      );
+      this.closeAuxiliaryPanels();
+      this.onViewChange(view === "rows");
+      this.element(".quarry-explore-fields-view").hidden = view !== "fields";
+      this.element(".quarry-explore-settings-view").hidden = view !== "settings";
+      this.element(".quarry-explore-rows").hidden = view !== "rows";
+      this.element(".quarry-explore-rows-view").hidden = view !== "rows";
+      this.host.querySelectorAll("[data-view]").forEach((tab) => {
+        tab.setAttribute(
+          "aria-pressed",
+          String(tab.dataset.view === view)
+        );
+        tab.setAttribute(
+          "aria-selected",
+          String(tab.dataset.view === view)
+        );
+        tab.tabIndex = tab.dataset.view === view ? 0 : -1;
+      });
+    }
+    setRows(columns, rows) {
+      this.renderDiscovery();
+      const region = this.element(".quarry-explore-rows");
+      region.innerHTML = this.renderRows(columns, rows);
+      const table = region.querySelector("table");
+      if (table?.tHead) {
+        const widths = columns.map(
+          (name, index) => Math.max(
+            80,
+            Math.min(
+              360,
+              Math.max(
+                name.length,
+                ...rows.map((row) => (row[index] ?? "").length)
+              ) * 7 + 24
+            )
+          )
+        );
+        const width = widths.reduce((sum, value) => sum + value, 0);
+        const colgroup = `<colgroup>${widths.map((width2) => `<col style="width:${width2}px">`).join("")}</colgroup>`;
+        table.insertAdjacentHTML("afterbegin", colgroup);
+        table.style.width = `max(100%, ${width}px)`;
+        const header = document.createElement("div");
+        header.className = "quarry-explore-table-header";
+        header.setAttribute("aria-hidden", "true");
+        const headerTable = table.cloneNode(false);
+        headerTable.innerHTML = colgroup + table.tHead.outerHTML;
+        header.append(headerTable);
+        const scroll = document.createElement("div");
+        scroll.className = "quarry-explore-table-scroll";
+        scroll.tabIndex = 0;
+        scroll.setAttribute("role", "region");
+        scroll.setAttribute("aria-label", "Dataset rows");
+        scroll.addEventListener("scroll", () => {
+          header.scrollLeft = scroll.scrollLeft;
+        });
+        scroll.append(table);
+        region.replaceChildren(header, scroll);
+      }
+    }
+    renderScope() {
+      this.element(".quarry-explore-scope").innerHTML = this.datasets.map(
+        (dataset) => `<span class="quarry-explore-dataset-chip"><span>${escapeHtml(dataset.name)}</span>${this.datasets.length > 1 ? `<button type="button" class="basic-button" data-remove-dataset="${escapeHtml(dataset.name)}" aria-label="Remove dataset ${escapeHtml(dataset.name)}">×</button>` : ""}</span>`
+      ).join("");
+      this.element(".quarry-explore-manage").setAttribute(
+        "aria-expanded",
+        String(!this.element(".quarry-explore-dataset-picker").hidden)
+      );
+      const source = this.element(".quarry-explore-source");
+      source.hidden = this.datasets.length < 2;
+      source.innerHTML = this.sourceSelector("Show rows from");
+      this.settingsCleanup?.();
+      this.element('[data-view="settings"]').hidden = !this.mountDatasetSettings;
+      const settingsSource = this.element(".quarry-explore-settings-source");
+      settingsSource.hidden = this.datasets.length < 2;
+      settingsSource.innerHTML = this.sourceSelector("Settings for");
+      this.settingsCleanup = this.mountDatasetSettings?.(
+        this.element(".quarry-explore-settings-content"),
+        this.dataset,
+        (updated) => {
+          Object.assign(this.dataset, updated);
+          this.renderOutput();
+          this.resultsQuery = null;
+          this.renderDraft();
+          this.testQuery();
+        }
+      ) ?? null;
+    }
+    sourceSelector(label) {
+      return `<label>${label}<select class="auto-dropdown quarry-explore-source-select" aria-label="${label}">${this.datasets.map((dataset) => `<option value="${escapeHtml(dataset.name)}" ${dataset.name === this.dataset.name ? "selected" : ""}>${escapeHtml(dataset.name)}</option>`).join("")}</select></label>`;
+    }
+    renderDatasetOptions() {
+      const used = [
+        ...this.filters.filter((row) => row.value.trim()).map((row) => row.column),
+        ...this.outputs
+      ];
+      const matches = this.availableDatasets.filter(
+        (dataset) => dataset.name.toLowerCase().includes(this.datasetSearch.toLowerCase())
+      );
+      matches.sort(
+        (a, b) => Number(this.datasets.some((d) => d.name === b.name)) - Number(this.datasets.some((d) => d.name === a.name))
+      );
+      this.element(".quarry-explore-dataset-options").innerHTML = matches.map((dataset) => {
+        const included = this.datasets.some(
+          (selected) => selected.name === dataset.name
+        );
+        const error = datasetCompatibility(
+          dataset,
+          this.fields,
+          used
+        );
+        const unavailable = !!dataset.error || !dataset.columns.length;
+        return `<div class="quarry-explore-dataset-option ${included ? "is-selected" : ""}"><span>${escapeHtml(dataset.name)}</span><button type="button" class="basic-button" data-switch-dataset="${escapeHtml(dataset.name)}" ${unavailable ? "disabled" : ""}>Use only this dataset</button>${included ? '<span class="quarry-explore-selected-label">✓ Selected</span>' : `<button type="button" class="basic-button" data-add-dataset="${escapeHtml(dataset.name)}" ${error ? "disabled" : ""}>Add to query</button>`}${error ? `<small>${escapeHtml(error)}</small>` : ""}</div>`;
+      }).join("") + `<p class="quarry-explore-note">${matches.length ? `${matches.length} datasets` : "No datasets match."}</p>`;
+    }
+    chooseDatasets() {
+      this.closeAuxiliaryPanels();
+      this.element(".quarry-explore-dataset-picker").hidden = false;
+      this.element(".quarry-explore-manage").setAttribute(
+        "aria-expanded",
+        "true"
+      );
+      this.renderDatasetOptions();
+      this.element(
+        ".quarry-explore-dataset-search"
+      ).focus();
+    }
+    updateDatasets(datasets2, reset) {
+      const previous = this.dataset.name;
+      this.datasets = datasets2;
+      this.dataset = datasets2.find((dataset) => dataset.name === previous) ?? datasets2[0];
+      this.fields = sharedExploreColumns(datasets2);
+      if (reset) {
+        this.filters = [this.blankFilter()];
+        this.outputs = [];
+        this.format = {};
+        this.element(".quarry-explore-keys").checked = false;
+        this.element(
+          ".quarry-explore-record-separator"
+        ).value = ", ";
+        this.element(
+          ".quarry-explore-field-separator"
+        ).value = ", ";
+        this.closeAuxiliaryPanels();
+        this.element(".quarry-explore-format-panel").hidden = true;
+        this.element('[data-action="format"]').setAttribute(
+          "aria-expanded",
+          "false"
+        );
+      } else {
+        this.filters = this.filters.map((row) => {
+          const field = this.fields.find(
+            (field2) => field2.name.toLowerCase() === row.column.toLowerCase()
+          );
+          return field ? { ...row, column: field.name } : this.blankFilter();
+        });
+        this.outputs = this.outputs.map(
+          (name) => this.fields.find(
+            (field) => field.name.toLowerCase() === name.toLowerCase()
+          )?.name ?? name
+        );
+      }
+      this.selected = Math.min(this.selected, this.filters.length - 1);
+      this.element(".quarry-explore-dataset-picker").hidden = true;
+      if (previous !== this.dataset.name) {
+        this.element(".quarry-explore-rows").textContent = "Loading dataset rows…";
+      }
+      this.renderScope();
+      this.renderFilters();
+      this.renderOutput();
+      this.renderFormatExamples();
+      this.selectRow(this.selected);
+      this.renderDraft();
+      this.setView("fields");
+      this.onSourceChange(
+        this.dataset,
+        datasets2.map((dataset) => dataset.name)
+      );
+      this.testQuery();
+    }
+    changeSource(name) {
+      const dataset = this.datasets.find((dataset2) => dataset2.name === name);
+      if (!dataset || dataset.name === this.dataset.name) return;
+      this.dataset = dataset;
+      this.renderScope();
+      this.element(".quarry-explore-rows").textContent = "Loading dataset rows…";
+      this.selectRow(this.selected);
+      this.onSourceChange(
+        dataset,
+        this.datasets.map((selected) => selected.name)
+      );
+    }
+    renderResults(data) {
+      const results = this.element(".quarry-explore-results");
+      if (data.error || data.invalid) {
+        results.innerHTML = `<p class="quarry-preview-error">${escapeHtml(data.error ?? data.invalid ?? "Query failed.")}</p>`;
+        return;
+      }
+      const rows = data.results ?? [];
+      const total2 = data.total ?? 0;
+      const breakdown = this.datasets.length > 1 && data.datasets?.length ? `<details><summary>Matches by dataset</summary>${data.datasets.map((dataset) => `<div>${escapeHtml(dataset.name)} · ${dataset.matches.toLocaleString()} matches</div>`).join("")}</details>` : "";
+      const multiple = this.datasets.length > 1;
+      const table = rows.length ? renderResultTable(
+        rows.map(
+          (row) => renderResultRow(
+            row.prompt,
+            data.highlights ?? [],
+            multiple ? `<button type="button" class="quarry-explore-query-dataset quarry-explore-result-source" data-action="choose-datasets">${escapeHtml(row.dataset)}</button>` : ""
+          )
+        ).join("")
+      ) : `<p class="quarry-preview-empty">${total2 > 0 ? "Matching rows were counted, but no sample output was returned." : "No matching rows."}</p>`;
+      results.innerHTML = `<div class="quarry-explore-result-summary"><h6>Results</h6><span>${rows.length.toLocaleString()} random result${rows.length === 1 ? "" : "s"} · ${total2.toLocaleString()} matches</span>${breakdown}</div><div class="quarry-explore-result-heading">${multiple ? `${this.datasets.length} datasets` : `<button type="button" class="quarry-explore-query-dataset" data-action="choose-datasets" title="Switch dataset or add another dataset">${escapeHtml(this.dataset.name)}</button>`}</div><div class="quarry-explore-result-scroll" tabindex="0" role="region" aria-label="Query results">${table}</div>`;
+    }
+    closeAuxiliaryPanels() {
+      this.element(".quarry-explore-field").hidden = true;
+      this.openValueRow = null;
+      this.host.querySelectorAll("[data-values-row]").forEach((button) => {
+        button.setAttribute("aria-expanded", "false");
+      });
+    }
+    renderFormatExamples() {
+      const keys = this.format.keys;
+      this.element(".quarry-explore-record-example").textContent = [
+        keys ? "prompt: portrait" : "portrait",
+        keys ? "style: watercolor" : "watercolor"
+      ].join(this.format.recordSeparator ?? ", ");
+      this.element(".quarry-explore-field-example").textContent = [
+        keys ? "hair: blonde" : "blonde",
+        keys ? "expression: smiling" : "smiling"
+      ].join(this.format.fieldSeparator ?? ", ");
+    }
+    renderQuerySuffix(suffix) {
+      if (!this.outputs.length) return escapeHtml(suffix);
+      const start = suffix.startsWith("[") ? suffix.indexOf("]") + 1 : 0;
+      const tokens = this.outputs.map(
+        (name, index) => `<span class="quarry-explore-output-token" data-output-index="${index}" draggable="true" tabindex="0" title="Drag to reorder. Alt+Left/Right also moves this column."><span class="quarry-output-grip" aria-hidden="true"></span>${escapeHtml(name)}<button type="button" class="quarry-output-remove" data-remove-output="${index}" aria-label="Remove output ${escapeHtml(name)}"></button></span>`
+      ).join(",");
+      return escapeHtml(suffix.slice(0, start + 1)) + tokens + escapeHtml(suffix.slice(start + 1 + this.outputs.join(",").length));
+    }
+    moveOutput(from, to) {
+      if (!Number.isInteger(from) || !Number.isInteger(to) || from === to || from < 0 || to < 0 || from >= this.outputs.length || to >= this.outputs.length)
+        return;
+      const [column] = this.outputs.splice(from, 1);
+      this.outputs.splice(to, 0, column);
+      this.renderOutput();
+      this.renderDraft();
+      this.element(`[data-output-index="${to}"]`).focus();
+    }
+    dragstart = (event) => {
+      const token = event.target.closest(
+        "[data-output-index]"
+      );
+      if (token && event.dataTransfer) {
+        event.dataTransfer.setData(
+          "application/x-quarry-output",
+          token.dataset.outputIndex ?? ""
+        );
+        event.dataTransfer.effectAllowed = "move";
+      }
+    };
+    clearDropMarker = () => {
+      this.host.querySelectorAll("[data-drop-edge]").forEach((token) => {
+        token.removeAttribute("data-drop-edge");
+      });
+    };
+    dragleave = (event) => {
+      const token = event.target.closest(
+        "[data-output-index]"
+      );
+      if (token && !token.contains(event.relatedTarget))
+        this.clearDropMarker();
+    };
+    dragover = (event) => {
+      const token = event.target.closest(
+        "[data-output-index]"
+      );
+      if (!token || !event.dataTransfer?.types.includes("application/x-quarry-output"))
+        return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+      this.clearDropMarker();
+      const rect = token.getBoundingClientRect();
+      token.dataset.dropEdge = event.clientX < rect.left + rect.width / 2 ? "before" : "after";
+    };
+    drop = (event) => {
+      const token = event.target.closest(
+        "[data-output-index]"
+      );
+      const source = event.dataTransfer?.getData(
+        "application/x-quarry-output"
+      );
+      if (!token || !source) return;
+      event.preventDefault();
+      const from = Number(source);
+      const rect = token.getBoundingClientRect();
+      const after = event.clientX >= rect.left + rect.width / 2;
+      const insertion = Number(token.dataset.outputIndex) + (after ? 1 : 0);
+      this.clearDropMarker();
+      this.moveOutput(from, insertion > from ? insertion - 1 : insertion);
+    };
+    keydown = (event) => {
+      const target = event.target;
+      const token = target.closest("[data-output-index]");
+      if (token && event.altKey && ["ArrowLeft", "ArrowRight"].includes(event.key)) {
+        event.preventDefault();
+        const from = Number(token.dataset.outputIndex);
+        this.moveOutput(from, from + (event.key === "ArrowLeft" ? -1 : 1));
+        return;
+      }
+      if (event.key === "Escape" && !this.element(".quarry-explore-dataset-picker").hidden) {
+        event.preventDefault();
+        event.stopPropagation();
+        this.element(".quarry-explore-dataset-picker").hidden = true;
+        this.element(".quarry-explore-manage").setAttribute(
+          "aria-expanded",
+          "false"
+        );
+        this.element(".quarry-explore-manage").focus();
+        return;
+      }
+      if (event.key === "Escape" && (!this.element(".quarry-explore-field").hidden || !this.element(".quarry-explore-format-panel").hidden)) {
+        event.preventDefault();
+        event.stopPropagation();
+        const format = !this.element(".quarry-explore-format-panel").hidden;
+        this.closeAuxiliaryPanels();
+        if (format) {
+          this.element(".quarry-explore-format-panel").hidden = true;
+          this.element('[data-action="format"]').setAttribute(
+            "aria-expanded",
+            "false"
+          );
+        }
+        this.element(
+          format ? '[data-action="format"]' : `[data-values-row="${this.selected}"]`
+        ).focus();
+        return;
+      }
+      if (target.matches("[data-view]") && ["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
+        event.preventDefault();
+        const views = Array.from(
+          this.host.querySelectorAll("[data-view]")
+        ).filter((tab2) => !tab2.hidden).map((tab2) => tab2.dataset.view);
+        const index = views.indexOf(target.dataset.view ?? "fields");
+        const view = event.key === "Home" ? views[0] : event.key === "End" ? views[views.length - 1] : views[(index + (event.key === "ArrowRight" ? 1 : -1) + views.length) % views.length];
+        const tab = this.element(
+          `[data-view="${view}"]`
+        );
+        tab.focus();
+        tab.click();
+      } else if (event.key === "Escape" && !this.element(".quarry-explore-dataset-picker").hidden) {
+        event.preventDefault();
+        event.stopPropagation();
+        this.element(".quarry-explore-dataset-picker").hidden = true;
+        this.element(".quarry-explore-manage").focus();
+      }
+    };
+    element(selector) {
+      const element = this.host.querySelector(selector);
+      if (!element) throw new Error(`Missing Explore control: ${selector}`);
+      return element;
+    }
+    blankFilter() {
+      const column = this.fields[0];
+      return {
+        column: column?.name ?? "",
+        operator: isNumber(column) ? "+=" : "=",
+        value: ""
+      };
+    }
+    activeColumn() {
+      return this.fields.find(
+        (column) => column.name === this.filters[this.selected]?.column
+      );
+    }
+    renderFilters() {
+      this.element('[data-action="add"]').disabled = !this.fields.length;
+      this.element(".quarry-explore-filters").innerHTML = this.filters.map((filter, index) => {
+        const column = this.fields.find(
+          (field) => field.name === filter.column
+        );
+        const operators = isNumber(column) ? numberOperators : column?.kind === "scalar" ? [...textOperators, ...lengthOperators] : textOperators;
+        const numericInput = isNumber(column) || isComparison(filter.operator);
+        return `<div class="quarry-explore-filter-row ${index === this.selected ? "active" : ""}" data-row="${index}">
+                <select class="quarry-explore-column auto-dropdown" aria-label="Field ${index + 1}">${this.fields.map((field) => `<option value="${escapeHtml(field.name)}" ${field.name === filter.column ? "selected" : ""}>${escapeHtml(field.name)}</option>`).join("")}</select>
+                <select class="quarry-explore-operator auto-dropdown" aria-label="Match ${index + 1}">${operators.map(([value, label]) => `<option value="${value}" ${value === filter.operator ? "selected" : ""}>${label}</option>`).join("")}</select>
+                <input ${column ? "" : "disabled"} class="quarry-explore-value auto-text" aria-label="Value ${index + 1}" type="${numericInput ? "number" : "text"}" ${numericInput ? isNumber(column) ? 'step="any"' : 'step="1" min="0"' : ""} placeholder="${isNumber(column) ? "Number" : numericInput ? "Character count" : "Search terms"}" value="${escapeHtml(filter.value)}">
+                <button type="button" class="basic-button quarry-explore-values-toggle" data-values-row="${index}" aria-expanded="false" hidden>Choose values</button>
+                <button type="button" class="basic-button" data-remove="${index}" ${this.filters.length === 1 ? "hidden" : ""} aria-label="Remove filter ${index + 1}">×</button>
+            </div>`;
+      }).join("");
+      this.updateValueButtons();
+    }
+    updateValueButtons() {
+      this.host.querySelectorAll("[data-values-row]").forEach((button) => {
+        const index = Number(button.dataset.valuesRow);
+        const row = this.filters[index];
+        button.hidden = !row || isComparison(row.operator) || !this.recurringFields.get(
+          `${this.dataset.name}:${row.column}`
+        );
+        button.textContent = "Choose values";
+        button.setAttribute(
+          "aria-expanded",
+          String(
+            index === this.selected && !this.element(".quarry-explore-field").hidden
+          )
+        );
+      });
+    }
+    selectRow(index) {
+      if (this.searchTimer) clearTimeout(this.searchTimer);
+      this.selected = index;
+      this.host.querySelectorAll("[data-row]").forEach((row) => {
+        row.classList.toggle("active", Number(row.dataset.row) === index);
+      });
+      this.valueRequest++;
+      this.valueSearch = "";
+      this.valueResponse = null;
+      this.valueItems = [];
+      this.valueBusy = false;
+      this.renderDiscovery();
+      this.loadValues();
+    }
+    renderDiscovery() {
+      const column = this.activeColumn();
+      const pane = this.element(".quarry-explore-field");
+      if (!column) {
+        pane.textContent = "No fields to explore.";
+        return;
+      }
+      pane.innerHTML = `<div class="quarry-explore-value-heading"><strong>Values for ${escapeHtml(column.name)} · Filter ${this.selected + 1}</strong><button type="button" class="basic-button" data-action="close-values" aria-label="Close values">Close</button></div><div class="quarry-explore-popover-content">
+            ${this.datasets.length > 1 ? `<div class="quarry-explore-value-source">${this.sourceSelector("Values from")}</div>` : ""}<div class="quarry-explore-value-picker">
+                <label class="quarry-explore-search-label" hidden>Search values<input class="quarry-explore-search auto-text" type="search" placeholder="Search values" value="${escapeHtml(this.valueSearch)}"></label>
+                <div class="quarry-explore-suggestions" aria-live="polite"></div>
+            </div>
+            </div>`;
+      this.renderSuggestions();
+    }
+    renderOutput() {
+      this.element(
+        ".quarry-explore-output-add"
+      ).innerHTML = '<option value="">Add column…</option>' + this.fields.filter((column) => !this.outputs.includes(column.name)).map(
+        (column) => `<option value="${escapeHtml(column.name)}">${escapeHtml(column.name)}</option>`
+      ).join("");
+      this.element(".quarry-explore-output-selected").textContent = this.outputs.length ? this.outputs.length > 1 ? "Drag column tags in the query to reorder." : "" : `Dataset default: ${this.datasets.length === 1 ? this.dataset.resolvedPromptColumn ?? "first available column" : "each dataset’s default output"}`;
+    }
+    focus = (event) => {
+      const row = event.target.closest(
+        "[data-row]"
+      );
+      if (row && Number(row.dataset.row) !== this.selected)
+        this.selectRow(Number(row.dataset.row));
+    };
+    edit = (event) => {
+      const target = event.target;
+      if (target.matches(".quarry-explore-dataset-search")) {
+        if (event.type !== "input") return;
+        this.datasetSearch = target.value;
+        this.renderDatasetOptions();
+        return;
+      }
+      if (target.matches(".quarry-explore-source-select")) {
+        if (event.type === "change") this.changeSource(target.value);
+        return;
+      }
+      if (target.matches(".quarry-explore-search")) {
+        if (event.type !== "input") return;
+        this.valueSearch = target.value;
+        if (this.searchTimer) clearTimeout(this.searchTimer);
+        this.valueRequest++;
+        this.valueBusy = true;
+        this.valueItems = [];
+        this.renderSuggestions();
+        this.searchTimer = setTimeout(() => this.loadValues(), 250);
+        return;
+      }
+      const row = target.closest("[data-row]");
+      if (row) {
+        const index = Number(row.dataset.row);
+        const filter = this.filters[index];
+        if (target.matches(".quarry-explore-column")) {
+          if (event.type !== "change") return;
+          filter.column = target.value;
+          filter.operator = isNumber(
+            this.fields.find((field) => field.name === filter.column)
+          ) ? "+=" : "=";
+          filter.value = "";
+          this.renderFilters();
+          this.selectRow(index);
+          this.element(
+            `[data-row="${index}"] .quarry-explore-column`
+          ).focus();
+        } else if (target.matches(".quarry-explore-operator")) {
+          if (event.type !== "change") return;
+          const changedType = isComparison(filter.operator) !== isComparison(target.value);
+          filter.operator = target.value;
+          if (changedType) filter.value = "";
+          this.renderFilters();
+          this.element(
+            `[data-row="${index}"] .quarry-explore-operator`
+          ).focus();
+        } else if (target.matches(".quarry-explore-value")) {
+          filter.value = target.value;
+          if (index !== this.selected) this.selectRow(index);
+          this.renderSuggestions();
+        }
+      } else if (target.matches(".quarry-explore-output-add")) {
+        if (!target.value || event.type !== "change") return;
+        if (!this.outputs.includes(target.value))
+          this.outputs.push(target.value);
+        target.value = "";
+        this.renderOutput();
+      } else if (target.matches(".quarry-explore-keys")) {
+        this.format.keys = target.checked;
+      } else if (target.matches(".quarry-explore-record-separator")) {
+        this.format.recordSeparator = target.value;
+      } else if (target.matches(".quarry-explore-field-separator")) {
+        this.format.fieldSeparator = target.value;
+      } else return;
+      this.renderFormatExamples();
+      this.renderDraft();
+    };
+    loadValues(append = false) {
+      const column = this.activeColumn();
+      if (!column || isNumber(column) || column.kind !== "scalar" || !this.dataset.columns.some(
+        (source) => source.name.toLowerCase() === column.name.toLowerCase()
+      ))
+        return;
+      const request2 = ++this.valueRequest;
+      const search = this.valueSearch;
+      const offset = append ? this.valueItems.length : 0;
+      this.valueBusy = true;
+      this.renderSuggestions();
+      const receive = (data) => {
+        if (this.disposed || request2 !== this.valueRequest) return;
+        if (append && data.success && data.revision !== this.valueResponse?.revision) {
+          this.valueItems = [];
+          this.loadValues();
+          return;
+        }
+        this.valueBusy = false;
+        this.valueResponse = data;
+        if (data.success)
+          this.recurringFields.set(
+            `${this.dataset.name}:${column.name}`,
+            !!data.eligible
+          );
+        this.valueItems = data.success ? append ? [...this.valueItems, ...data.values ?? []] : data.values ?? [] : [];
+        this.renderSuggestions();
+      };
+      genericRequest(
+        "QuarryExploreColumn",
+        { dataset: this.dataset.name, column: column.name, search, offset },
+        receive,
+        0,
+        () => receive({
+          success: false,
+          error: "Could not check this column. Try again."
+        })
+      );
+    }
+    renderSuggestions() {
+      const area = this.host.querySelector(
+        ".quarry-explore-suggestions"
+      );
+      if (!area) return;
+      const column = this.activeColumn();
+      this.updateValueButtons();
+      const supported = column && column.kind === "scalar" && !isNumber(column) && this.dataset.columns.some(
+        (source) => source.name.toLowerCase() === column.name.toLowerCase()
+      );
+      this.element(".quarry-explore-value-picker").hidden = !supported;
+      if (!supported) {
+        if (column)
+          this.element(
+            ".quarry-explore-value-heading strong"
+          ).textContent = `Examples for ${column.name} · Filter ${this.selected + 1}`;
+        return;
+      }
+      const data = this.valueResponse;
+      const eligible = data?.success && data.eligible;
+      this.element(".quarry-explore-value-heading strong").textContent = `${eligible || !data?.success ? "Values" : "Examples"} for ${column.name} · Filter ${this.selected + 1}`;
+      this.element(".quarry-explore-search-label").hidden = !eligible || (data.totalValues ?? 0) <= 12 && !this.valueSearch;
+      if (this.valueBusy && !eligible) {
+        area.innerHTML = '<p class="quarry-explore-note">Checking the entire column… You can still enter search terms in the filter row.</p>';
+        return;
+      }
+      if (!data) {
+        area.replaceChildren();
+        return;
+      }
+      if (!data.success) {
+        area.innerHTML = `<p class="quarry-explore-error">${escapeHtml(data.error ?? "Could not check this column.")}</p><button type="button" class="basic-button" data-action="retry-values">Retry</button>`;
+        return;
+      }
+      if (!eligible) {
+        const reason = data.reason === "distinct_limit" ? `This column has at least ${data.uniqueLimit?.toLocaleString()} distinct values.` : data.reason === "length_limit" ? `This column contains a value at least ${data.lengthLimit} characters long.` : data.reason === "percentage_limit" ? `${data.distinctCount?.toLocaleString()} distinct values across ${data.totalRows?.toLocaleString()} rows exceed the ${data.maxDistinctPercent}% limit.` : data.reason === "empty" ? "This column has no nonempty values." : "Use text matching for this field.";
+        area.innerHTML = `<details class="quarry-explore-profile-reason"><summary>About value suggestions</summary><p>${reason}</p></details>`;
+        return;
+      }
+      const chosen = this.readValues();
+      area.innerHTML = '<p class="quarry-explore-note">Click a value to add or remove it from this filter.</p>' + this.valueItems.map(
+        (value) => `<button type="button" class="basic-button" data-value="${escapeHtml(value.trim())}" aria-pressed="${chosen.includes(value.trim())}" ${canSuggestValue(value) ? "" : 'disabled title="Contains query separators; enter a shorter search term above."'}>${escapeHtml(value)}</button>`
+      ).join("") + `<p class="quarry-explore-note">${this.valueBusy ? "Loading values…" : this.valueItems.length ? `Showing ${this.valueItems.length.toLocaleString()} of ${(data.matchingValues ?? 0).toLocaleString()} matching values · ${(data.totalValues ?? 0).toLocaleString()} distinct values in the entire column.` : "No matching values. You can still enter search terms in the filter row."}</p>` + (data.hasMore ? `<button type="button" class="basic-button" data-action="more-values" ${this.valueBusy ? "disabled" : ""}>Show more values</button>` : "") + `<p class="quarry-explore-note">Checked the entire column. Change recurring-value limits in Settings.</p>`;
+    }
+    readValues() {
+      return this.values(this.filters[this.selected]?.value ?? "");
+    }
+    values(value) {
+      return value.split(",").map((part) => part.trim()).filter(Boolean);
+    }
+    draft() {
+      const filters = [];
+      for (const [index, row] of this.filters.entries()) {
+        const values = this.values(row.value);
+        if (!values.length) continue;
+        if (!this.fields.some((field) => field.name === row.column))
+          return {
+            query: "",
+            error: "Choose a field shared by the selected datasets."
+          };
+        if (values.some((value) => !canSuggestValue(value)) || /[=,;[\]<>|:]/.test(row.column))
+          return {
+            query: "",
+            error: `Filter ${index + 1} contains query separators. Enter shorter search terms.`
+          };
+        const column = this.fields.find(
+          (field) => field.name === row.column
+        );
+        if (isComparison(row.operator) && (values.length !== 1 || !Number.isFinite(Number(values[0])) || !isNumber(column) && (!Number.isInteger(Number(values[0])) || Number(values[0]) < 0)))
+          return {
+            query: "",
+            error: `Filter ${index + 1} needs ${isNumber(column) ? "a valid number" : "a whole character count of zero or more"}.`
+          };
+        filters.push({
+          column: row.column,
+          operator: row.operator,
+          values
+        });
+      }
+      if (this.datasets.some(
+        (dataset) => /[,;[\]<>|:*?]/.test(dataset.name)
+      ) || this.outputs.some((column) => /[,;[\]<>|:]/.test(column)))
+        return {
+          query: "",
+          error: "This dataset or column name contains query separators. Use Run Query to write the query manually."
+        };
+      return {
+        query: buildExploreQuery(
+          this.datasets.map((dataset) => dataset.name).join(","),
+          filters,
+          this.outputs,
+          this.format
+        ),
+        error: ""
+      };
+    }
+    renderDraft() {
+      if (!this.element(".quarry-explore-dataset-picker").hidden)
+        this.renderDatasetOptions();
+      const { query, error } = this.draft();
+      if (query !== this.draftQuery) {
+        this.request++;
+        this.pendingQuery = null;
+        this.draftQuery = query;
+      }
+      this.element(".quarry-explore-error").textContent = error;
+      const names = this.datasets.map((dataset) => dataset.name);
+      this.element(".quarry-explore-query").innerHTML = query ? "&lt;q:" + names.map(
+        (name) => `<button type="button" class="quarry-explore-query-dataset" data-action="choose-datasets" title="Switch dataset or add another dataset">${escapeHtml(name)}</button>`
+      ).join(",") + this.renderQuerySuffix(query.slice(3 + names.join(",").length)) : "";
+      this.element(".quarry-explore-result-status").textContent = this.resultsQuery && this.resultsQuery !== query ? "Results from the last test. Test query to update." : this.pendingQuery ? "Drawing random matches…" : this.resultsQuery ? "" : "Test query to preview these settings.";
+      this.element('[data-action="copy"]').textContent = "Copy tag";
+      for (const action of ["test", "use", "copy"])
+        this.element(
+          `[data-action="${action}"]`
+        ).disabled = !!error || action === "test" && this.pendingQuery === query;
+    }
+    testQuery() {
+      const { query, error } = this.draft();
+      if (error) return;
+      const request2 = ++this.request;
+      this.pendingQuery = query;
+      const button = this.element('[data-action="test"]');
+      button.disabled = true;
+      this.element(".quarry-explore-result-status").textContent = "Drawing random matches…";
+      genericRequest(
+        "QuarryRunQuery",
+        { query, maxResults: 100 },
+        (data) => {
+          if (this.disposed || request2 !== this.request) return;
+          button.disabled = false;
+          this.pendingQuery = null;
+          this.resultsQuery = query;
+          this.element(".quarry-explore-result-status").textContent = "";
+          this.renderResults(data);
+        },
+        0,
+        () => {
+          if (this.disposed || request2 !== this.request) return;
+          button.disabled = false;
+          this.pendingQuery = null;
+          this.element(".quarry-explore-result-status").textContent = "Query failed. Try again.";
+        }
+      );
+    }
+    click = (event) => {
+      const target = event.target;
+      if (!target.closest(
+        ".quarry-explore-popover, [data-values-row], [data-action='format']"
+      ))
+        this.closeAuxiliaryPanels();
+      const button = target.closest("button");
+      if (!button || button.disabled) return;
+      if (button.dataset.valuesRow !== void 0) {
+        if (button.hidden) return;
+        const index = Number(button.dataset.valuesRow);
+        const wasOpen = this.openValueRow === index && !this.element(".quarry-explore-field").hidden;
+        this.closeAuxiliaryPanels();
+        if (!wasOpen) {
+          if (index !== this.selected) this.selectRow(index);
+          this.openValueRow = index;
+          this.element(".quarry-explore-field").hidden = false;
+          this.renderSuggestions();
+          this.element(
+            '[data-action="close-values"]'
+          ).focus();
+        }
+      } else if (button.dataset.action === "close-values") {
+        this.closeAuxiliaryPanels();
+        this.element(
+          `[data-values-row="${this.selected}"]`
+        ).focus();
+      } else if (button.dataset.action === "format") {
+        const open = this.element(".quarry-explore-format-panel").hidden;
+        this.closeAuxiliaryPanels();
+        this.element(".quarry-explore-format-panel").hidden = !open;
+        button.setAttribute("aria-expanded", String(open));
+      } else if (button.dataset.action === "choose-datasets") {
+        this.chooseDatasets();
+      } else if (button.dataset.action === "close-datasets") {
+        this.setView("fields");
+        this.element(".quarry-explore-manage").focus();
+      } else if (button.dataset.switchDataset || button.dataset.addDataset) {
+        const name = button.dataset.switchDataset ?? button.dataset.addDataset;
+        const dataset = this.availableDatasets.find(
+          (candidate) => candidate.name === name
+        );
+        if (!dataset || dataset.error || !dataset.columns.length) return;
+        if (button.dataset.switchDataset)
+          this.updateDatasets([dataset], true);
+        else {
+          const used = [
+            ...this.filters.filter((row) => row.value.trim()).map((row) => row.column),
+            ...this.outputs
+          ];
+          if (this.datasets.some((selected) => selected.name === name) || datasetCompatibility(dataset, this.fields, used))
+            return;
+          this.updateDatasets([...this.datasets, dataset], false);
+        }
+      } else if (button.dataset.removeDataset) {
+        const datasets2 = this.datasets.filter(
+          (dataset) => dataset.name !== button.dataset.removeDataset
+        );
+        if (datasets2.length && datasets2.length !== this.datasets.length)
+          this.updateDatasets(datasets2, false);
+      } else if (button.dataset.view) {
+        this.setView(button.dataset.view);
+        if (button.dataset.view === "rows") this.newSample();
+      } else if (button.dataset.value !== void 0) {
+        const values = this.readValues();
+        const value = button.dataset.value;
+        this.filters[this.selected].value = (values.includes(value) ? values.filter((item) => item !== value) : [...values, value]).join(", ");
+        this.element(
+          `[data-row="${this.selected}"] .quarry-explore-value`
+        ).value = this.filters[this.selected].value;
+        this.renderSuggestions();
+        this.renderDraft();
+      } else if (button.dataset.remove !== void 0) {
+        if (this.filters.length === 1) return;
+        const index = Number(button.dataset.remove);
+        this.filters.splice(index, 1);
+        if (!this.filters.length) this.filters.push(this.blankFilter());
+        this.selected = Math.min(index, this.filters.length - 1);
+        this.renderFilters();
+        this.selectRow(this.selected);
+        this.renderDraft();
+      } else if (button.dataset.removeOutput !== void 0) {
+        this.outputs.splice(Number(button.dataset.removeOutput), 1);
+        this.renderOutput();
+        this.renderDraft();
+      } else if (button.dataset.action === "more-values")
+        this.loadValues(true);
+      else if (button.dataset.action === "retry-values") this.loadValues();
+      else if (button.dataset.action === "add") {
+        const row = this.filters[this.selected] ?? this.blankFilter();
+        this.filters.push({ ...row, value: "" });
+        this.selected = this.filters.length - 1;
+        this.renderFilters();
+        this.selectRow(this.selected);
+        this.element(
+          `[data-row="${this.selected}"] .quarry-explore-value`
+        ).focus();
+        this.renderDraft();
+      } else if (button.dataset.action === "clear-filters") {
+        this.filters = [this.blankFilter()];
+        this.selected = 0;
+        this.closeAuxiliaryPanels();
+        this.renderFilters();
+        this.selectRow(0);
+        this.renderDraft();
+        this.element(".quarry-explore-value").focus();
+      } else if (button.dataset.action === "test") this.testQuery();
+      else if (button.dataset.action === "copy" || button.dataset.action === "use") {
+        const { query, error } = this.draft();
+        if (error) return;
+        if (button.dataset.action === "copy") {
+          copyText(query);
+          button.textContent = "Copied";
+          if (typeof doNoticePopover === "function")
+            doNoticePopover(
+              "Copied!",
+              "notice-pop-green quarry-copy-notice"
+            );
+        } else {
+          insertQuarryQuery(query);
+          this.close();
+        }
+      } else if (button.classList.contains("quarry-runquery-copy")) {
+        copyText(
+          button.closest("tr")?.querySelector(".quarry-runquery-prompt-text")?.textContent ?? ""
+        );
+        if (typeof doNoticePopover === "function")
+          doNoticePopover(
+            "Copied!",
+            "notice-pop-green quarry-copy-notice"
+          );
+      }
+    };
   };
 
   // frontend/folderPicker.ts
@@ -2859,307 +3568,6 @@
     });
   };
 
-  // frontend/runquery.ts
-  var RUNQUERY_DEFAULT_MAX = 25;
-  var RUNQUERY_MIN_MAX = 1;
-  var MODAL_ID2 = "quarry-runquery-modal";
-  var QUERY_ID = "quarry-runquery-query";
-  var MAX_ID = "quarry-runquery-max";
-  var RUN_ID = "quarry-runquery-run";
-  var SUMMARY_ID = "quarry-runquery-summary";
-  var RESULTS_ID = "quarry-runquery-results";
-  var EXAMPLE_QUERY = "<q:tags/**[tags=girl; tags!=anthro]>";
-  var clampMaxResults = (value) => {
-    const num = typeof value === "number" ? value : Number.parseInt(String(value ?? ""), 10);
-    if (!Number.isFinite(num) || num <= 0) {
-      return RUNQUERY_DEFAULT_MAX;
-    }
-    return Math.max(Math.trunc(num), RUNQUERY_MIN_MAX);
-  };
-  var commonDatasetPrefix = (names) => {
-    if (names.length < 2) {
-      return "";
-    }
-    let prefix = names[0];
-    for (const name of names.slice(1)) {
-      let at = 0;
-      while (at < prefix.length && at < name.length && prefix[at] === name[at]) {
-        at++;
-      }
-      prefix = prefix.slice(0, at);
-      if (prefix.length === 0) {
-        return "";
-      }
-    }
-    const slash = prefix.lastIndexOf("/");
-    if (slash < 0) {
-      return "";
-    }
-    const folder = prefix.slice(0, slash + 1);
-    return names.every((name) => name.length > folder.length) ? folder : "";
-  };
-  var runQueryPoolText = (total2, datasetCount, prefix = "") => {
-    const prompts = `${total2.toLocaleString()} prompt${total2 === 1 ? "" : "s"}`;
-    const datasets2 = `${datasetCount.toLocaleString()} dataset${datasetCount === 1 ? "" : "s"}`;
-    const scope = prefix ? ` under ${prefix}` : "";
-    return `${prompts} · ${datasets2}${scope}`;
-  };
-  var runQueryPreviewText = (shown, truncated) => {
-    if (shown <= 0) {
-      return "";
-    }
-    return truncated ? `${shown.toLocaleString()} sampled below` : `all ${shown.toLocaleString()} shown below`;
-  };
-  var summaryRow = (label, value) => `<div class="quarry-runquery-summary-row"><span class="quarry-runquery-summary-label">${label}</span><span class="quarry-runquery-summary-value">${escapeHtml(value)}</span></div>`;
-  var renderRunQuerySummary = (total2, datasetCount, shown, truncated, prefix = "") => {
-    const preview = runQueryPreviewText(shown, truncated);
-    return `<div class="quarry-runquery-summary">${summaryRow(
-      "Pool",
-      runQueryPoolText(total2, datasetCount, prefix)
-    )}${preview ? summaryRow("Preview", preview) : ""}</div>`;
-  };
-  var formatShare = (matches, total2) => {
-    if (total2 <= 0 || matches <= 0) {
-      return "";
-    }
-    const pct = matches / total2 * 100;
-    return pct < 1 ? "<1%" : `${Math.round(pct)}%`;
-  };
-  var datasetRow = (dataset, prefix, total2, max) => {
-    const shown = prefix ? dataset.name.slice(prefix.length) : dataset.name;
-    const raw = max > 0 ? dataset.matches / max * 100 : 0;
-    const width = raw > 0 ? Math.max(raw, 2) : 0;
-    return `<div class="quarry-runquery-dataset-row"><span class="quarry-runquery-dataset-name" title="${escapeHtml(dataset.name)}">${escapeHtml(shown)}</span><span class="quarry-runquery-dataset-count">${dataset.matches.toLocaleString()}</span><span class="quarry-runquery-dataset-share">${escapeHtml(formatShare(dataset.matches, total2))}</span><span class="quarry-runquery-dataset-bar"><span style="width: ${width.toFixed(1)}%"></span></span></div>`;
-  };
-  var renderRunQueryDatasetCounts = (datasets2) => {
-    if (!datasets2 || datasets2.length === 0) {
-      return "";
-    }
-    const total2 = datasets2.reduce((sum, dataset) => sum + dataset.matches, 0);
-    const max = datasets2.reduce(
-      (best, dataset) => Math.max(best, dataset.matches),
-      0
-    );
-    const prefix = commonDatasetPrefix(datasets2.map((dataset) => dataset.name));
-    const rows = datasets2.map((dataset) => datasetRow(dataset, prefix, total2, max)).join("");
-    return `<div class="quarry-runquery-datasets">${rows}</div>`;
-  };
-  var COPY_GLYPH = "&#x29C9;";
-  var highlightPrompt = (prompt, highlights) => {
-    const needles = (highlights ?? []).filter((term) => term.length > 0);
-    if (needles.length === 0) {
-      return escapeHtml(prompt);
-    }
-    const pattern = needles.slice().sort((a, b) => b.length - a.length).map(escapeRegExp).join("|");
-    const regex = new RegExp(pattern, "gi");
-    let out = "";
-    let last = 0;
-    for (const match of prompt.matchAll(regex)) {
-      const start = match.index ?? 0;
-      out += escapeHtml(prompt.slice(last, start));
-      out += `<mark class="quarry-runquery-hl">${escapeHtml(match[0])}</mark>`;
-      last = start + match[0].length;
-    }
-    out += escapeHtml(prompt.slice(last));
-    return out;
-  };
-  var groupResultsByDataset = (results) => {
-    const groups = [];
-    const indexOf = /* @__PURE__ */ new Map();
-    for (const row of results) {
-      let at = indexOf.get(row.dataset);
-      if (at === void 0) {
-        at = groups.length;
-        indexOf.set(row.dataset, at);
-        groups.push({ dataset: row.dataset, prompts: [] });
-      }
-      groups[at].prompts.push(row.prompt);
-    }
-    return groups;
-  };
-  var renderResultRow = (prompt, highlights) => `<tr><td class="quarry-runquery-result-prompt"><div class="quarry-runquery-prompt-text">${highlightPrompt(prompt, highlights)}</div></td><td class="quarry-runquery-result-copy"><button type="button" class="basic-button quarry-runquery-copy" title="Copy prompt">${COPY_GLYPH}</button></td></tr>`;
-  var renderDatasetGroup = (dataset, prompts, highlights) => {
-    const rows = prompts.map((prompt) => renderResultRow(prompt, highlights)).join("");
-    return `<div class="quarry-runquery-dataset-group">
-        <div class="quarry-runquery-dataset-heading">${escapeHtml(dataset)}</div>
-        <table class="quarry-preview-table simple-table quarry-runquery-table">
-            <colgroup><col class="quarry-runquery-col-prompt"><col class="quarry-runquery-col-copy"></colgroup>
-            <tbody>${rows}</tbody>
-        </table>
-    </div>`;
-  };
-  var renderRunQueryResults = (results, highlights = []) => {
-    if (!results || results.length === 0) {
-      return `<div class="quarry-preview-empty">No matching rows.</div>`;
-    }
-    return groupResultsByDataset(results).map(
-      (group) => renderDatasetGroup(group.dataset, group.prompts, highlights)
-    ).join("");
-  };
-  var renderRunQueryResponse = (data) => {
-    if (data.invalid) {
-      return {
-        summary: "",
-        body: `<div class="quarry-runquery-invalid">${escapeHtml(data.invalid)}</div>`
-      };
-    }
-    if (data.error) {
-      return {
-        summary: "",
-        body: `<div class="quarry-preview-error">${escapeHtml(data.error)}</div>`
-      };
-    }
-    const datasets2 = data.datasets ?? [];
-    const results = data.results ?? [];
-    return {
-      summary: renderRunQuerySummary(
-        data.total ?? 0,
-        datasets2.length,
-        results.length,
-        data.truncated ?? false,
-        commonDatasetPrefix(datasets2.map((dataset) => dataset.name))
-      ),
-      body: renderRunQueryDatasetCounts(datasets2) + renderRunQueryResults(results, data.highlights ?? [])
-    };
-  };
-  var runBusy = false;
-  var updateRunControls = () => {
-    const run = document.getElementById(RUN_ID);
-    if (run) {
-      run.disabled = runBusy;
-    }
-  };
-  var showView = (view) => {
-    const summaryEl = document.getElementById(SUMMARY_ID);
-    if (summaryEl) {
-      summaryEl.innerHTML = view.summary;
-    }
-    const bodyEl = document.getElementById(RESULTS_ID);
-    if (bodyEl) {
-      bodyEl.innerHTML = view.body;
-    }
-  };
-  var runQuery = () => {
-    if (runBusy) {
-      return;
-    }
-    const queryEl = document.getElementById(
-      QUERY_ID
-    );
-    const maxEl = document.getElementById(MAX_ID);
-    if (!queryEl || !document.getElementById(RESULTS_ID)) {
-      return;
-    }
-    const query = queryEl.value.trim();
-    if (!query) {
-      showView({
-        summary: "",
-        body: `<div class="quarry-runquery-invalid">Enter a &lt;q:&gt; query to run.</div>`
-      });
-      return;
-    }
-    const maxResults = clampMaxResults(maxEl?.value);
-    if (maxEl) {
-      maxEl.value = String(maxResults);
-    }
-    runBusy = true;
-    updateRunControls();
-    showView({
-      summary: "",
-      body: `<div class="quarry-preview-loading">Running…</div>`
-    });
-    genericRequest(
-      "QuarryRunQuery",
-      { query, maxResults },
-      (data) => {
-        runBusy = false;
-        updateRunControls();
-        showView(renderRunQueryResponse(data));
-      }
-    );
-  };
-  var handleResultsClick = (event) => {
-    const button = event.target?.closest(
-      ".quarry-runquery-copy"
-    );
-    if (!button) {
-      return;
-    }
-    const promptEl = button.closest("tr")?.querySelector(".quarry-runquery-prompt-text");
-    const prompt = promptEl?.textContent ?? "";
-    if (typeof copyText === "function") {
-      copyText(prompt);
-    }
-    if (typeof doNoticePopover === "function") {
-      doNoticePopover("Copied!", "notice-pop-green");
-    }
-  };
-  var ensureRunQueryModal = () => {
-    if (document.getElementById(MODAL_ID2)) {
-      return;
-    }
-    const modal = document.createElement("div");
-    modal.className = "modal";
-    modal.id = MODAL_ID2;
-    modal.tabIndex = -1;
-    modal.setAttribute("role", "dialog");
-    modal.innerHTML = `
-        <div class="modal-dialog modal-lg quarry-runquery-dialog" role="document">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title">Run Query</h5>
-                </div>
-                <div class="modal-body">
-                    <div class="quarry-runquery-controls">
-                        <label for="${QUERY_ID}" class="quarry-runquery-label">Query — paste a <code>&lt;q:&gt;</code> prompt tag (or just its inner part)</label>
-                        <textarea id="${QUERY_ID}" class="auto-text quarry-runquery-input" rows="3" placeholder="${escapeHtml(EXAMPLE_QUERY)}" spellcheck="false"></textarea>
-                        <div class="quarry-runquery-options">
-                            <div id="${SUMMARY_ID}" class="quarry-runquery-summary-slot"></div>
-                            <label for="${MAX_ID}" class="quarry-runquery-max-label">Max results</label>
-                            <input type="number" id="${MAX_ID}" class="auto-text quarry-runquery-max" value="${RUNQUERY_DEFAULT_MAX}" min="${RUNQUERY_MIN_MAX}">
-                            <button type="button" id="${RUN_ID}" class="basic-button quarry-runquery-run" title="Run the query and show the matching rows (Ctrl+Enter in the query box also runs)">Run</button>
-                        </div>
-                    </div>
-                    <div id="${RESULTS_ID}" class="quarry-runquery-results"></div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary basic-button" data-bs-dismiss="modal">Close</button>
-                </div>
-            </div>
-        </div>`;
-    document.body.appendChild(modal);
-    modal.querySelector('[data-bs-dismiss="modal"]')?.addEventListener("click", hideRunQueryModal);
-    document.getElementById(RESULTS_ID)?.addEventListener("click", handleResultsClick);
-    document.getElementById(RUN_ID)?.addEventListener("click", runQuery);
-    document.getElementById(QUERY_ID)?.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
-        event.preventDefault();
-        runQuery();
-      }
-    });
-    document.getElementById(MAX_ID)?.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") {
-        event.preventDefault();
-        runQuery();
-      }
-    });
-  };
-  var showRunQueryModal = () => {
-    if (typeof $ === "function") {
-      $(`#${MODAL_ID2}`).modal("show");
-    }
-  };
-  var hideRunQueryModal = () => {
-    if (typeof $ === "function") {
-      $(`#${MODAL_ID2}`).modal("hide");
-    }
-  };
-  var openRunQueryModal = () => {
-    ensureRunQueryModal();
-    showRunQueryModal();
-    document.getElementById(QUERY_ID)?.focus();
-  };
-
   // frontend/tab.ts
   var TAB_ID2 = "Quarry-Tab";
   var QUARRY_TAB_BODY_ID = "quarry-tab-body";
@@ -3218,20 +3626,13 @@
   // frontend/settings.ts
   var MESSAGE_TIMEOUT_MS = 5e3;
   var PREVIEW_ROW_LIMIT = 100;
-  var PREVIEW_LOAD_MORE_COUNT = 500;
   var ADD_TO_EXISTING_TAG_ID = "quarry-add-to-existing-tag";
   var PREVIEW_MODAL_ID = "quarry-preview-modal";
   var PREVIEW_TITLE_ID = "quarry-preview-title";
   var PREVIEW_BODY_ID = "quarry-preview-body";
   var PREVIEW_STATUS_ID = "quarry-preview-status";
-  var PREVIEW_LOAD_MORE_ID = "quarry-preview-loadmore";
-  var PREVIEW_CLEAR_ID = "quarry-preview-clear";
+  var PREVIEW_REFRESH_ID = "quarry-preview-refresh";
   var expandedFolders2 = /* @__PURE__ */ new Set();
-  var renderDatasetOptions = (dataset) => dataset.columns.map((col) => {
-    const selected = col.name === dataset.resolvedPromptColumn ? " selected" : "";
-    const badge = col.kind === "scalar" ? "" : ` [${col.kind}]`;
-    return `<option value="${escapeHtml(col.name)}"${selected}>${escapeHtml(col.name)}${badge}</option>`;
-  }).join("");
   var renderTagCheckboxes = (dataset) => dataset.columns.map((col) => {
     const checked = (dataset.configuredTagColumns ?? []).includes(
       col.name
@@ -3288,16 +3689,15 @@
       return `<tr class="${cls} quarry-dataset-error" data-dataset="${name}"${attrs}>
             ${toggleCell}
             <td class="quarry-dataset-name-cell">${renderDatasetNameButton(name, label)}</td>
-            <td colspan="4"><span class="quarry-dataset-error-msg">⚠️ ${escapeHtml(dataset.error)}</span></td>
+            <td colspan="3"><span class="quarry-dataset-error-msg">⚠️ ${escapeHtml(dataset.error)}</span></td>
         </tr>`;
     }
     return `<tr class="${cls}" data-dataset="${name}"${attrs}>
         ${toggleCell}
         <td class="quarry-dataset-name-cell">${renderDatasetNameButton(name, label)}</td>
-        <td><select class="quarry-dataset-column" data-dataset="${name}">${renderDatasetOptions(dataset)}</select></td>
-        <td class="quarry-dataset-tags" title="Columns the 'tags' keyword searches across">${renderTagCheckboxes(dataset)}</td>
+        <td class="quarry-dataset-columns">${dataset.columns.map((column) => `<span>${escapeHtml(column.name)}</span>`).join(", ") || "—"}</td>
         <td class="quarry-dataset-rows" data-dataset="${name}" title="Rows in the dataset (loads when you preview it if not already counted)">${formatRowCount(dataset.rowCount)}</td>
-        <td><button type="button" class="basic-button quarry-preview-button" data-dataset="${name}" title="Preview this dataset's rows (load more in the dialog)">Preview</button></td>
+        <td class="quarry-dataset-action"><button type="button" class="basic-button quarry-preview-button" data-dataset="${name}" title="Explore columns, discover values, and test filters">Explore</button></td>
     </tr>`;
   };
   var renderFolderHeaderRow = (node, depth, expanded) => {
@@ -3309,7 +3709,7 @@
     const collapsedClass = collapsed ? " quarry-collapsed" : "";
     const parentAttr = container ? ` data-parent="${escapeHtml(container)}"` : "";
     return `<tr class="quarry-folder-row${collapsedClass}${hiddenClass}" data-folder="${path}"${parentAttr} style="--quarry-depth: ${depth}">
-        <td colspan="6">
+        <td colspan="5">
             <button type="button" class="quarry-folder-toggle" data-folder="${path}" aria-expanded="${!collapsed}" title="Show or hide the datasets in this folder">
                 <span class="quarry-folder-caret" aria-hidden="true"></span>
                 <span class="quarry-folder-name">${escapeHtml(node.name)}</span>
@@ -3340,13 +3740,14 @@
     const folderRows = folders.map((folder) => renderFolderNode(folder, 0, expandedFolders3)).join("");
     const looseRows = loose.map((dataset) => renderDatasetRow(dataset)).join("");
     return `<table class="quarry-datasets-table">
+        <colgroup><col class="quarry-col-enabled"><col><col class="quarry-col-columns"><col class="quarry-col-rows"><col class="quarry-col-explore"></colgroup>
         <thead>
-            <tr><th class="quarry-enable-th" title="Enable or disable this dataset for &lt;q:&gt; wildcard matches">On</th><th>Dataset</th><th>Prompt column</th><th>Tag columns</th><th>Rows</th><th>Preview</th></tr>
+            <tr><th class="quarry-enable-th" title="Include this dataset when a wildcard matches. Direct dataset references work either way.">Wildcards</th><th>Dataset</th><th>Available columns</th><th class="quarry-rows-th">Rows</th><th>Explore</th></tr>
         </thead>
         <tbody>${folderRows}${looseRows}</tbody>
         <tfoot>
             <tr class="quarry-datasets-summary-row">
-                <td colspan="6"><span id="${SUMMARY_ID2}" class="quarry-datasets-summary" title="Totals across all datasets. Uncounted rows fill in as datasets are warmed or previewed.">${escapeHtml(formatDatasetsSummary(datasets2))}</span></td>
+                <td colspan="5"><span id="${SUMMARY_ID2}" class="quarry-datasets-summary" title="Totals across all datasets. Uncounted rows fill in as datasets are warmed or previewed.">${escapeHtml(formatDatasetsSummary(datasets2))}</span></td>
             </tr>
         </tfoot>
     </table>`;
@@ -3380,33 +3781,38 @@
                     <span class="header-label-wrap"><span class="header-label">🦆 Quarry</span></span>
                 </span>
                 <div class="input-group-content">
-                    <div class="quarry-actions">
+                    <div class="quarry-actions quarry-catalog-toolbar">
                         <button type="button" id="quarry-refresh" class="basic-button">Refresh</button>
                         <button type="button" id="quarry-download-datasets" class="basic-button" title="Browse and download ready-made datasets from the official collection">Download Datasets</button>
                         <button type="button" id="quarry-run-query" class="basic-button" title="Paste a &lt;q:&gt; prompt tag and see which datasets and rows it matches">Run Query</button>
+                        <button type="button" id="quarry-settings-toggle" class="basic-button" aria-expanded="false" aria-controls="quarry-global-settings">Settings</button>
                     </div>
+                    <section id="quarry-global-settings" class="quarry-global-settings" aria-label="Quarry settings" hidden>
+                        <h3>Quarry settings</h3>
+                        <label class="quarry-folder-setting" for="quarry-folder">Datasets folder
+                            <input class="auto-text" type="text" id="quarry-folder" value="${escapeHtml(folder)}" placeholder="/path/to/datasets" autocomplete="off">
+                        </label>
+                        <label class="quarry-setting-row" for="${ADD_TO_EXISTING_TAG_ID}">
+                            <input type="checkbox" id="${ADD_TO_EXISTING_TAG_ID}" checked>
+                            Add dataset names to an existing <code>&lt;q:&gt;</code> tag
+                        </label>
+                        <p class="quarry-save-hint">When enabled, clicking a dataset name adds it to the first existing query tag in your prompt.</p>
+                        <fieldset class="quarry-recurring-settings"><legend>Recurring values in Explore</legend>
+                            <div class="quarry-explore-limits">
+                                <label>Distinct values must be fewer than<input id="quarry-explore-unique-limit" class="auto-text" type="number" min="2" max="50000" step="1" value="10000" required></label>
+                                <label>Every value must be shorter than (characters)<input id="quarry-explore-length-limit" class="auto-text" type="number" min="2" max="1000" step="1" value="256" required></label>
+                                <label>Distinct values as a share of all rows (%)<input id="quarry-explore-distinct-percent" class="auto-text" type="number" min="0.1" max="100" step="0.1" value="10" required></label>
+                            </div>
+                            <p class="quarry-save-hint">Explore checks the entire column. All three limits must pass. Use 100% to allow any distinct-value share. Null and empty values are excluded from the distinct count; the percentage uses all rows. Saving changed limits triggers a new check.</p>
+                        </fieldset>
+                        <div class="quarry-actions quarry-global-settings-actions">
+                            <button type="submit" class="basic-button">Save settings</button>
+                            <button type="button" id="quarry-clean-temp" class="basic-button" title="Delete leftover placeholder .txt files an older Quarry version wrote into SwarmUI's Wildcards folder">Clean temp files</button>
+                        </div>
+                    </section>
+                    <div id="quarry-message" class="quarry-message" role="status"></div>
                     <div id="quarry-datasets" class="quarry-datasets"></div>
-                    <div class="auto-input auto-input-flex">
-                        <label for="quarry-folder"><span class="auto-input-name">Datasets folder</span></label>
-                        <input class="auto-text" type="text" id="quarry-folder" value="${escapeHtml(folder)}" placeholder="/path/to/datasets" autocomplete="off">
-                    </div>
-                    <div class="quarry-search-folder-setting" hidden>
-                        <div class="quarry-search-folder-label">Image search folders</div>
-                        <div id="quarry-image-search-folders">${renderFolderPicker([""], [])}</div>
-                        <p class="quarry-search-folder-help">Choose output folders from the first two levels. Each selected folder includes all descendants. All includes the entire output directory and future folders. Save, then use Rescan history in Image Search to update the index.</p>
-                    </div>
-                    <div class="quarry-setting-row">
-                        <span class="auto-input-qbutton info-popover-button" onclick="doPopover('${ADD_TO_EXISTING_TAG_ID}', arguments[0])">?</span>
-                        <label for="${ADD_TO_EXISTING_TAG_ID}">Add to existing <code>&lt;q:&gt;</code> tag</label>
-                        <input type="checkbox" id="${ADD_TO_EXISTING_TAG_ID}" checked>
-                        <div class="sui-popover sui-info-popover" id="popover_${ADD_TO_EXISTING_TAG_ID}"><b>Add to existing &lt;q:&gt; tag</b><br>On by default. When on, clicking a dataset name adds it to the first existing <code>&lt;q:…&gt;</code> tag (e.g. <code>&lt;q:A,B&gt;</code>) instead of inserting a separate one.</div>
-                    </div>
                 </div>
-            </div>
-            <div id="quarry-message" class="quarry-message"></div>
-            <div class="quarry-actions">
-                <button type="submit" class="basic-button">Save Settings</button>
-                <button type="button" id="quarry-clean-temp" class="basic-button" title="Delete leftover placeholder .txt files an older Quarry version wrote into SwarmUI's Wildcards folder">Clean temp files</button>
             </div>
         </form>
     </div>`;
@@ -3425,19 +3831,6 @@
             </div>
         </div>
     </div>`;
-  var collectPromptColumns = (container) => {
-    const result = {};
-    const selects = container.querySelectorAll(
-      "select.quarry-dataset-column"
-    );
-    selects.forEach((select) => {
-      const name = select.getAttribute("data-dataset");
-      if (name) {
-        result[name] = select.value;
-      }
-    });
-    return result;
-  };
   var collectTagColumns = (container) => {
     const result = {};
     const boxes = container.querySelectorAll(
@@ -3457,16 +3850,6 @@
     });
     return result;
   };
-  var collectDisabledDatasets = (container) => {
-    const result = [];
-    container.querySelectorAll("button.quarry-dataset-enable").forEach((button) => {
-      const name = button.getAttribute("data-dataset");
-      if (name && button.getAttribute("aria-checked") === "false") {
-        result.push(name);
-      }
-    });
-    return result;
-  };
   var messageTimer = null;
   var applyTableHighlights = (names) => {
     const container = document.getElementById("quarry-datasets");
@@ -3475,7 +3858,214 @@
     }
   };
   var currentDatasets = [];
-  var canViewImageHistory = false;
+  var savedSettings = { success: true };
+  var datasetColumnSettings = (datasets2) => ({
+    promptColumns: Object.fromEntries(
+      datasets2.filter((dataset) => dataset.configuredPromptColumn != null).map((dataset) => [dataset.name, dataset.configuredPromptColumn])
+    ),
+    tagColumns: Object.fromEntries(
+      datasets2.map((dataset) => [
+        dataset.name,
+        [...dataset.configuredTagColumns]
+      ])
+    )
+  });
+  var savedSettingsRequest = () => {
+    const { promptColumns, tagColumns } = datasetColumnSettings(currentDatasets);
+    return {
+      datasetsFolder: savedSettings.datasetsFolder ?? "",
+      promptColumnsJson: JSON.stringify(promptColumns),
+      tagColumnsJson: JSON.stringify(tagColumns),
+      disabledDatasetsJson: JSON.stringify(
+        currentDatasets.filter((dataset) => dataset.enabled === false).map((dataset) => dataset.name)
+      ),
+      addToExistingTag: savedSettings.addToExistingTag ?? true,
+      exploreUniqueLimit: savedSettings.exploreUniqueLimit ?? 1e4,
+      exploreLengthLimit: savedSettings.exploreLengthLimit ?? 256,
+      exploreDistinctPercent: savedSettings.exploreDistinctPercent ?? 10
+    };
+  };
+  var rememberSavedDatasetState = (data) => {
+    savedSettings = data;
+    currentDatasets = data.datasets?.map((updated) => {
+      const existing = currentDatasets.find(
+        (item) => item.name === updated.name
+      );
+      return existing ? Object.assign(existing, updated) : updated;
+    }) ?? currentDatasets;
+    setCompletionDatasets(currentDatasets);
+  };
+  var settingsRequests = [];
+  var requestSettings = (endpoint, request2, receive, fail) => {
+    const finish = (callback) => {
+      try {
+        callback();
+      } finally {
+        settingsRequests.shift();
+        settingsRequests[0]?.();
+      }
+    };
+    settingsRequests.push(() => {
+      genericRequest(
+        endpoint,
+        request2(),
+        (data) => finish(() => receive(data)),
+        0,
+        () => finish(fail)
+      );
+    });
+    if (settingsRequests.length === 1) settingsRequests[0]();
+  };
+  var mountImageSearchFolders = (host, onPermission = () => {
+  }) => {
+    initFolderPickers(document);
+    host.innerHTML = '<p class="quarry-save-hint">Loading search folders…</p>';
+    requestSettings(
+      "QuarryGetSettings",
+      () => ({}),
+      (data) => {
+        const allowed = data.success && data.canViewImageHistory === true;
+        onPermission(allowed);
+        if (!allowed) {
+          host.hidden = true;
+          host.replaceChildren();
+          return;
+        }
+        rememberSavedDatasetState(data);
+        host.innerHTML = `<section class="quarry-search-folder-setting" aria-label="Image search folders">
+            <h3>Search folders</h3>
+            <p class="quarry-search-folder-help">Choose which output folders are indexed. Each selected folder includes its descendants. All includes future folders.</p>
+            <div data-image-search-folder-picker>${renderFolderPicker(data.imageSearchDirectories ?? [""], data.imageSearchDirectoryOptions ?? [])}</div>
+            <div class="quarry-actions"><button type="button" class="basic-button" data-save-search-folders>Save folders</button><span class="quarry-save-hint" data-search-folders-status role="status"></span></div>
+            <p class="quarry-search-folder-help">After saving, use Rescan history to update the search index.</p>
+        </section>`;
+        const picker = host.querySelector(
+          "[data-image-search-folder-picker]"
+        );
+        const button = host.querySelector(
+          "[data-save-search-folders]"
+        );
+        const status = host.querySelector(
+          "[data-search-folders-status]"
+        );
+        if (!picker || !button || !status) return;
+        syncPicker(picker);
+        button.addEventListener("click", () => {
+          button.disabled = true;
+          status.textContent = "Saving…";
+          const fail = (message) => {
+            button.disabled = false;
+            status.textContent = message;
+          };
+          const folders = selectedFolderValues(picker);
+          requestSettings(
+            "QuarrySaveSettings",
+            () => ({
+              ...savedSettingsRequest(),
+              imageSearchDirectoriesJson: JSON.stringify(folders)
+            }),
+            (response) => {
+              if (!response.success) {
+                fail(
+                  `Failed to save: ${response.error ?? "unknown error"}`
+                );
+                return;
+              }
+              rememberSavedDatasetState(response);
+              button.disabled = false;
+              status.textContent = "Folders saved. Rescan history to update the index.";
+            },
+            () => fail("Failed to save folders. Try again.")
+          );
+        });
+      },
+      () => {
+        host.textContent = "Failed to load search folders. Try again.";
+      }
+    );
+  };
+  var renderDatasetSettings = (dataset) => `
+    <div class="quarry-persistent-settings">
+        <h3>${escapeHtml(dataset.name)}</h3>
+        <p class="quarry-explore-note">Saved defaults for this dataset. Columns selected in Query override these defaults for that query only.</p>
+        <section class="quarry-dataset-settings-group"><h4>Default output</h4>
+            <label>Column to print<select class="quarry-dataset-column auto-dropdown" data-dataset="${escapeHtml(dataset.name)}"><option value="" ${dataset.configuredPromptColumn == null ? "selected" : ""}>Automatic (${escapeHtml(dataset.resolvedPromptColumn ?? "first available column")})</option>${dataset.columns.map((column) => `<option value="${escapeHtml(column.name)}" ${column.name === dataset.configuredPromptColumn ? "selected" : ""}>${escapeHtml(column.name)}</option>`).join("")}</select></label>
+        </section>
+        <section class="quarry-dataset-settings-group" aria-label="Tag search"><h4>Tag search</h4>
+            <p class="quarry-explore-note">Choose columns searched by <code>tags</code>. With none selected, searches use the default output column.</p>
+            <div class="quarry-dataset-tag-options">${renderTagCheckboxes(dataset)}</div>
+        </section>
+        <div class="quarry-actions"><button type="button" class="basic-button quarry-modal-action" data-save-dataset-settings>Save dataset settings</button>
+            <span class="quarry-explore-note" data-dataset-settings-status role="status"></span>
+        </div>
+    </div>`;
+  var mountDatasetSettings = (host, dataset, onSaved) => {
+    host.innerHTML = renderDatasetSettings(dataset);
+    let disposed = false;
+    const button = host.querySelector(
+      "[data-save-dataset-settings]"
+    );
+    const status = host.querySelector(
+      "[data-dataset-settings-status]"
+    );
+    const outputSelect = host.querySelector(
+      ".quarry-dataset-column"
+    );
+    if (!button || !status || !outputSelect) return () => {
+    };
+    const save = () => {
+      const output = outputSelect.value;
+      const tags = collectTagColumns(host)[dataset.name] ?? [];
+      button.disabled = true;
+      status.textContent = "Saving…";
+      const fail = (message) => {
+        if (disposed) return;
+        button.disabled = false;
+        status.textContent = message;
+      };
+      requestSettings(
+        "QuarrySaveSettings",
+        () => {
+          const { promptColumns, tagColumns } = datasetColumnSettings(currentDatasets);
+          if (output) promptColumns[dataset.name] = output;
+          else delete promptColumns[dataset.name];
+          tagColumns[dataset.name] = tags;
+          return {
+            ...savedSettingsRequest(),
+            promptColumnsJson: JSON.stringify(promptColumns),
+            tagColumnsJson: JSON.stringify(tagColumns)
+          };
+        },
+        (data) => {
+          if (!data.success) {
+            fail(`Failed to save: ${data.error ?? "unknown error"}`);
+            return;
+          }
+          rememberSavedDatasetState(data);
+          const table = document.getElementById("quarry-datasets");
+          if (table)
+            table.innerHTML = renderDatasets(
+              currentDatasets,
+              expandedFolders2
+            );
+          recomputeReferences();
+          if (disposed) return;
+          button.disabled = false;
+          status.textContent = "Dataset settings saved.";
+          const updated = currentDatasets.find(
+            (item) => item.name === dataset.name
+          );
+          if (updated) onSaved(updated);
+        },
+        () => fail("Failed to save dataset settings. Try again.")
+      );
+    };
+    button.addEventListener("click", save);
+    return () => {
+      disposed = true;
+      button.removeEventListener("click", save);
+    };
+  };
   var updateDatasetsSummary = () => {
     const el2 = document.getElementById(SUMMARY_ID2);
     if (el2) {
@@ -3483,30 +4073,19 @@
     }
   };
   var applyResponse = (data) => {
-    currentDatasets = data.datasets ?? [];
-    canViewImageHistory = data.canViewImageHistory === true;
+    rememberSavedDatasetState(data);
+    for (const [id, value] of [
+      ["quarry-explore-unique-limit", data.exploreUniqueLimit ?? 1e4],
+      ["quarry-explore-length-limit", data.exploreLengthLimit ?? 256],
+      ["quarry-explore-distinct-percent", data.exploreDistinctPercent ?? 10]
+    ]) {
+      const input = document.getElementById(id);
+      if (input) input.value = String(value);
+    }
     const folderEl = document.getElementById(
       "quarry-folder"
     );
-    if (folderEl) {
-      folderEl.value = data.datasetsFolder ?? "";
-    }
-    const searchFolders = document.getElementById(
-      "quarry-image-search-folders"
-    );
-    if (searchFolders) {
-      const setting = searchFolders.closest(
-        ".quarry-search-folder-setting"
-      );
-      if (setting) {
-        setting.hidden = !canViewImageHistory;
-      }
-      searchFolders.innerHTML = canViewImageHistory ? renderFolderPicker(
-        data.imageSearchDirectories ?? [""],
-        data.imageSearchDirectoryOptions ?? []
-      ) : "";
-      syncPicker(searchFolders);
-    }
+    if (folderEl) folderEl.value = data.datasetsFolder ?? "";
     const addToExisting = data.addToExistingTag ?? true;
     const addToExistingEl = document.getElementById(
       ADD_TO_EXISTING_TAG_ID
@@ -3515,7 +4094,6 @@
       addToExistingEl.checked = addToExisting;
     }
     setAddToExistingTag(addToExisting);
-    setCompletionDatasets(data.datasets);
     const datasetsEl = document.getElementById("quarry-datasets");
     if (datasetsEl) {
       datasetsEl.innerHTML = renderDatasets(
@@ -3542,45 +4120,58 @@
     }, MESSAGE_TIMEOUT_MS);
   };
   var loadSettings = () => {
-    genericRequest("QuarryGetSettings", {}, (data) => {
-      if (!data.success) {
-        return;
+    requestSettings(
+      "QuarryGetSettings",
+      () => ({}),
+      (data) => {
+        if (!data.success) {
+          return;
+        }
+        if (data.requirementsInstalled === false) {
+          showInstallGate();
+          return;
+        }
+        ensureFormRendered();
+        applyResponse(data);
+      },
+      () => {
+        if (document.getElementById("quarry-form")) {
+          showMessage2("Failed to load settings. Try again.", "error");
+        } else {
+          const host = document.getElementById(QUARRY_TAB_BODY_ID);
+          if (host)
+            host.textContent = "Failed to load settings. Reload the page to try again.";
+        }
       }
-      if (data.requirementsInstalled === false) {
-        showInstallGate();
-        return;
-      }
-      ensureFormRendered();
-      applyResponse(data);
-    });
+    );
   };
   var saveSettings = () => {
     const folder = document.getElementById("quarry-folder").value.trim();
-    const container = document.getElementById("quarry-datasets");
-    const promptColumns = container ? collectPromptColumns(container) : {};
-    const tagColumns = container ? collectTagColumns(container) : {};
-    const disabledDatasets = container ? collectDisabledDatasets(container) : [];
     const addToExistingEl = document.getElementById(
       ADD_TO_EXISTING_TAG_ID
     );
-    genericRequest(
+    const changes = {
+      datasetsFolder: folder,
+      addToExistingTag: addToExistingEl?.checked ?? true,
+      exploreUniqueLimit: Number(
+        document.getElementById(
+          "quarry-explore-unique-limit"
+        ).value
+      ),
+      exploreLengthLimit: Number(
+        document.getElementById(
+          "quarry-explore-length-limit"
+        ).value
+      ),
+      exploreDistinctPercent: Number(
+        document.getElementById(
+          "quarry-explore-distinct-percent"
+        ).value
+      )
+    };
+    requestSettings(
       "QuarrySaveSettings",
-      {
-        datasetsFolder: folder,
-        ...canViewImageHistory ? {
-          imageSearchDirectoriesJson: JSON.stringify(
-            selectedFolderValues(
-              document.getElementById(
-                "quarry-image-search-folders"
-              )
-            )
-          )
-        } : {},
-        promptColumnsJson: JSON.stringify(promptColumns),
-        tagColumnsJson: JSON.stringify(tagColumns),
-        disabledDatasetsJson: JSON.stringify(disabledDatasets),
-        addToExistingTag: addToExistingEl?.checked ?? true
-      },
+      () => ({ ...savedSettingsRequest(), ...changes }),
       (data) => {
         if (data.success) {
           applyResponse(data);
@@ -3591,7 +4182,8 @@
             "error"
           );
         }
-      }
+      },
+      () => showMessage2("Failed to save settings. Try again.", "error")
     );
   };
   var refresh = () => {
@@ -3601,20 +4193,28 @@
     if (button) {
       button.disabled = true;
     }
-    genericRequest("QuarryRefresh", {}, (data) => {
-      if (button) {
-        button.disabled = false;
+    requestSettings(
+      "QuarryRefresh",
+      () => ({}),
+      (data) => {
+        if (button) {
+          button.disabled = false;
+        }
+        if (data.success) {
+          applyResponse(data);
+          showMessage2(data.message ?? "Refreshed.", "success");
+        } else {
+          showMessage2(
+            `Refresh failed: ${data.error ?? "unknown error"}`,
+            "error"
+          );
+        }
+      },
+      () => {
+        if (button) button.disabled = false;
+        showMessage2("Failed to refresh datasets. Try again.", "error");
       }
-      if (data.success) {
-        applyResponse(data);
-        showMessage2(data.message ?? "Refreshed.", "success");
-      } else {
-        showMessage2(
-          `Refresh failed: ${data.error ?? "unknown error"}`,
-          "error"
-        );
-      }
-    });
+    );
   };
   var cleanTempFiles = () => {
     const button = document.getElementById(
@@ -3644,8 +4244,10 @@
   var previewDataset = null;
   var previewShown = 0;
   var previewTotal = null;
-  var previewExhausted = false;
   var previewBusy = false;
+  var previewRequest = 0;
+  var previewError = "";
+  var explorer = null;
   var ensurePreviewModal = () => {
     if (document.getElementById(PREVIEW_MODAL_ID)) {
       return;
@@ -3655,11 +4257,12 @@
     modal.id = PREVIEW_MODAL_ID;
     modal.tabIndex = -1;
     modal.setAttribute("role", "dialog");
+    modal.setAttribute("aria-labelledby", PREVIEW_TITLE_ID);
     modal.innerHTML = `
         <div class="modal-dialog modal-xl quarry-preview-dialog" role="document">
             <div class="modal-content">
                 <div class="modal-header">
-                    <h5 class="modal-title" id="${PREVIEW_TITLE_ID}">Preview</h5>
+                    <h5 class="modal-title" id="${PREVIEW_TITLE_ID}">Explore</h5>
                 </div>
                 <div class="modal-body">
                     <div id="${PREVIEW_BODY_ID}" class="quarry-preview-body"></div>
@@ -3667,17 +4270,15 @@
                 <div class="modal-footer quarry-preview-footer">
                     <span id="${PREVIEW_STATUS_ID}" class="quarry-preview-status"></span>
                     <span class="quarry-preview-footer-actions">
-                        <button type="button" id="${PREVIEW_CLEAR_ID}" class="basic-button" title="Drop this dataset's cached preview rows and reload the first page">Clear cache</button>
-                        <button type="button" id="${PREVIEW_LOAD_MORE_ID}" class="basic-button" title="Load and cache ${PREVIEW_LOAD_MORE_COUNT} more rows">Load ${PREVIEW_LOAD_MORE_COUNT} more</button>
-                        <button type="button" class="btn btn-secondary basic-button" data-bs-dismiss="modal">Close</button>
+                        <button type="button" id="${PREVIEW_REFRESH_ID}" class="basic-button quarry-modal-action" hidden title="Replace the displayed rows with up to 100 fresh random rows">Refresh sample</button>
+                        <button type="button" class="basic-button quarry-modal-action" data-bs-dismiss="modal">Close</button>
                     </span>
                 </div>
             </div>
         </div>`;
     document.body.appendChild(modal);
     modal.querySelector('[data-bs-dismiss="modal"]')?.addEventListener("click", hidePreviewModal);
-    document.getElementById(PREVIEW_LOAD_MORE_ID)?.addEventListener("click", loadMorePreview);
-    document.getElementById(PREVIEW_CLEAR_ID)?.addEventListener("click", clearPreviewCache);
+    document.getElementById(PREVIEW_REFRESH_ID)?.addEventListener("click", newPreviewSample);
   };
   var showPreviewModal = () => {
     if (typeof $ === "function") {
@@ -3703,106 +4304,106 @@
     }
   };
   var updatePreviewControls = () => {
-    const loadMore2 = document.getElementById(
-      PREVIEW_LOAD_MORE_ID
-    );
-    const clear = document.getElementById(
-      PREVIEW_CLEAR_ID
+    const refresh2 = document.getElementById(
+      PREVIEW_REFRESH_ID
     );
     const status = document.getElementById(PREVIEW_STATUS_ID);
-    if (loadMore2) {
-      loadMore2.disabled = previewBusy || previewExhausted || !previewDataset;
-    }
-    if (clear) {
-      clear.disabled = previewBusy || !previewDataset;
-    }
+    if (refresh2) refresh2.disabled = previewBusy || !previewDataset;
     if (status) {
-      status.textContent = previewBusy ? "Loading…" : renderPreviewStatus(previewShown, previewTotal);
+      status.textContent = previewBusy ? "Loading…" : previewError || renderPreviewStatus(previewShown, previewTotal);
     }
   };
-  var fetchPreview = (dataset, limit, isLoadMore) => {
+  var fetchPreview = (dataset) => {
+    const request2 = ++previewRequest;
     previewBusy = true;
+    previewError = "";
     updatePreviewControls();
     genericRequest(
       "QuarryPreviewDataset",
-      { dataset, limit },
+      { dataset, limit: PREVIEW_ROW_LIMIT },
       (data) => {
-        previewBusy = false;
-        if (previewDataset !== dataset) {
+        if (request2 !== previewRequest) {
           return;
         }
-        const bodyEl = document.getElementById(PREVIEW_BODY_ID);
+        previewBusy = false;
         if (!data.success) {
-          if (bodyEl && !isLoadMore) {
-            bodyEl.innerHTML = `<div class="quarry-preview-error">${escapeHtml(data.error ?? "Failed to load preview.")}</div>`;
-          }
+          previewError = data.error ?? "Failed to load rows. Try loading again.";
           updatePreviewControls();
           return;
         }
         const columns = data.columns ?? [];
-        const rows = data.rows ?? [];
+        const rows = (data.rows ?? []).slice(0, PREVIEW_ROW_LIMIT);
         previewShown = rows.length;
         previewTotal = data.rowCount ?? null;
-        previewExhausted = rows.length < limit || previewTotal !== null && previewShown >= previewTotal;
         applyRowCount(dataset, previewTotal);
-        if (bodyEl) {
-          bodyEl.innerHTML = renderPreviewTable(columns, rows);
-        }
+        explorer?.setRows(columns, rows);
+        updatePreviewControls();
+      },
+      0,
+      () => {
+        if (request2 !== previewRequest) return;
+        previewBusy = false;
+        previewError = "Failed to load rows. Try again.";
         updatePreviewControls();
       }
     );
   };
   var openPreview = (dataset) => {
+    const entry = currentDatasets.find((item) => item.name === dataset);
+    if (!entry) return;
     ensurePreviewModal();
+    explorer?.dispose();
+    previewRequest++;
+    previewBusy = false;
+    previewError = "";
     previewDataset = dataset;
     previewShown = 0;
     previewTotal = null;
-    previewExhausted = false;
     const titleEl = document.getElementById(PREVIEW_TITLE_ID);
     if (titleEl) {
-      titleEl.textContent = `Preview — ${dataset}`;
+      titleEl.textContent = `Explore — ${dataset}`;
     }
     const bodyEl = document.getElementById(PREVIEW_BODY_ID);
     if (bodyEl) {
-      bodyEl.innerHTML = `<div class="quarry-preview-loading">Loading…</div>`;
+      explorer = new DatasetExplorer(
+        bodyEl,
+        entry,
+        renderPreviewTable,
+        hidePreviewModal,
+        newPreviewSample,
+        (showRows) => {
+          const refresh2 = document.getElementById(PREVIEW_REFRESH_ID);
+          if (refresh2) refresh2.hidden = !showRows;
+          const status = document.getElementById(PREVIEW_STATUS_ID);
+          if (status) status.hidden = !showRows;
+        },
+        currentDatasets,
+        (source, names) => {
+          const title = document.getElementById(PREVIEW_TITLE_ID);
+          if (title)
+            title.textContent = names.length > 1 ? `Explore — ${names.length} datasets` : `Explore — ${source.name}`;
+          if (previewDataset !== source.name) {
+            previewDataset = source.name;
+            previewShown = 0;
+            previewTotal = null;
+            previewRequest++;
+            previewBusy = false;
+            if (!document.querySelector(
+              ".quarry-explore-rows-view"
+            )?.hidden)
+              fetchPreview(source.name);
+          }
+        },
+        mountDatasetSettings
+      );
     }
     showPreviewModal();
-    fetchPreview(dataset, PREVIEW_ROW_LIMIT, false);
+    explorer?.testQuery();
   };
-  var loadMorePreview = () => {
-    if (!previewDataset || previewBusy || previewExhausted) {
-      return;
+  var newPreviewSample = () => {
+    if (previewDataset) {
+      fetchPreview(previewDataset);
     }
-    fetchPreview(previewDataset, previewShown + PREVIEW_LOAD_MORE_COUNT, true);
-  };
-  var clearPreviewCache = () => {
-    const dataset = previewDataset;
-    if (!dataset || previewBusy) {
-      return;
-    }
-    previewBusy = true;
-    updatePreviewControls();
-    genericRequest(
-      "QuarryClearPreviewCache",
-      { dataset },
-      (data) => {
-        previewBusy = false;
-        if (previewDataset !== dataset) {
-          return;
-        }
-        if (!data.success) {
-          updatePreviewControls();
-          return;
-        }
-        previewShown = 0;
-        previewExhausted = false;
-        const bodyEl = document.getElementById(PREVIEW_BODY_ID);
-        if (bodyEl) {
-          bodyEl.innerHTML = `<div class="quarry-preview-loading">Loading…</div>`;
-        }
-        fetchPreview(dataset, PREVIEW_ROW_LIMIT, false);
-      }
-    );
   };
   var toggleFolder2 = (toggle) => {
     const folder = toggle.getAttribute("data-folder");
@@ -3831,27 +4432,48 @@
   };
   var toggleDatasetEnabled = (button) => {
     const name = button.getAttribute("data-dataset");
-    if (!name) {
-      return;
-    }
+    if (!name) return;
     const next = button.getAttribute("aria-checked") === "false";
-    applyEnabledState(button, next);
-    button.disabled = true;
-    genericRequest(
+    const updateButton = (enabled, pending) => {
+      const live = Array.from(
+        document.querySelectorAll(
+          ".quarry-dataset-enable"
+        )
+      ).find((item) => item.getAttribute("data-dataset") === name);
+      if (live) {
+        applyEnabledState(live, enabled);
+        live.disabled = pending;
+      }
+    };
+    const fail = (message) => {
+      const dataset = currentDatasets.find((item) => item.name === name);
+      updateButton(dataset?.enabled !== false, false);
+      showMessage2(message, "error");
+    };
+    updateButton(next, true);
+    requestSettings(
       "QuarrySetDatasetEnabled",
-      { dataset: name, enabled: next },
+      () => {
+        updateButton(next, true);
+        return { dataset: name, enabled: next };
+      },
       (data) => {
-        button.disabled = false;
         if (data.success) {
+          const dataset = currentDatasets.find(
+            (item) => item.name === name
+          );
+          if (dataset) dataset.enabled = next;
+          updateButton(next, false);
           recomputeReferences();
         } else {
-          applyEnabledState(button, !next);
-          showMessage2(
-            `Failed to ${next ? "enable" : "disable"} '${name}': ${data.error ?? "unknown error"}`,
-            "error"
+          fail(
+            `Failed to ${next ? "enable" : "disable"} '${name}': ${data.error ?? "unknown error"}`
           );
         }
-      }
+      },
+      () => fail(
+        `Failed to ${next ? "enable" : "disable"} '${name}'. Try again.`
+      )
     );
   };
   var datasetsClickHandler = (event) => {
@@ -3899,6 +4521,13 @@
       saveSettings();
     });
     document.getElementById("quarry-refresh")?.addEventListener("click", refresh);
+    document.getElementById("quarry-settings-toggle")?.addEventListener("click", () => {
+      const panel = document.getElementById("quarry-global-settings");
+      const button = document.getElementById("quarry-settings-toggle");
+      if (!panel || !button) return;
+      panel.hidden = !panel.hidden;
+      button.setAttribute("aria-expanded", String(!panel.hidden));
+    });
     document.getElementById("quarry-clean-temp")?.addEventListener("click", cleanTempFiles);
     document.getElementById("quarry-download-datasets")?.addEventListener("click", () => openDownloadModal(loadSettings));
     document.getElementById("quarry-run-query")?.addEventListener("click", openRunQueryModal);
@@ -3956,6 +4585,664 @@
   };
   var quarry = {
     init
+  };
+
+  // frontend/search.ts
+  var POLL_MS2 = 800;
+  var SEARCH_LIMIT = 2e3;
+  var LOAD_MORE_SIZE = 1e3;
+  var operatorsForType = (catalog, type) => catalog[type] ?? [];
+  var opNeedsValue = (op) => op !== "is_true" && op !== "is_false";
+  var buildSearchRequest = (rows) => rows.filter(
+    (row) => row.field && row.op && (!opNeedsValue(row.op) || row.value.trim() !== "")
+  ).map((row) => ({
+    field: row.field,
+    op: row.op,
+    value: opNeedsValue(row.op) ? row.value : ""
+  }));
+  var rowToObject = (columns, row) => {
+    const obj = {};
+    for (let i = 0; i < columns.length; i++) {
+      obj[columns[i]] = row[i] ?? "";
+    }
+    return obj;
+  };
+  var resultsInfoText = (hasIndex2, shown, total2) => {
+    if (!hasIndex2) {
+      return "";
+    }
+    if (total2 === 0) {
+      return "No matching images.";
+    }
+    if (shown < total2) {
+      return `Showing ${shown} of ${total2} matches.`;
+    }
+    return `${total2} match${total2 === 1 ? "" : "es"}.`;
+  };
+  var loadMoreState = (available2, hasIndex2, shown, total2, pageSize, busy) => {
+    const remaining = total2 - shown;
+    if (!available2 || !hasIndex2 || remaining <= 0) {
+      return { visible: false, disabled: true, label: "" };
+    }
+    const next = Math.min(pageSize, remaining);
+    return {
+      visible: true,
+      disabled: busy,
+      label: busy ? "Loading…" : `Load ${next} more (${remaining} remaining)`
+    };
+  };
+  var coreFields = [];
+  var discoveredFields = [];
+  var operatorCatalog = {};
+  var available = true;
+  var hasIndex = false;
+  var total = 0;
+  var scanPollTimer = null;
+  var browser = null;
+  var loadedFiles = [];
+  var loadMoreBusy = false;
+  var searchPending = false;
+  var searchGeneration = 0;
+  var body = () => document.getElementById(IMAGE_SEARCH_BODY_ID);
+  var el = (id) => document.getElementById(id);
+  var request = (url, data, onOk, onErr) => {
+    genericRequest(
+      url,
+      data,
+      onOk,
+      0,
+      onErr ? (e) => onErr(typeof e === "string" ? e : "Request failed.") : null
+    );
+  };
+  var fieldOptionsHtml = () => {
+    const core = coreFields.map(
+      (field) => `<option value="${escapeHtml(field.name)}" data-type="${field.type}">${escapeHtml(field.label)}</option>`
+    ).join("");
+    const discovered = discoveredFields.map(
+      (name) => `<option value="${escapeHtml(name)}" data-type="discovered">${escapeHtml(name)}</option>`
+    ).join("");
+    const discoveredGroup = discovered ? `<optgroup label="Discovered fields">${discovered}</optgroup>` : "";
+    return `<optgroup label="Fields">${core}</optgroup>${discoveredGroup}`;
+  };
+  var opOptionsHtml = (type) => operatorsForType(operatorCatalog, type).map(
+    (op) => `<option value="${escapeHtml(op.value)}">${escapeHtml(op.label)}</option>`
+  ).join("");
+  var filterRowHtml = () => `<div class="imagesearch-filter-row">
+        <select class="imagesearch-field auto-dropdown">${fieldOptionsHtml()}</select>
+        <select class="imagesearch-op auto-dropdown">${opOptionsHtml(firstFieldType())}</select>
+        <input type="text" class="imagesearch-value auto-text" placeholder="value" autocomplete="off">
+        <button type="button" class="basic-button imagesearch-remove" title="Remove this filter">✕</button>
+    </div>`;
+  var firstFieldType = () => coreFields[0]?.type ?? "text";
+  var skeletonHtml = () => `<div class="imagesearch-top">
+        <div class="imagesearch-header">
+            <div class="imagesearch-title-row">
+                <span class="imagesearch-title">Search your image history</span>
+                <span class="imagesearch-scan-controls">
+                    <button type="button" class="basic-button" id="imagesearch-folders-toggle" aria-expanded="false" aria-controls="imagesearch-folders-settings" hidden>Search folders</button>
+                    <button type="button" class="basic-button" id="imagesearch-rescan">Rescan history</button>
+                    <button type="button" class="basic-button" id="imagesearch-cancel-scan" style="display:none">Cancel</button>
+                </span>
+            </div>
+            <div id="imagesearch-folders-settings" class="imagesearch-folders-settings" hidden></div>
+            <div class="imagesearch-progress quarry-dl-progress" id="imagesearch-progress" style="display:none">
+                <div class="quarry-dl-bar" id="imagesearch-progress-bar"></div>
+            </div>
+            <div class="imagesearch-status" id="imagesearch-status"></div>
+            <div class="imagesearch-notice" id="imagesearch-notice"></div>
+        </div>
+        <div class="imagesearch-controls" id="imagesearch-controls">
+            <div class="imagesearch-filters" id="imagesearch-filters"></div>
+            <div class="imagesearch-actions">
+                <button type="button" class="basic-button" id="imagesearch-add-filter">+ Add filter</button>
+                <span class="imagesearch-spacer"></span>
+                <label for="imagesearch-sort">Sort:</label>
+                <select id="imagesearch-sort" class="auto-dropdown">
+                    <option value="date-desc">Newest first</option>
+                    <option value="date-asc">Oldest first</option>
+                    <option value="name-asc">Name A–Z</option>
+                    <option value="name-desc">Name Z–A</option>
+                </select>
+                <button type="button" class="basic-button imagesearch-search-button" id="imagesearch-search">Search</button>
+            </div>
+        </div>
+        <div class="imagesearch-results-info" id="imagesearch-results-info"></div>
+    </div>
+    <div class="browser_container imagesearch-results-browser" id="imagesearch-results-browser"></div>
+    <div class="imagesearch-loadmore" id="imagesearch-loadmore" style="display:none">
+        <button type="button" class="basic-button imagesearch-loadmore-button" id="imagesearch-loadmore-btn">Load more</button>
+    </div>`;
+  var readFilters = () => {
+    const rows = [];
+    for (const row of Array.from(
+      document.querySelectorAll(".imagesearch-filter-row")
+    )) {
+      const field = row.querySelector(".imagesearch-field")?.value ?? "";
+      const op = row.querySelector(".imagesearch-op")?.value ?? "";
+      const value = row.querySelector(".imagesearch-value")?.value ?? "";
+      rows.push({ field, op, value });
+    }
+    return rows;
+  };
+  var sortParams = () => {
+    const value = el("imagesearch-sort")?.value ?? "date-desc";
+    const [sortBy, dir] = value.split("-");
+    return { sortBy, sortDescending: dir !== "asc" };
+  };
+  var basename = (path) => {
+    const slash = path.lastIndexOf("/");
+    return slash >= 0 ? path.slice(slash + 1) : path;
+  };
+  var toBrowserFile = (obj) => {
+    const path = obj.path ?? "";
+    return {
+      name: path,
+      data: {
+        src: `${getImageOutPrefix()}/${path}`,
+        fullsrc: path,
+        name: basename(path),
+        metadata: obj.full_metadata ?? ""
+      }
+    };
+  };
+  var listResults = (_folder, _isRefresh, callback, _depth) => {
+    searchGeneration++;
+    searchPending = true;
+    loadMoreBusy = false;
+    if (!available) {
+      loadedFiles = [];
+      searchPending = false;
+      updateResultsUI();
+      callback([], []);
+      return;
+    }
+    const { sortBy, sortDescending } = sortParams();
+    const filters = buildSearchRequest(readFilters());
+    request(
+      "QuarrySearchImageHistory",
+      {
+        filtersJson: JSON.stringify(filters),
+        sortBy,
+        sortDescending,
+        limit: SEARCH_LIMIT,
+        offset: 0
+      },
+      (data) => {
+        searchPending = false;
+        available = data.available ?? true;
+        hasIndex = data.hasIndex ?? false;
+        total = data.total ?? 0;
+        const columns = data.columns ?? [];
+        loadedFiles = (data.rows ?? []).map(
+          (row) => toBrowserFile(rowToObject(columns, row))
+        );
+        updateResultsUI();
+        reflectAvailability();
+        applyWarnings(data.warnings ?? []);
+        callback([], loadedFiles);
+      },
+      (message) => {
+        searchPending = false;
+        setNotice(message, "error");
+        loadedFiles = [];
+        updateResultsUI();
+        callback([], []);
+      }
+    );
+  };
+  var selectResult = (file, div) => {
+    selectOutputInHistory(file, div);
+    const results = el("imagesearch-results-browser");
+    if (!results) {
+      return;
+    }
+    for (const block of Array.from(
+      results.getElementsByClassName("image-block")
+    )) {
+      block.classList.toggle("image-block-current", block === div);
+    }
+  };
+  var ensureBrowser = () => {
+    if (browser) {
+      return;
+    }
+    browser = new GenPageBrowserClass(
+      "imagesearch-results-browser",
+      listResults,
+      "quarryimagesearch",
+      "Thumbnails",
+      describeOutputFile,
+      selectResult
+    );
+    browser.showDepth = false;
+    browser.showUpFolder = false;
+    browser.showFilter = false;
+    browser.allowMultiSelect = true;
+    body()?.addEventListener("scroll", () => {
+      const scroller = body();
+      if (scroller) {
+        browserUtil.makeVisible(scroller);
+      }
+    });
+  };
+  var runSearch = () => {
+    if (!available) {
+      return;
+    }
+    ensureBrowser();
+    browser?.lightRefresh();
+    updateLoadMore();
+  };
+  var appendResults = (newFiles) => {
+    const startId = loadedFiles.length;
+    loadedFiles = loadedFiles.concat(newFiles);
+    if (!browser?.contentDiv || newFiles.length === 0) {
+      return;
+    }
+    browser.lastFiles = loadedFiles;
+    if (browser.lastListCache) {
+      browser.lastListCache.files = loadedFiles;
+    }
+    browser.buildContentList(browser.contentDiv, newFiles, null, startId);
+    if (browser.headerCount) {
+      browser.headerCount.textContent = String(loadedFiles.length);
+    }
+  };
+  var loadMore = () => {
+    if (!available || searchPending || loadMoreBusy || loadedFiles.length >= total || !browser?.contentDiv) {
+      return;
+    }
+    const gen = searchGeneration;
+    loadMoreBusy = true;
+    updateLoadMore();
+    const { sortBy, sortDescending } = sortParams();
+    const filters = buildSearchRequest(readFilters());
+    request(
+      "QuarrySearchImageHistory",
+      {
+        filtersJson: JSON.stringify(filters),
+        sortBy,
+        sortDescending,
+        limit: LOAD_MORE_SIZE,
+        offset: loadedFiles.length
+      },
+      (data) => {
+        if (gen !== searchGeneration) {
+          return;
+        }
+        loadMoreBusy = false;
+        total = data.total ?? total;
+        const columns = data.columns ?? [];
+        appendResults(
+          (data.rows ?? []).map(
+            (row) => toBrowserFile(rowToObject(columns, row))
+          )
+        );
+        updateResultsUI();
+      },
+      (message) => {
+        if (gen !== searchGeneration) {
+          return;
+        }
+        loadMoreBusy = false;
+        setNotice(message || "Could not load more results.", "error");
+        updateLoadMore();
+      }
+    );
+  };
+  var setNotice = (text, type = "info") => {
+    const notice = el("imagesearch-notice");
+    if (notice) {
+      notice.textContent = text;
+      notice.className = text ? `imagesearch-notice imagesearch-notice-${type}` : "imagesearch-notice";
+    }
+  };
+  var applyWarnings = (warnings) => {
+    if (warnings.length) {
+      setNotice(warnings.join(" "), "warning");
+    } else if ((el("imagesearch-notice")?.className ?? "").includes(
+      "imagesearch-notice-warning"
+    )) {
+      setNotice("");
+    }
+  };
+  var updateResultsInfo = () => {
+    const info = el("imagesearch-results-info");
+    if (info) {
+      info.textContent = resultsInfoText(hasIndex, loadedFiles.length, total);
+    }
+  };
+  var updateLoadMore = () => {
+    const wrap = el("imagesearch-loadmore");
+    const button = el("imagesearch-loadmore-btn");
+    if (!wrap || !button) {
+      return;
+    }
+    const state = loadMoreState(
+      available,
+      hasIndex,
+      loadedFiles.length,
+      total,
+      LOAD_MORE_SIZE,
+      loadMoreBusy || searchPending
+    );
+    wrap.style.display = state.visible ? "" : "none";
+    button.disabled = state.disabled;
+    if (state.visible) {
+      button.textContent = state.label;
+    }
+  };
+  var updateResultsUI = () => {
+    updateResultsInfo();
+    updateLoadMore();
+  };
+  var reflectAvailability = () => {
+    const controls = el("imagesearch-controls");
+    const rescan = el("imagesearch-rescan");
+    const results = el("imagesearch-results-browser");
+    const loadmore = el("imagesearch-loadmore");
+    if (!available) {
+      if (controls) {
+        controls.style.display = "none";
+      }
+      if (results) {
+        results.style.display = "none";
+      }
+      if (loadmore) {
+        loadmore.style.display = "none";
+      }
+      if (rescan) {
+        rescan.disabled = true;
+      }
+      setNotice(
+        "Image Search needs Quarry's Lance reader. Open the Quarry tab and install requirements, then come back.",
+        "error"
+      );
+      return;
+    }
+    if (rescan) {
+      rescan.disabled = false;
+    }
+    if (controls) {
+      controls.style.display = "";
+    }
+    if (results) {
+      results.style.display = "";
+    }
+    if (!hasIndex) {
+      setNotice(
+        "Your image history hasn't been indexed yet. Click “Rescan history” to build the search index.",
+        "info"
+      );
+    } else if ((el("imagesearch-notice")?.className ?? "").includes(
+      "imagesearch-notice-info"
+    )) {
+      setNotice("");
+    }
+  };
+  var loadFields = (then) => {
+    request(
+      "QuarryImageHistoryFields",
+      {},
+      (data) => {
+        if (data.success) {
+          coreFields = data.coreFields ?? [];
+          discoveredFields = data.discoveredFields ?? [];
+          operatorCatalog = data.operators ?? {};
+          available = data.available ?? true;
+          hasIndex = data.hasIndex ?? false;
+          refreshFieldDropdowns();
+          reflectAvailability();
+        }
+        then?.();
+      },
+      (message) => {
+        setNotice(message, "error");
+        then?.();
+      }
+    );
+  };
+  var refreshFieldDropdowns = () => {
+    for (const fieldSelect of Array.from(
+      document.querySelectorAll(".imagesearch-field")
+    )) {
+      const previous = fieldSelect.value;
+      fieldSelect.innerHTML = fieldOptionsHtml();
+      if (Array.from(fieldSelect.options).some((o) => o.value === previous)) {
+        fieldSelect.value = previous;
+      }
+    }
+  };
+  var addFilterRow = () => {
+    const container = el("imagesearch-filters");
+    if (!container) {
+      return;
+    }
+    container.insertAdjacentHTML("beforeend", filterRowHtml());
+  };
+  var ensureOneFilterRow = () => {
+    if (!document.querySelector(".imagesearch-filter-row")) {
+      addFilterRow();
+    }
+  };
+  var onFieldChanged = (row) => {
+    const fieldSelect = row.querySelector(".imagesearch-field");
+    const opSelect = row.querySelector(".imagesearch-op");
+    const value = row.querySelector(".imagesearch-value");
+    if (!fieldSelect || !opSelect) {
+      return;
+    }
+    const selected = fieldSelect.options[fieldSelect.selectedIndex];
+    const type = selected?.getAttribute("data-type") ?? "text";
+    opSelect.innerHTML = opOptionsHtml(type);
+    if (value) {
+      value.style.display = opNeedsValue(opSelect.value) ? "" : "none";
+    }
+  };
+  var onOpChanged = (row) => {
+    const opSelect = row.querySelector(".imagesearch-op");
+    const value = row.querySelector(".imagesearch-value");
+    if (opSelect && value) {
+      value.style.display = opNeedsValue(opSelect.value) ? "" : "none";
+    }
+  };
+  var setScanUI = (scanning) => {
+    const rescan = el("imagesearch-rescan");
+    const cancel = el("imagesearch-cancel-scan");
+    const progress = el("imagesearch-progress");
+    if (rescan) {
+      rescan.disabled = scanning;
+    }
+    if (cancel) {
+      cancel.style.display = scanning ? "" : "none";
+    }
+    if (progress) {
+      progress.style.display = scanning ? "" : "none";
+    }
+  };
+  var renderScanStatus = (status) => {
+    const bar = el("imagesearch-progress-bar");
+    const statusEl = el("imagesearch-status");
+    const totalFiles = status.filesTotal ?? 0;
+    const done = status.filesDone ?? 0;
+    const percent = totalFiles > 0 ? Math.min(100, Math.round(done / totalFiles * 100)) : 0;
+    if (bar) {
+      bar.style.width = `${percent}%`;
+    }
+    if (statusEl) {
+      if (status.state === "scanning") {
+        statusEl.textContent = `Scanning… ${done} / ${totalFiles} files (${status.filesIndexed ?? 0} indexed)`;
+      } else if (status.state === "finalizing") {
+        statusEl.textContent = "Writing index…";
+      } else if (status.state === "starting") {
+        statusEl.textContent = "Starting…";
+      } else {
+        statusEl.textContent = "";
+      }
+    }
+  };
+  var stopScanPolling = () => {
+    if (scanPollTimer) {
+      clearTimeout(scanPollTimer);
+      scanPollTimer = null;
+    }
+  };
+  var pollScanOnce = () => {
+    scanPollTimer = null;
+    request(
+      "QuarryImageHistoryStatus",
+      {},
+      (status) => {
+        if (!status.success) {
+          scanPollTimer = setTimeout(pollScanOnce, POLL_MS2);
+          return;
+        }
+        renderScanStatus(status);
+        if (status.active) {
+          scanPollTimer = setTimeout(pollScanOnce, POLL_MS2);
+          return;
+        }
+        finishScan(status);
+      },
+      () => {
+        scanPollTimer = setTimeout(pollScanOnce, POLL_MS2);
+      }
+    );
+  };
+  var finishScan = (status) => {
+    stopScanPolling();
+    setScanUI(false);
+    available = status.available ?? available;
+    hasIndex = status.hasIndex ?? hasIndex;
+    const statusEl = el("imagesearch-status");
+    if (status.state === "error") {
+      setNotice(
+        `Scan failed: ${status.scanError ?? "unknown error"}`,
+        "error"
+      );
+    } else if (status.state === "cancelled") {
+      if (statusEl) {
+        statusEl.textContent = "Scan cancelled.";
+      }
+    } else if (status.state === "done") {
+      if (statusEl) {
+        statusEl.textContent = `Done — indexed ${status.filesIndexed ?? 0}, pruned ${status.filesPruned ?? 0}.`;
+      }
+      loadFields(() => runSearch());
+    }
+  };
+  var startRescan = () => {
+    setScanUI(true);
+    setNotice("");
+    const statusEl = el("imagesearch-status");
+    if (statusEl) {
+      statusEl.textContent = "Starting…";
+    }
+    request(
+      "QuarryRescanImageHistory",
+      {},
+      () => {
+        if (!scanPollTimer) {
+          pollScanOnce();
+        }
+      },
+      (message) => {
+        setScanUI(false);
+        setNotice(message || "Could not start the scan.", "error");
+      }
+    );
+  };
+  var cancelRescan = () => {
+    request(
+      "QuarryCancelImageHistoryScan",
+      {},
+      () => {
+      },
+      () => {
+      }
+    );
+  };
+  var resumeScanIfActive = () => {
+    request(
+      "QuarryImageHistoryStatus",
+      {},
+      (status) => {
+        if (status.success && status.active) {
+          setScanUI(true);
+          renderScanStatus(status);
+          if (!scanPollTimer) {
+            pollScanOnce();
+          }
+        }
+      },
+      () => {
+      }
+    );
+  };
+  var wireEvents = () => {
+    if (!body()) {
+      return;
+    }
+    el("imagesearch-add-filter")?.addEventListener("click", addFilterRow);
+    el("imagesearch-search")?.addEventListener("click", runSearch);
+    el("imagesearch-loadmore-btn")?.addEventListener("click", loadMore);
+    el("imagesearch-rescan")?.addEventListener("click", startRescan);
+    el("imagesearch-cancel-scan")?.addEventListener("click", cancelRescan);
+    el("imagesearch-folders-toggle")?.addEventListener("click", () => {
+      const panel = el("imagesearch-folders-settings");
+      const button = el("imagesearch-folders-toggle");
+      if (!panel || !button) return;
+      panel.hidden = !panel.hidden;
+      button.setAttribute("aria-expanded", String(!panel.hidden));
+    });
+    el("imagesearch-sort")?.addEventListener("change", runSearch);
+    el("imagesearch-filters")?.addEventListener("change", (event) => {
+      const target = event.target;
+      const row = target?.closest(".imagesearch-filter-row");
+      if (!row) {
+        return;
+      }
+      if (target?.classList.contains("imagesearch-field")) {
+        onFieldChanged(row);
+      } else if (target?.classList.contains("imagesearch-op")) {
+        onOpChanged(row);
+      }
+    });
+    el("imagesearch-filters")?.addEventListener("click", (event) => {
+      const target = event.target;
+      if (target?.closest(".imagesearch-remove")) {
+        target.closest(".imagesearch-filter-row")?.remove();
+        ensureOneFilterRow();
+      }
+    });
+    el("imagesearch-filters")?.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        runSearch();
+      }
+    });
+  };
+  var initImageSearch = () => {
+    const container = body();
+    if (!container || container.dataset.built === "true") {
+      return;
+    }
+    container.dataset.built = "true";
+    container.innerHTML = skeletonHtml();
+    wireEvents();
+    const folders = el("imagesearch-folders-settings");
+    if (folders)
+      mountImageSearchFolders(folders, (allowed) => {
+        const button = el("imagesearch-folders-toggle");
+        if (button) button.hidden = !allowed;
+      });
+    loadFields(() => {
+      ensureOneFilterRow();
+      if (available && hasIndex) {
+        runSearch();
+      }
+      resumeScanIfActive();
+    });
   };
 
   // frontend/main.ts

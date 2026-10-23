@@ -8,6 +8,8 @@
 
 .quarry-settings {
     margin-bottom: 1rem;
+    max-width: 1500px;
+    margin-inline: auto;
 }
 
 #quarry-form > .input-group:first-child {
@@ -19,11 +21,13 @@
     display: flex;
     gap: 0.5rem;
     align-items: center;
+    flex-wrap: wrap;
 }
 
 .quarry-datasets {
     margin-top: 0.5rem;
     flex-basis: 100%;
+    overflow-x: auto;
 }
 
 .quarry-datasets-empty {
@@ -35,6 +39,12 @@
 .quarry-datasets-table {
     width: 100%;
     border-collapse: collapse;
+    table-layout: fixed;
+    min-width: 620px;
+}
+
+.quarry-col-rows {
+    width: 7rem;
 }
 
 .quarry-datasets-table th {
@@ -42,12 +52,12 @@
     font-weight: 600;
     font-size: 0.9em;
     color: var(--text-soft);
-    padding: 0.25rem 0.5rem;
+    padding: 0.65rem 0.75rem;
     border-bottom: 1px solid var(--light-border);
 }
 
 .quarry-datasets-table td {
-    padding: 0.3rem 0.5rem;
+    padding: 0.65rem 0.75rem;
     vertical-align: middle;
 }
 
@@ -62,22 +72,8 @@
     font-weight: 600;
 }
 
-.quarry-dataset-row:nth-child(even) {
-    background: var(--background-gray);
-}
-
-.quarry-dataset-row:hover {
-    background: color-mix(in srgb, var(--emphasis) 10%, transparent);
-}
-
-.quarry-dataset-row.quarry-dataset-in-prompt {
-    background: color-mix(in srgb, var(--green) 16%, transparent);
-    box-shadow: inset 3px 0 0 var(--green);
-}
-
 .quarry-enable-th,
 .quarry-dataset-enable-cell {
-    width: 1%;
     white-space: nowrap;
     text-align: center;
 }
@@ -120,13 +116,6 @@
     left: calc(2rem - 0.9rem);
 }
 
-.quarry-dataset-row.quarry-dataset-disabled .quarry-dataset-name-link,
-.quarry-dataset-row.quarry-dataset-disabled .quarry-dataset-column,
-.quarry-dataset-row.quarry-dataset-disabled .quarry-dataset-tags,
-.quarry-dataset-row.quarry-dataset-disabled .quarry-dataset-rows {
-    opacity: 0.5;
-}
-
 .quarry-dataset-name {
     font-weight: 600;
     overflow-wrap: anywhere;
@@ -139,15 +128,12 @@
     border: none;
     background: none;
     font: inherit;
-    font-family: monospace;
-    font-weight: 600;
-    color: var(--emphasis);
+    font-weight: 500;
+    color: var(--text);
     cursor: pointer;
     text-align: left;
 }
 
-/* The whole name cell is the click target (wired in settings.ts), so show the affordance across the cell:
-   a pointer cursor, and the name underlines whenever the cell is hovered — not only its exact text. */
 .quarry-dataset-name-cell {
     cursor: pointer;
 }
@@ -158,18 +144,15 @@
 }
 
 .quarry-dataset-column {
-    min-width: 8rem;
-}
-
-.quarry-dataset-tags {
-    vertical-align: top;
+    width: 100%;
+    min-width: 0;
 }
 
 .quarry-tag-option {
     display: flex;
     align-items: center;
     gap: 0.35rem;
-    white-space: nowrap;
+    overflow-wrap: anywhere;
     cursor: pointer;
     font-weight: normal;
     margin: 0;
@@ -217,7 +200,6 @@
     outline-offset: -2px;
 }
 
-/* Caret glyphs mirror SwarmUI's own folder tree: down when open, right when collapsed. */
 .quarry-folder-caret {
     display: inline-block;
     width: 1em;
@@ -258,8 +240,7 @@
     display: none;
 }
 
-.quarry-dataset-row[data-parent] > td:first-child,
-.quarry-remote-row[data-parent] > td:first-child {
+.quarry-dataset-row[data-parent] > .quarry-dataset-name-cell {
     padding-left: calc(0.5rem + var(--quarry-depth, 0) * 1.25rem);
 }
 
@@ -309,13 +290,789 @@
     font-family: monospace;
 }
 
-.quarry-preview-dialog {
-    max-width: 95vw;
+#quarry-preview-modal .modal-dialog.quarry-preview-dialog {
+    width: min(1150px, 95vw);
+    max-width: min(1150px, 95vw);
+    height: calc(100dvh - 2rem);
+    margin: 1rem auto;
+}
+#quarry-preview-modal .modal-content, #quarry-preview-modal .modal-body {
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+}
+#quarry-preview-modal .modal-content {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+#quarry-preview-modal .modal-header,
+#quarry-preview-modal .modal-footer {
+    flex: none;
+    padding: 0.65rem 0.85rem;
+}
+#quarry-preview-modal .modal-body {
+    display: flex;
+    flex: 1;
+    padding: 0.75rem;
 }
 
 .quarry-preview-body {
-    max-height: 70vh;
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.quarry-datasets-table th.quarry-rows-th {
+    text-align: right;
+}
+.quarry-global-settings {
+    flex-basis: 100%;
+    width: 100%;
+}
+
+.quarry-explore-limits {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    padding: 0.5rem 0;
+}
+
+.quarry-explore-limits label {
+    display: grid;
+    gap: 0.35rem;
+    flex: 1 1 15rem;
+}
+
+.quarry-explore-limits input {
+    width: 100%;
+    min-width: 0;
+}
+
+.quarry-explore-limits p {
+    flex-basis: 100%;
+}
+.quarry-save-hint, .quarry-explore-note {
+    color: var(--text-soft);
+    font-size: 0.9em;
+}
+.quarry-explore [hidden] {
+    display: none !important;
+}
+.quarry-explore {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+    overflow: hidden;
+}
+/* Keep navigation stationary when the selected dataset chips wrap. */
+.quarry-explore-top {
+    position: relative;
+    flex: none;
+    min-width: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 0.5rem 0.75rem;
+}
+.quarry-explore-fields-view,
+.quarry-explore-rows-view {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+    overflow: hidden;
+}
+.quarry-explore-editor {
+    flex: 0 1 auto;
+    max-height: 48%;
+    min-height: 0;
     overflow: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+    padding-right: 0;
+}
+.quarry-explore .basic-button,
+.quarry-download-dialog .basic-button,
+#quarry-preview-modal .quarry-modal-action {
+    min-height: 1.8rem;
+    margin: 0;
+    padding: 0.25rem 0.6rem;
+    border-radius: 0.3rem;
+    box-shadow: none;
+    font: inherit;
+    font-size: 0.9em;
+    line-height: 1.35;
+}
+.quarry-explore button:focus-visible,
+.quarry-explore summary:focus-visible,
+.quarry-explore-editor:focus-visible,
+.quarry-explore-result-scroll:focus-visible,
+.quarry-explore-table-scroll:focus-visible {
+    outline: 2px solid var(--emphasis);
+    outline-offset: 2px;
+}
+.quarry-explore-output-token:focus-visible {
+    outline: 2px solid var(--emphasis);
+    outline-offset: 2px;
+}
+.quarry-explore-tabs {
+    display: inline-grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
+    max-width: 100%;
+    gap: 0.2rem;
+    margin-bottom: 0.85rem;
+    padding: 0.2rem;
+    border: 1px solid var(--light-border);
+    border-radius: 0.45rem;
+    background: var(--background-soft);
+}
+.quarry-explore .quarry-explore-tab {
+    appearance: none;
+    min-height: 2.1rem;
+    margin: 0;
+    padding: 0.4rem 1rem;
+    border: 1px solid transparent;
+    border-radius: 0.3rem;
+    background: transparent;
+    box-shadow: none;
+    color: var(--text-soft);
+    font: inherit;
+    font-size: 0.9em;
+    font-weight: 600;
+    line-height: 1.3;
+    text-align: center;
+    text-decoration: none;
+    cursor: pointer;
+}
+.quarry-explore .quarry-explore-tab:hover {
+    color: var(--text);
+    background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+.quarry-explore .quarry-explore-tab[aria-selected="true"] {
+    border-color: color-mix(in srgb, var(--emphasis) 45%, var(--light-border));
+    background: color-mix(in srgb, var(--emphasis) 16%, var(--background));
+    color: var(--text);
+    box-shadow: none;
+    text-decoration: none;
+}
+.quarry-explore-scope {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem;
+    margin: 0 0 0.65rem;
+    min-width: 0;
+}
+.quarry-explore .quarry-explore-dataset-chip {
+    display: inline-flex;
+    align-items: center;
+    max-width: 100%;
+    background: var(--background-soft);
+    font-family: monospace;
+    font-size: 0.85em;
+    text-align: left;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    gap: 0;
+    border: 1px solid var(--light-border);
+    border-radius: 0.35rem;
+    padding: 0.25rem 0.5rem;
+}
+
+.quarry-explore-manage {
+    flex: none;
+}
+.quarry-explore-source {
+    display: grid;
+    gap: 0.35rem;
+    max-width: 32rem;
+    margin-bottom: 0.65rem;
+    font-size: 0.9em;
+}
+.quarry-explore-source select,
+.quarry-explore-dataset-search {
+    min-width: 0;
+    width: 100%;
+}
+.quarry-explore-dataset-picker {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+    overflow: hidden;
+    margin: 0;
+    padding: 0.75rem;
+    border: 1px solid var(--light-border);
+    border-radius: 0.4rem;
+    background: var(--background);
+}
+.quarry-explore:has(> .quarry-explore-dataset-picker:not([hidden])) > .quarry-explore-fields-view,
+.quarry-explore:has(> .quarry-explore-dataset-picker:not([hidden])) > .quarry-explore-rows-view {
+    display: none;
+}
+.quarry-explore-dataset-options {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    overscroll-behavior: contain;
+    margin-top: 0.5rem;
+    scrollbar-gutter: stable;
+}
+.quarry-explore-picker-footer {
+    display: flex;
+    justify-content: flex-end;
+    flex: none;
+    margin: 0.5rem -0.75rem -0.75rem;
+    padding: 0.65rem 0.75rem;
+    border-top: 1px solid var(--light-border);
+    background: var(--background);
+}
+.quarry-explore-dataset-option {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 11rem 8rem;
+    align-items: center;
+    gap: 0.35rem 0.5rem;
+    padding: 0.6rem 0.25rem;
+    border-bottom: 1px solid var(--light-border);
+}
+.quarry-explore-dataset-option > button {
+    width: 100%;
+    min-width: 0;
+}
+.quarry-explore-dataset-option:last-child {
+    border-bottom: 0;
+}
+.quarry-explore-dataset-option > span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    font-family: monospace;
+    font-size: 0.9em;
+}
+.quarry-explore-dataset-option small {
+    grid-column: 1 / -1;
+    color: var(--text-soft);
+    overflow-wrap: anywhere;
+}
+.quarry-explore-section-label {
+    display: block;
+    margin: 0 0 0.3rem;
+    color: var(--text);
+    font-size: 0.9em;
+    font-weight: 600;
+}
+.quarry-explore-filter-row {
+    display: grid;
+    grid-template-columns: minmax(7rem, 1fr) minmax(7rem, 0.7fr) minmax(8rem, 3fr);
+    gap: 0.4rem;
+    align-items: center;
+    padding: 0.35rem;
+    margin: 0;
+    border: 1px solid transparent;
+    border-radius: 0.3rem;
+}
+.quarry-explore-filter-row input, .quarry-explore-filter-row select {
+    width: 100%;
+    min-width: 0;
+    min-height: 1.8rem;
+}
+.quarry-explore-field {
+    min-width: 0;
+    margin: 0.6rem 0;
+}
+.quarry-explore-popover {
+    position: absolute;
+    z-index: 6;
+    top: 4rem;
+    left: 1rem;
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+    width: min(38rem, calc(100% - 2rem));
+    max-height: calc(100% - 5rem);
+    min-height: 0;
+    margin: 0;
+    overflow: hidden;
+    border: 1px solid var(--light-border);
+    border-radius: 0.4rem;
+    background: var(--background);
+    color: var(--text);
+    box-shadow: 0 0.5rem 1.5rem #0006;
+}
+.quarry-explore-value-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex: none;
+    gap: 0.75rem;
+    padding: 0.65rem 0.75rem;
+    border-bottom: 1px solid var(--light-border);
+    background: var(--background-soft);
+}
+.quarry-explore-value-heading strong {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+.quarry-explore-value-heading button {
+    flex: none;
+}
+.quarry-explore-popover-content {
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+    overflow: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+    padding: 0.65rem 0.75rem;
+}
+.quarry-explore-output {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.35rem 0.65rem;
+    margin: 0.5rem 0 0;
+    padding: 0.5rem 0 0.1rem;
+    border-top: 1px solid var(--light-border);
+}
+.quarry-explore-output > label:not(.quarry-explore-keys-label) {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.35rem;
+    max-width: 28rem;
+}
+.quarry-explore-output-add {
+    width: auto;
+    max-width: 100%;
+}
+.quarry-explore-output-selected {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin: 0;
+}
+.quarry-explore-output-selected:empty {
+    display: none;
+}
+.quarry-explore-keys-label {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin: 0.6rem 0;
+}
+.quarry-explore-format-panel label {
+    display: grid;
+    gap: 0.3rem;
+    margin: 0;
+    max-width: 28rem;
+}
+.quarry-explore-format-panel {
+    margin-top: 0.5rem;
+    padding: 0.6rem;
+    border: 1px solid var(--light-border);
+    border-radius: 0.3rem;
+    background: var(--background-soft);
+}
+.quarry-explore-format-panel > .quarry-explore-popover-content {
+    display: grid;
+    grid-template-columns: minmax(0, 0.8fr) repeat(2, minmax(0, 1fr));
+    gap: 0.5rem 0.85rem;
+    align-items: start;
+    overflow: visible;
+    padding: 0;
+    scrollbar-gutter: auto;
+}
+.quarry-format-setting {
+    min-width: 0;
+}
+.quarry-format-setting code {
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+}
+.quarry-explore-format-panel .quarry-explore-keys-label {
+    display: flex;
+}
+.quarry-explore-format-panel textarea {
+    width: 100%;
+    min-width: 0;
+}
+.quarry-explore-search-label {
+    display: grid;
+    gap: 0.35rem;
+    margin: 0.5rem 0 0;
+}
+.quarry-explore-search {
+    width: 100%;
+}
+.quarry-explore-suggestions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    padding: 0.5rem 0 0;
+}
+.quarry-explore-suggestions button {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    text-align: left;
+}
+.quarry-explore-suggestions button[aria-pressed="true"] {
+    border-color: var(--emphasis);
+    background: color-mix(in srgb, var(--emphasis) 18%, var(--background));
+    color: var(--text);
+}
+.quarry-explore-suggestions small {
+    color: var(--text-soft);
+    margin-left: 0.3rem;
+    font-variant-numeric: tabular-nums;
+}
+.quarry-explore-suggestions p {
+    flex-basis: 100%;
+    margin: 0.35rem 0;
+}
+.quarry-explore-error {
+    color: var(--quarry-status-error);
+    margin: 0.35rem 0;
+}
+.quarry-explore-error:empty {
+    margin: 0;
+}
+.quarry-explore-draft {
+    scrollbar-gutter: stable;
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+    overflow: hidden;
+    padding: 0.5rem 0 0;
+}
+.quarry-explore-filters {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.3rem;
+    margin-bottom: 0.5rem;
+}
+.quarry-explore-filters button {
+    text-align: left;
+    overflow-wrap: anywhere;
+    max-width: 100%;
+}
+.quarry-explore-query {
+    display: block;
+    flex: none;
+    max-height: 4.5em;
+    overflow: auto;
+    overscroll-behavior: contain;
+    margin-bottom: 0;
+    padding: 0.4rem 0.6rem;
+    border: 1px solid var(--light-border);
+    border-radius: 0.35rem;
+    background: var(--background-soft);
+    color: var(--text);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    line-height: 1.5;
+}
+.quarry-explore .quarry-explore-query-dataset {
+    display: inline;
+    min-height: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    color: var(--emphasis);
+    font: inherit;
+    line-height: inherit;
+    text-align: inherit;
+    text-decoration: underline;
+    text-decoration-color: color-mix(in srgb, var(--emphasis) 50%, transparent);
+    text-underline-offset: 0.2em;
+    cursor: pointer;
+    overflow-wrap: anywhere;
+}
+.quarry-explore .quarry-explore-query-dataset:hover {
+    text-decoration-color: currentColor;
+}
+.quarry-explore-output-token {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.2rem;
+    max-width: 100%;
+    margin: 0.1rem 0;
+    padding: 0 0.2rem 0 0.35rem;
+    border: 1px solid color-mix(in srgb, var(--emphasis) 45%, var(--light-border));
+    border-radius: 0.3rem;
+    background: color-mix(in srgb, var(--emphasis) 12%, var(--background));
+    color: var(--text);
+    vertical-align: baseline;
+    cursor: grab;
+}
+.quarry-explore-output-token > button {
+    appearance: none;
+    flex: none;
+    width: 1.4rem;
+    height: 1.5rem;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0.2rem;
+    background: transparent;
+    font: inherit;
+    line-height: 1;
+    text-align: center;
+    box-shadow: none;
+    cursor: pointer;
+}
+.quarry-output-remove::after {
+    content: "×";
+}
+.quarry-output-grip {
+    flex: none;
+    color: var(--text-soft);
+    cursor: grab;
+    user-select: none;
+}
+.quarry-output-grip::before {
+    content: "⠿";
+}
+.quarry-explore .quarry-explore-primary:disabled {
+    opacity: 0.6;
+}
+.quarry-explore .quarry-actions {
+    flex-wrap: nowrap;
+    flex: none;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0.4rem 0;
+}
+.quarry-explore .quarry-explore-note {
+    margin: 0.35rem 0;
+    line-height: 1.45;
+}
+.quarry-explore-rows {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+    overflow: hidden;
+    border: 1px solid var(--light-border);
+    border-radius: 0.35rem;
+}
+.quarry-explore-rows-caption {
+    margin: 0 0 0.65rem;
+    color: var(--text-soft);
+    font-size: 0.9em;
+}
+.quarry-explore-results {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    overflow: hidden;
+}
+.quarry-explore-result-summary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.3rem 0.65rem;
+    flex: none;
+    margin: 0.3rem 0;
+    color: var(--text-soft);
+    font-size: 0.9em;
+    font-variant-numeric: tabular-nums;
+}
+.quarry-explore-result-summary h6 {
+    margin: 0;
+    color: var(--text);
+}
+.quarry-explore-result-summary > details {
+    flex-basis: 100%;
+}
+.quarry-explore-source:empty {
+    display: none;
+}
+.quarry-explore-result-scroll {
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+    overflow: auto;
+    border: 1px solid var(--light-border);
+    border-radius: 0.35rem;
+    scrollbar-gutter: stable;
+    overscroll-behavior: contain;
+}
+.quarry-explore-result-heading {
+    flex: none;
+    margin: 0;
+    padding: 0.3rem 0.6rem;
+    border: 1px solid var(--light-border);
+    border-bottom: 0;
+    border-radius: 0.35rem 0.35rem 0 0;
+    background: var(--background-soft);
+    font-size: 0.9em;
+    overflow-wrap: anywhere;
+}
+.quarry-explore-result-heading + .quarry-explore-result-scroll {
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+}
+.quarry-explore-table-header {
+    flex: none;
+    min-width: 0;
+    overflow: hidden;
+    scrollbar-gutter: stable;
+    background: var(--background-soft);
+    border-bottom: 1px solid var(--light-border);
+}
+.quarry-explore-table-scroll {
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+    overflow: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+}
+.quarry-explore-table-scroll thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+}
+.quarry-explore-rows .quarry-preview-table {
+    table-layout: fixed;
+    min-width: 100%;
+    margin: 0;
+}
+.quarry-explore-table-header th,
+.quarry-explore-table-scroll td {
+    box-sizing: border-box;
+    padding: 0.5rem 0.65rem;
+}
+.quarry-explore-result-scroll .quarry-runquery-dataset-group {
+    margin-bottom: 0;
+}
+.quarry-explore-result-scroll .quarry-runquery-dataset-heading {
+    padding: 0.5rem 0.65rem;
+}
+.quarry-explore-result-scroll .quarry-runquery-table {
+    margin: 0;
+}
+.quarry-explore-result-scroll .quarry-runquery-prompt-text {
+    max-height: none;
+    overflow: visible;
+}
+#quarry-preview-title {
+    overflow-wrap: anywhere;
+}
+/* SwarmUI raises the bottom panel to 2000 on narrow screens. */
+#quarry-preview-modal {
+    z-index: 2100;
+}
+body:has(#quarry-preview-modal.show) > .modal-backdrop {
+    z-index: 2090;
+}
+.quarry-copy-notice {
+    z-index: 2200 !important;
+    background: #203b29 !important;
+    color: #fff !important;
+    opacity: 1;
+    border: 1px solid #52765d;
+    box-shadow: 0 0.25rem 0.75rem #0006;
+}
+@media (min-width: 651px) {
+    .quarry-explore-filter-row:has(> button:not([hidden])) {
+        grid-template-columns: minmax(7rem, 1fr) minmax(7rem, 0.7fr) minmax(8rem, 3fr) auto;
+    }
+    .quarry-explore-filter-row:has(> .quarry-explore-values-toggle:not([hidden])):has(> [data-remove]:not([hidden])) {
+        grid-template-columns: minmax(7rem, 1fr) minmax(7rem, 0.7fr) minmax(8rem, 3fr) auto auto;
+    }
+}
+@media (min-width: 851px) {
+    .quarry-explore-top > * {
+        grid-column: 1 / -1;
+        min-width: 0;
+    }
+    .quarry-explore-scope {
+        align-self: center;
+    }
+}
+@media (max-width: 650px) {
+    .quarry-explore-format-panel > .quarry-explore-popover-content {
+        grid-template-columns: minmax(0, 1fr);
+    }
+    .quarry-explore-popover {
+        left: 0;
+        width: 100%;
+    }
+    #quarry-preview-modal .modal-dialog.quarry-preview-dialog {
+        height: calc(100dvh - 1rem);
+        margin: 0.5rem auto;
+    }
+    #quarry-preview-modal .modal-header,
+    #quarry-preview-modal .modal-footer,
+    #quarry-preview-modal .modal-body {
+        padding: 0.5rem;
+    }
+    #quarry-preview-title {
+        font-size: 1rem;
+    }
+    .quarry-explore-tabs {
+        display: grid;
+        width: 100%;
+    }
+    .quarry-explore .quarry-explore-tab {
+        padding: 0.45rem 0.6rem;
+    }
+    .quarry-explore-filter-row {
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+    }
+    .quarry-explore-filter-row:has(> [data-remove][hidden]) {
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    }
+    .quarry-explore-filter-row .quarry-explore-value {
+        grid-column: 1 / 3;
+        grid-row: 2;
+    }
+    .quarry-explore-filter-row button:not(.quarry-explore-values-toggle) {
+        grid-column: 3;
+        grid-row: 1 / 3;
+    }
+    .quarry-explore-filter-row .quarry-explore-values-toggle {
+        grid-column: 1 / 3;
+        grid-row: 3;
+        justify-self: start;
+    }
+    .quarry-explore-dataset-option {
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    }
+    .quarry-explore-dataset-option > span {
+        grid-column: 1 / -1;
+    }
+    .quarry-explore-dataset-option button {
+        min-width: 0;
+    }
+    .quarry-explore-output > label:not(.quarry-explore-keys-label) {
+        width: 100%;
+    }
+    .quarry-explore-output-add {
+        flex: 1;
+    }
 }
 
 .quarry-preview-table {
@@ -368,6 +1125,7 @@
 }
 
 .quarry-preview-footer-actions {
+    margin-left: auto;
     display: flex;
     align-items: center;
     gap: 0.5rem;
@@ -397,18 +1155,79 @@
 }
 
 .modal-dialog.quarry-download-dialog {
-    width: calc(100vw - 2rem);
-    max-width: 60rem;
-    margin-inline: auto;
+    width: min(1150px, 95vw);
+    max-width: min(1150px, 95vw);
+    height: calc(100dvh - 2rem);
+    margin: 1rem auto;
 }
 
 .quarry-download-dialog .modal-content {
+    display: flex;
+    flex-direction: column;
     width: 100%;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+}
+.quarry-download-dialog .modal-header,
+.quarry-download-dialog .modal-footer {
+    flex: none;
+    padding: 0.65rem 0.85rem;
+}
+.quarry-download-dialog .modal-body {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+    padding: 0.75rem;
+    overflow: hidden;
+}
+#quarry-download-modal {
+    z-index: 2100;
+}
+body:has(#quarry-download-modal.show) > .modal-backdrop {
+    z-index: 2090;
+}
+.quarry-download-dialog .basic-button:disabled {
+    background: var(--background-gray);
+    border-color: var(--light-border);
+    color: var(--text-soft);
+    opacity: 0.6;
+}
+.quarry-explore .quarry-explore-primary,
+.quarry-download-dialog .quarry-download-primary {
+    border-color: var(--emphasis);
+    background: var(--emphasis);
+    color: var(--emphasis-text);
+    font-weight: 600;
+}
+.quarry-download-dialog button:focus-visible,
+.quarry-download-list:focus-visible {
+    outline: 2px solid var(--emphasis);
+    outline-offset: 2px;
 }
 
 .quarry-download-body {
-    max-height: 65vh;
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+    overflow: hidden;
+}
+.quarry-download-summary {
+    flex: none;
+}
+.quarry-download-list {
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
     overflow: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+    border: 1px solid var(--light-border);
+    border-radius: 0.35rem;
 }
 
 .quarry-download-note {
@@ -436,9 +1255,21 @@
 }
 
 .quarry-download-message {
+    flex: none;
     margin-top: 0.5rem;
     min-height: 1.2em;
     font-size: 0.95em;
+}
+.quarry-download-message:empty,
+.quarry-download-dialog .quarry-repair-status:empty {
+    display: none;
+}
+.quarry-download-dialog .quarry-repair-status,
+.quarry-download-dialog .quarry-download-message {
+    flex: none;
+    max-height: 25%;
+    overflow: auto;
+    overscroll-behavior: contain;
 }
 
 .quarry-download-message-success {
@@ -455,7 +1286,22 @@
 
 .quarry-remote-table {
     width: 100%;
+    min-width: 36rem;
     border-collapse: collapse;
+    table-layout: fixed;
+}
+.quarry-remote-table .quarry-remote-row[data-parent] > td:first-child {
+    padding-left: 0.4rem;
+    padding-right: 0.4rem;
+}
+.quarry-remote-col-select {
+    width: 2.75rem;
+}
+.quarry-remote-col-status {
+    width: 9rem;
+}
+.quarry-remote-col-size {
+    width: 7rem;
 }
 
 .quarry-remote-table th {
@@ -463,18 +1309,48 @@
     font-weight: 600;
     font-size: 0.9em;
     color: var(--text-soft);
-    padding: 0.25rem 0.5rem;
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    padding: 0.65rem 0.75rem;
+    background: var(--background-soft);
     border-bottom: 1px solid var(--light-border);
 }
 
 .quarry-remote-table td {
-    padding: 0.35rem 0.5rem;
+    padding: 0.6rem 0.75rem;
     vertical-align: middle;
 }
 
 .quarry-remote-installed {
-    background: color-mix(in srgb, var(--green) 16%, transparent);
-    box-shadow: inset 3px 0 0 var(--green);
+    box-shadow: inset 2px 0 0 color-mix(in srgb, var(--green) 50%, transparent);
+}
+.quarry-remote-row {
+    background: var(--background);
+    border-bottom: 1px solid color-mix(in srgb, var(--light-border) 55%, transparent);
+}
+.quarry-remote-row:nth-child(even of :where(.quarry-remote-row:not(.quarry-row-hidden))) {
+    background: color-mix(in srgb, var(--text) 5%, var(--background));
+}
+.quarry-remote-row:hover {
+    background: color-mix(in srgb, var(--text) 8%, var(--background));
+}
+.quarry-remote-table .quarry-remote-row:has(.quarry-remote-select:checked) {
+    background: color-mix(in srgb, var(--emphasis) 16%, var(--background));
+    box-shadow: inset 3px 0 0 var(--emphasis);
+}
+.quarry-remote-status {
+    font-size: 0.85em;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+}
+.quarry-remote-status .quarry-remote-update {
+    display: block;
+    margin: 0.2rem 0 0;
+    font-size: 1em;
+}
+.quarry-remote-available {
+    color: var(--text-soft);
 }
 
 .quarry-remote-check {
@@ -500,7 +1376,7 @@
 
 .quarry-remote-name {
     font-family: monospace;
-    font-weight: 600;
+    font-weight: 500;
     overflow-wrap: anywhere;
 }
 
@@ -519,6 +1395,9 @@
     text-align: right;
     font-variant-numeric: tabular-nums;
     color: var(--text-soft);
+}
+.quarry-remote-table th:last-child {
+    text-align: right;
 }
 
 .quarry-remote-selcell {
@@ -547,10 +1426,39 @@
     display: flex;
     align-items: center;
     gap: 0.5rem;
+    flex-wrap: wrap;
 }
 
 .quarry-download-progress {
+    flex: none;
     margin-top: 0.6rem;
+}
+@media (max-width: 650px) {
+    .modal-dialog.quarry-download-dialog {
+        height: calc(100dvh - 1rem);
+        margin: 0.5rem auto;
+    }
+    .quarry-download-dialog .modal-header,
+    .quarry-download-dialog .modal-footer,
+    .quarry-download-dialog .modal-body {
+        padding: 0.5rem;
+    }
+    .quarry-remote-col-select {
+        width: 2rem;
+    }
+    .quarry-remote-col-status {
+        width: 6.75rem;
+    }
+    .quarry-remote-col-size {
+        width: 5rem;
+    }
+    .quarry-remote-table th,
+    .quarry-remote-table td {
+        padding: 0.5rem 0.4rem;
+    }
+    .quarry-download-footer > button {
+        margin-left: auto;
+    }
 }
 
 .quarry-dl-label {
@@ -949,14 +1857,10 @@
     display: none;
 }
 
-/* Image search folder picker. */
 .quarry-search-folder-setting {
     flex: 0 0 100%;
     min-width: 0;
     box-sizing: border-box;
-}
-.quarry-search-folder-label {
-    margin-bottom: 0.4rem;
 }
 .quarry-search-folder-help {
     margin: 0.4rem 0 0;
@@ -969,7 +1873,6 @@
 .quarry-search-folder-option span {
     overflow-wrap: anywhere;
 }
-/* Closed state: pills inside a control styled like SwarmUI's dropdowns. */
 .quarry-search-folder-trigger {
     display: flex;
     align-items: center;
@@ -1027,7 +1930,6 @@
     color: var(--text);
 }
 
-/* Open state: floating filter + checkbox panel; stays open during selection. */
 .quarry-search-folder-panel {
     position: absolute;
     z-index: 100;
@@ -1082,4 +1984,398 @@
 .quarry-search-folder-count {
     color: var(--text-soft);
     font-size: 0.85em;
+}
+
+#quarry-preview-refresh[hidden] {
+    display: none !important;
+}
+
+.quarry-explore-dataset-chip > span { overflow-wrap: anywhere; }
+.quarry-explore .quarry-explore-dataset-chip > button {
+    margin: -0.25rem -0.5rem -0.25rem 0.5rem;
+    border: 0;
+    border-left: 1px solid var(--light-border);
+    border-radius: 0 0.3rem 0.3rem 0;
+    background: transparent;
+}
+.quarry-explore-dataset-option.is-selected {
+    background: var(--background-soft);
+    border-left: 3px solid var(--emphasis);
+    padding-left: 0.5rem;
+}
+.quarry-explore-dataset-option > .quarry-explore-selected-label {
+    font-family: inherit;
+    font-weight: 600;
+    text-align: center;
+}
+.quarry-explore .quarry-explore-dataset-option > button:disabled {
+    color: var(--text-soft);
+    background: var(--background-soft);
+    border-color: var(--light-border);
+    opacity: 0.65;
+}
+#quarry-preview-modal:has(.quarry-explore-dataset-picker:not([hidden])) .modal-footer {
+    display: none;
+}
+.quarry-explore-output-token[data-drop-edge]::after {
+    content: "";
+    position: absolute;
+    top: -4px;
+    bottom: -4px;
+    width: 3px;
+    background: var(--emphasis);
+    pointer-events: none;
+}
+.quarry-explore-output-token[data-drop-edge="before"]::after { left: -4px; }
+.quarry-explore-output-token[data-drop-edge="after"]::after { right: -4px; }
+.quarry-explore-value-source { margin-bottom: 0.75rem; }
+.quarry-explore-source-select { display: block; width: 100%; }
+
+.quarry-datasets-table .quarry-col-columns {
+    width: 30%;
+}
+.quarry-datasets-table .quarry-col-enabled {
+    width: 5.5rem;
+}
+.quarry-datasets-table .quarry-col-explore {
+    width: 6.5rem;
+}
+.quarry-datasets-table .quarry-dataset-row > td {
+    padding-top: 0.65rem;
+    padding-bottom: 0.65rem;
+    border-bottom: 1px solid color-mix(in srgb, var(--light-border) 55%, transparent);
+}
+.quarry-datasets-table .quarry-dataset-row {
+    background: var(--background);
+}
+.quarry-datasets-table .quarry-dataset-row:nth-child(even of :where(.quarry-dataset-row:not(.quarry-row-hidden))) {
+    background: color-mix(in srgb, var(--text) 5%, var(--background));
+}
+.quarry-datasets-table .quarry-dataset-row:hover {
+    background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+.quarry-datasets-table .quarry-dataset-row.quarry-dataset-in-prompt {
+    box-shadow: inset 3px 0 0 var(--green);
+    background: color-mix(in srgb, var(--green) 12%, transparent);
+}
+.quarry-dataset-columns {
+    color: var(--text-soft);
+    font-size: 0.9em;
+    line-height: 1.55;
+    overflow-wrap: anywhere;
+}
+.quarry-dataset-columns span {
+    white-space: normal;
+}
+.quarry-dataset-action {
+    text-align: right;
+}
+.quarry-datasets-table th:last-child {
+    text-align: right;
+}
+.quarry-dataset-action .quarry-preview-button {
+    margin: 0;
+    padding: 0.35rem 0.7rem;
+    border-radius: 0.3rem;
+    font-size: 0.9em;
+    line-height: 1.3;
+}
+.quarry-persistent-settings [data-dataset-settings-status]:empty {
+    display: none;
+}
+@media (max-width: 650px) {
+    .quarry-datasets-table {
+        min-width: 0;
+    }
+    .quarry-datasets-table colgroup,
+    .quarry-datasets-table thead {
+        display: none;
+    }
+    .quarry-datasets-table .quarry-dataset-row {
+        display: grid;
+        grid-template-columns: 2.5rem minmax(0, 1fr) auto;
+        padding: 0.5rem 0;
+        border-bottom: 1px solid var(--light-border);
+    }
+    .quarry-datasets-table .quarry-dataset-row > td {
+        padding: 0.3rem 0.4rem;
+        border: 0;
+    }
+    .quarry-dataset-row .quarry-dataset-enable-cell {
+        grid-column: 1;
+        grid-row: 1;
+    }
+    .quarry-dataset-row .quarry-dataset-name-cell {
+        grid-column: 2;
+        grid-row: 1;
+    }
+    .quarry-dataset-row .quarry-dataset-columns {
+        grid-column: 2;
+        grid-row: 2;
+    }
+    .quarry-dataset-row .quarry-dataset-rows {
+        grid-column: 2;
+        grid-row: 3;
+        text-align: left;
+        font-size: 0.85em;
+    }
+    .quarry-dataset-row .quarry-dataset-rows::after {
+        content: " rows";
+    }
+    .quarry-dataset-row .quarry-dataset-action {
+        grid-column: 3;
+        grid-row: 1 / 3;
+    }
+    .quarry-dataset-error > td:last-child {
+        grid-column: 2 / -1;
+    }
+    .quarry-datasets-table,
+    .quarry-datasets-table tbody,
+    .quarry-datasets-table tfoot,
+    .quarry-datasets-table .quarry-folder-row,
+    .quarry-datasets-table .quarry-folder-row > td,
+    .quarry-datasets-table .quarry-datasets-summary-row,
+    .quarry-datasets-table .quarry-datasets-summary-row > td {
+        display: block;
+        width: 100%;
+    }
+    .quarry-datasets-table .quarry-dataset-row > td {
+        min-width: 0;
+    }
+    .quarry-datasets-table .quarry-row-hidden {
+        display: none;
+    }
+}
+
+.quarry-explore-settings-view {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    overflow: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+}
+.quarry-explore:has(> .quarry-explore-dataset-picker:not([hidden])) > .quarry-explore-settings-view {
+    display: none;
+}
+.quarry-explore-settings-source {
+    max-width: 34rem;
+    margin-bottom: 1rem;
+}
+.quarry-explore .quarry-actions > button {
+    flex: none;
+}
+.quarry-explore .quarry-explore-result-status {
+    flex: 1;
+    min-width: 0;
+    height: auto;
+    margin: 0 0 0 0.25rem;
+    line-height: 1.4;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+.quarry-explore-result-status:empty {
+    display: none;
+}
+.quarry-explore-output-token > .quarry-output-remove {
+    color: var(--red, #dc3545);
+}
+.quarry-explore-output-token > .quarry-output-remove:hover {
+    color: color-mix(in srgb, var(--red, #dc3545) 70%, black);
+    background: color-mix(in srgb, var(--red, #dc3545) 12%, transparent);
+}
+.quarry-explore .quarry-explore-output-add {
+    min-width: 10rem;
+    min-height: 2rem;
+    border: 1px solid var(--light-border);
+    border-radius: 0.3rem;
+    padding: 0.25rem 1.5rem 0.25rem 0.5rem;
+    background-color: var(--background-soft);
+    color: var(--text);
+    cursor: pointer;
+}
+.quarry-explore .quarry-explore-output-add:hover,
+.quarry-explore .quarry-explore-output-add:focus-visible {
+    border-color: var(--emphasis);
+}
+.quarry-explore-filter-row:nth-child(odd) {
+    background: var(--background-soft);
+}
+.quarry-explore-filter-row:nth-child(even) {
+    background: color-mix(in srgb, var(--text) 4%, var(--background));
+}
+.quarry-explore-filter-row.active {
+    border-color: var(--light-border);
+}
+.quarry-explore-filter-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+.quarry-explore .quarry-explore-manage[aria-expanded="true"] {
+    background: color-mix(in srgb, var(--emphasis) 16%, var(--background));
+    border-color: var(--emphasis);
+    color: var(--text);
+}
+@media (max-width: 650px) {
+    .quarry-explore .quarry-explore-tab { min-width: 0; }
+}
+
+.quarry-global-settings[hidden],
+.imagesearch-folders-settings[hidden] {
+    display: none;
+}
+.quarry-catalog-toolbar {
+    width: 100%;
+    gap: 0.5rem;
+    margin: 0 0 0.75rem;
+}
+.quarry-catalog-toolbar #quarry-settings-toggle {
+    margin-left: auto;
+}
+.quarry-catalog-toolbar button,
+.quarry-global-settings-actions button,
+.imagesearch-folders-settings button[data-save-search-folders] {
+    min-height: 1.9rem;
+    padding: 0.3rem 0.65rem;
+    border-radius: 0.3rem;
+    line-height: 1.35;
+}
+#quarry-settings-toggle[aria-expanded="true"],
+#imagesearch-folders-toggle[aria-expanded="true"] {
+    border-color: var(--emphasis);
+    background: color-mix(in srgb, var(--emphasis) 14%, var(--background));
+    color: var(--text);
+}
+.quarry-global-settings,
+.imagesearch-folders-settings {
+    box-sizing: border-box;
+    margin: 0 0 0.75rem;
+    padding: 1rem;
+    border: 1px solid var(--light-border);
+    border-radius: 0.4rem;
+    background: var(--background-soft);
+}
+.quarry-global-settings h3,
+.imagesearch-folders-settings h3,
+.quarry-persistent-settings h3 {
+    margin: 0 0 0.75rem;
+    font-size: 1rem;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+.quarry-folder-setting,
+.quarry-dataset-settings-group > label {
+    display: grid;
+    gap: 0.4rem;
+    max-width: 40rem;
+    font-size: 0.95em;
+}
+.quarry-folder-setting input,
+.quarry-dataset-settings-group select,
+.quarry-recurring-settings input {
+    box-sizing: border-box;
+    min-width: 0;
+    width: 100%;
+    min-height: 2rem;
+    padding: 0.35rem 0.5rem;
+    border: 1px solid var(--light-border);
+    border-radius: 0.3rem;
+    background: var(--background);
+    color: var(--text);
+}
+.quarry-global-settings .quarry-setting-row {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    gap: 0.4rem;
+    margin: 0.85rem 0 0.3rem;
+}
+.quarry-recurring-settings {
+    margin-top: 1rem;
+    padding-top: 0.8rem;
+    border-top: 1px solid var(--light-border);
+}
+.quarry-recurring-settings legend {
+    float: none;
+    width: auto;
+    font-size: 0.95rem;
+    font-weight: 600;
+}
+.quarry-global-settings-actions {
+    margin: 1rem 0 0;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--light-border);
+}
+.quarry-global-settings-actions #quarry-clean-temp {
+    margin-left: auto;
+}
+.imagesearch-folders-settings {
+    margin-top: 0.75rem;
+}
+.imagesearch-folders-settings .quarry-search-folder-setting {
+    display: block;
+    margin: 0;
+}
+.imagesearch-folders-settings [data-image-search-folder-picker] {
+    max-width: 40rem;
+}
+.quarry-persistent-settings {
+    padding: 0.75rem 0;
+    max-width: 56rem;
+}
+.quarry-persistent-settings .quarry-dataset-settings-group {
+    display: block;
+    margin: 1rem 0;
+    padding: 0.85rem;
+    border: 1px solid var(--light-border);
+    border-radius: 0.35rem;
+    background: var(--background-soft);
+}
+.quarry-dataset-settings-group h4 {
+    float: none;
+    width: auto;
+    margin: 0 0 0.55rem;
+    padding: 0;
+    font-size: 0.95rem;
+    font-weight: 600;
+}
+.quarry-dataset-tag-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.55rem 1.25rem;
+    margin-top: 0.65rem;
+}
+@media (max-width: 650px) {
+    .quarry-global-settings,
+    .imagesearch-folders-settings {
+        padding: 0.75rem;
+    }
+    .quarry-persistent-settings .quarry-dataset-settings-group {
+        padding: 0.65rem;
+    }
+}
+
+.quarry-explore-top > .quarry-explore-manage {
+    grid-column: 1;
+    grid-row: 1;
+    justify-self: start;
+    align-self: center;
+}
+.quarry-explore-top > .quarry-explore-tabs {
+    grid-column: 2;
+    grid-row: 1;
+    align-self: start;
+    margin: 0;
+}
+.quarry-explore-top > .quarry-explore-scope {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    margin: 0 0 0.35rem;
+}
+@media (max-width: 650px) {
+    .quarry-explore-top { grid-template-columns: minmax(0, 1fr); }
+    .quarry-explore-top > .quarry-explore-tabs { grid-column: 1; grid-row: 2; }
+    .quarry-explore-top > .quarry-explore-scope { grid-row: 3; }
 }

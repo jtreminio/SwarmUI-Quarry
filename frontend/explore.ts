@@ -1,0 +1,1270 @@
+import { datasetCompatibility, sharedExploreColumns } from "./exploreDatasets";
+import { insertQuarryQuery } from "./prompt";
+import { renderResultRow, renderResultTable } from "./runquery";
+import type {
+    ColumnDto,
+    DatasetDto,
+    ExploreColumnResponse,
+    RunQueryResponse,
+} from "./types";
+import { escapeHtml } from "./util";
+
+export interface ExploreFilter {
+    column: string;
+    operator: string;
+    values: string[];
+}
+interface FilterRow {
+    column: string;
+    operator: string;
+    value: string;
+}
+export interface ExploreFormat {
+    keys?: boolean;
+    recordSeparator?: string;
+    fieldSeparator?: string;
+}
+export const textOperators = [
+    ["=", "Contains any"],
+    ["==", "Contains all"],
+    ["!=", "Contains none"],
+];
+const lengthOperators = [
+    ["+=", "Length at least"],
+    ["-=", "Length at most"],
+];
+const isComparison = (operator: string): boolean =>
+    operator === "+=" || operator === "-=";
+const numberOperators = [
+    ["+=", "At least"],
+    ["-=", "At most"],
+];
+const isNumber = (column: ColumnDto): boolean =>
+    column?.kind === "scalar" && column.numeric === true;
+export const canSuggestValue = (value: string): boolean =>
+    value.trim().length > 0 && !/[,;[\]<>|]/.test(value);
+// Escape tag delimiters as JSON Unicode escapes; the existing parser decodes them.
+const quoteSeparator = (value: string): string =>
+    JSON.stringify(value).replace(/</g, "\\u003c").replace(/>/g, "\\u003e");
+export const buildExploreQuery = (
+    dataset: string,
+    filters: ExploreFilter[],
+    outputs: string[] = [],
+    format: ExploreFormat = {},
+): string => {
+    const flags = [
+        format.keys ? "keys" : "",
+        format.recordSeparator !== undefined && format.recordSeparator !== ", "
+            ? `rs=${quoteSeparator(format.recordSeparator)}`
+            : "",
+        format.fieldSeparator !== undefined && format.fieldSeparator !== ", "
+            ? `fs=${quoteSeparator(format.fieldSeparator)}`
+            : "",
+    ].filter(Boolean);
+    return `<q:${dataset}${filters.length ? `[${filters.map((filter) => `${filter.column}${filter.operator}${filter.values.join(",")}`).join(";")}]` : ""}${outputs.length ? `:${outputs.join(",")}` : ""}${flags.length ? `|${flags.join(";")}` : ""}>`;
+};
+
+export class DatasetExplorer {
+    private selected = 0;
+    private filters: FilterRow[] = [];
+    private outputs: string[] = [];
+    private format: ExploreFormat = {};
+    private fields: ColumnDto[];
+    private datasets: DatasetDto[];
+    private datasetSearch = "";
+    private request = 0;
+    private draftQuery = "";
+    private resultsQuery = "";
+    private pendingQuery: string | null = null;
+    private openValueRow: number | null = null;
+    private disposed = false;
+    private valueRequest = 0;
+    private valueBusy = false;
+    private valueSearch = "";
+    private valueResponse: ExploreColumnResponse | null = null;
+    private recurringFields = new Map<string, boolean>();
+    private valueItems: string[] = [];
+    private searchTimer: ReturnType<typeof setTimeout> | null = null;
+
+    private settingsCleanup: (() => void) | null = null;
+
+    constructor(
+        private readonly host: HTMLElement,
+        private dataset: DatasetDto,
+        private readonly renderRows: (
+            columns: string[],
+            rows: string[][],
+        ) => string,
+        private readonly close: () => void,
+        private readonly newSample: () => void = () => {},
+        private readonly onViewChange: (showRows: boolean) => void = () => {},
+        private readonly availableDatasets: DatasetDto[] = [dataset],
+        private readonly onSourceChange: (
+            source: DatasetDto,
+            names: string[],
+        ) => void = () => {},
+        private readonly mountDatasetSettings?: (
+            host: HTMLElement,
+            dataset: DatasetDto,
+            onSaved: (updated: DatasetDto) => void,
+        ) => () => void,
+    ) {
+        this.datasets = [dataset];
+        this.fields = sharedExploreColumns(this.datasets);
+        this.filters = [this.blankFilter()];
+        host.innerHTML = `<div class="quarry-explore">
+            <div class="quarry-explore-top"><button type="button" class="basic-button quarry-explore-manage" data-action="choose-datasets" aria-expanded="false">Choose datasets</button><div class="quarry-explore-scope"></div>
+            <div class="quarry-explore-dataset-picker" hidden>
+                <label>Find a dataset<input type="search" class="quarry-explore-dataset-search auto-text" placeholder="Search datasets"></label>
+                <p class="quarry-explore-note">Use only starts a new query. Add keeps your filters and output choices. Selected datasets are highlighted.</p>
+                <div class="quarry-explore-dataset-options"></div>
+                <div class="quarry-explore-picker-footer"><button type="button" class="basic-button quarry-explore-primary" data-action="close-datasets">Back to query</button></div>
+            </div>
+            <div class="quarry-explore-tabs" role="tablist" aria-label="Explore views">
+                <button type="button" role="tab" class="quarry-explore-tab" data-view="fields" aria-pressed="true" aria-selected="true">Query</button>
+                <button type="button" role="tab" class="quarry-explore-tab" data-view="rows" aria-pressed="false" aria-selected="false">Full records</button>
+                <button type="button" role="tab" class="quarry-explore-tab" data-view="settings" aria-pressed="false" aria-selected="false">Dataset settings</button>
+            </div>
+            </div>
+            <div class="quarry-explore-fields-view">
+                <div class="quarry-explore-editor" role="region" aria-label="Query controls" tabindex="0">
+                <section aria-label="Filters">
+                    <h6 class="quarry-explore-section-label">Filters</h6>
+                    <div class="quarry-explore-filters"></div>
+                    <div class="quarry-explore-filter-actions"><button type="button" class="basic-button" data-action="add">+ Add filter</button><button type="button" class="basic-button" data-action="clear-filters">Clear filters</button></div>
+                    <p class="quarry-explore-note">Text matching ignores case. Commas separate terms. All filter rows must match.</p>
+                </section>
+                <section class="quarry-explore-output" aria-label="Columns to print">
+                    <label>Columns to print<select class="quarry-explore-output-add auto-dropdown" aria-label="Add column to print"><option value="">Add column…</option>${this.fields.map((column) => `<option value="${escapeHtml(column.name)}">${escapeHtml(column.name)}</option>`).join("")}</select></label>
+                    <div class="quarry-explore-output-selected"></div>
+                    <button type="button" class="basic-button quarry-explore-format-toggle" data-action="format" aria-expanded="false">Formatting options</button>
+                </section>
+                </div>
+            <div class="quarry-explore-draft">
+                <div class="quarry-explore-error" role="status"></div>
+                <code class="quarry-explore-query"></code>
+                <div class="quarry-actions">
+                    <button type="button" class="basic-button quarry-explore-primary" data-action="test">Test query</button>
+                    <button type="button" class="basic-button" data-action="use">Use in prompt</button>
+                    <button type="button" class="basic-button" data-action="copy">Copy tag</button>
+                    <span class="quarry-explore-result-status quarry-explore-note" role="status"></span>
+                </div>
+                <div class="quarry-explore-results" aria-live="polite"></div>
+            </div>
+            </div>
+            <div class="quarry-explore-rows-view" hidden><div class="quarry-explore-source"></div><p class="quarry-explore-rows-caption">100 random records with every column. Query filters do not apply.</p><div class="quarry-explore-rows" hidden></div></div>
+            <div class="quarry-explore-settings-view" hidden><div class="quarry-explore-settings-source"></div><div class="quarry-explore-settings-content"></div></div>
+            <div class="quarry-explore-field quarry-explore-popover" role="dialog" aria-label="Filter values" hidden></div>
+            <section class="quarry-explore-format-panel" aria-label="Formatting options" hidden>
+                <div class="quarry-explore-popover-content">
+                    <label class="quarry-explore-keys-label"><input class="quarry-explore-keys" type="checkbox"> Include field names</label>
+                    <div class="quarry-format-setting"><label>Join selected columns with<textarea class="quarry-explore-record-separator auto-text" rows="1" aria-label="Record separator">, </textarea></label>
+                    <p class="quarry-explore-note">Two columns: <code>prompt = portrait</code> and <code>style = watercolor</code>.<br>Printed text: <code class="quarry-explore-record-example"></code></p></div>
+                    <div class="quarry-format-setting"><label>Separate nested JSON fields with<textarea class="quarry-explore-field-separator auto-text" rows="1" aria-label="Field separator">, </textarea></label>
+                    <p class="quarry-explore-note">For a JSON column such as <code>prompt</code>: <code>{"hair":"blonde","expression":"smiling"}</code>.<br>Printing the whole column gives: <code class="quarry-explore-field-example"></code><br>Also separates values in a simple list.</p></div>
+                </div>
+            </section>
+        </div>`;
+        this.element(".quarry-explore").append(
+            this.element(".quarry-explore-dataset-picker"),
+        );
+        this.element(".quarry-explore-editor").append(
+            this.element(".quarry-explore-format-panel"),
+        );
+        host.addEventListener("click", this.click);
+        host.addEventListener("input", this.edit, true);
+        host.addEventListener("change", this.edit, true);
+        host.addEventListener("focusin", this.focus);
+        host.addEventListener("keydown", this.keydown);
+        host.addEventListener("dragstart", this.dragstart);
+        host.addEventListener("dragover", this.dragover);
+        host.addEventListener("drop", this.drop);
+        host.addEventListener("dragend", this.clearDropMarker);
+        host.addEventListener("dragleave", this.dragleave);
+        this.renderScope();
+        this.renderFilters();
+        this.renderOutput();
+        this.renderFormatExamples();
+        this.selectRow(0);
+        this.renderDraft();
+        this.setView("fields");
+    }
+    dispose(): void {
+        this.disposed = true;
+        this.settingsCleanup?.();
+        if (this.searchTimer) clearTimeout(this.searchTimer);
+        this.host.removeEventListener("click", this.click);
+        this.host.removeEventListener("input", this.edit, true);
+        this.host.removeEventListener("change", this.edit, true);
+        this.host.removeEventListener("focusin", this.focus);
+        this.host.removeEventListener("keydown", this.keydown);
+        this.host.removeEventListener("dragstart", this.dragstart);
+        this.host.removeEventListener("dragover", this.dragover);
+        this.host.removeEventListener("drop", this.drop);
+        this.host.removeEventListener("dragend", this.clearDropMarker);
+        this.host.removeEventListener("dragleave", this.dragleave);
+    }
+    private setView(view: string): void {
+        this.element(".quarry-explore-dataset-picker").hidden = true;
+        this.element(".quarry-explore-manage").setAttribute(
+            "aria-expanded",
+            "false",
+        );
+        this.closeAuxiliaryPanels();
+        this.onViewChange(view === "rows");
+        this.element(".quarry-explore-fields-view").hidden = view !== "fields";
+        this.element(".quarry-explore-settings-view").hidden =
+            view !== "settings";
+        this.element(".quarry-explore-rows").hidden = view !== "rows";
+        this.element(".quarry-explore-rows-view").hidden = view !== "rows";
+        this.host
+            .querySelectorAll<HTMLButtonElement>("[data-view]")
+            .forEach((tab) => {
+                tab.setAttribute(
+                    "aria-pressed",
+                    String(tab.dataset.view === view),
+                );
+                tab.setAttribute(
+                    "aria-selected",
+                    String(tab.dataset.view === view),
+                );
+                tab.tabIndex = tab.dataset.view === view ? 0 : -1;
+            });
+    }
+    setRows(columns: string[], rows: string[][]): void {
+        this.renderDiscovery();
+        const region = this.element(".quarry-explore-rows");
+        region.innerHTML = this.renderRows(columns, rows);
+        const table = region.querySelector("table");
+        if (table?.tHead) {
+            // Size by displayed contents, regardless of column name or data type.
+            const widths = columns.map((name, index) =>
+                Math.max(
+                    80,
+                    Math.min(
+                        360,
+                        Math.max(
+                            name.length,
+                            ...rows.map((row) => (row[index] ?? "").length),
+                        ) *
+                            7 +
+                            24,
+                    ),
+                ),
+            );
+            const width = widths.reduce((sum, value) => sum + value, 0);
+            const colgroup = `<colgroup>${widths.map((width) => `<col style="width:${width}px">`).join("")}</colgroup>`;
+            table.insertAdjacentHTML("afterbegin", colgroup);
+            table.style.width = `max(100%, ${width}px)`;
+            const header = document.createElement("div");
+            header.className = "quarry-explore-table-header";
+            header.setAttribute("aria-hidden", "true");
+            const headerTable = table.cloneNode(false) as HTMLTableElement;
+            headerTable.innerHTML = colgroup + table.tHead.outerHTML;
+            header.append(headerTable);
+            const scroll = document.createElement("div");
+            scroll.className = "quarry-explore-table-scroll";
+            scroll.tabIndex = 0;
+            scroll.setAttribute("role", "region");
+            scroll.setAttribute("aria-label", "Dataset rows");
+            scroll.addEventListener("scroll", () => {
+                header.scrollLeft = scroll.scrollLeft;
+            });
+            scroll.append(table);
+            region.replaceChildren(header, scroll);
+        }
+    }
+    private renderScope(): void {
+        this.element(".quarry-explore-scope").innerHTML = this.datasets
+            .map(
+                (dataset) =>
+                    `<span class="quarry-explore-dataset-chip"><span>${escapeHtml(dataset.name)}</span>${this.datasets.length > 1 ? `<button type="button" class="basic-button" data-remove-dataset="${escapeHtml(dataset.name)}" aria-label="Remove dataset ${escapeHtml(dataset.name)}">×</button>` : ""}</span>`,
+            )
+            .join("");
+        this.element(".quarry-explore-manage").setAttribute(
+            "aria-expanded",
+            String(!this.element(".quarry-explore-dataset-picker").hidden),
+        );
+        const source = this.element(".quarry-explore-source");
+        source.hidden = this.datasets.length < 2;
+        source.innerHTML = this.sourceSelector("Show rows from");
+        this.settingsCleanup?.();
+        this.element('[data-view="settings"]').hidden =
+            !this.mountDatasetSettings;
+        const settingsSource = this.element(".quarry-explore-settings-source");
+        settingsSource.hidden = this.datasets.length < 2;
+        settingsSource.innerHTML = this.sourceSelector("Settings for");
+        this.settingsCleanup =
+            this.mountDatasetSettings?.(
+                this.element(".quarry-explore-settings-content"),
+                this.dataset,
+                (updated) => {
+                    Object.assign(this.dataset, updated);
+                    this.renderOutput();
+                    this.resultsQuery = null;
+                    this.renderDraft();
+                    this.testQuery();
+                },
+            ) ?? null;
+    }
+    private sourceSelector(label: string): string {
+        return `<label>${label}<select class="auto-dropdown quarry-explore-source-select" aria-label="${label}">${this.datasets.map((dataset) => `<option value="${escapeHtml(dataset.name)}" ${dataset.name === this.dataset.name ? "selected" : ""}>${escapeHtml(dataset.name)}</option>`).join("")}</select></label>`;
+    }
+    private renderDatasetOptions(): void {
+        const used = [
+            ...this.filters
+                .filter((row) => row.value.trim())
+                .map((row) => row.column),
+            ...this.outputs,
+        ];
+        const matches = this.availableDatasets.filter((dataset) =>
+            dataset.name
+                .toLowerCase()
+                .includes(this.datasetSearch.toLowerCase()),
+        );
+        matches.sort(
+            (a, b) =>
+                Number(this.datasets.some((d) => d.name === b.name)) -
+                Number(this.datasets.some((d) => d.name === a.name)),
+        );
+        this.element(".quarry-explore-dataset-options").innerHTML =
+            matches
+                .map((dataset) => {
+                    const included = this.datasets.some(
+                        (selected) => selected.name === dataset.name,
+                    );
+                    const error = datasetCompatibility(
+                        dataset,
+                        this.fields,
+                        used,
+                    );
+                    const unavailable =
+                        !!dataset.error || !dataset.columns.length;
+                    return `<div class="quarry-explore-dataset-option ${included ? "is-selected" : ""}"><span>${escapeHtml(dataset.name)}</span><button type="button" class="basic-button" data-switch-dataset="${escapeHtml(dataset.name)}" ${unavailable ? "disabled" : ""}>Use only this dataset</button>${included ? '<span class="quarry-explore-selected-label">✓ Selected</span>' : `<button type="button" class="basic-button" data-add-dataset="${escapeHtml(dataset.name)}" ${error ? "disabled" : ""}>Add to query</button>`}${error ? `<small>${escapeHtml(error)}</small>` : ""}</div>`;
+                })
+                .join("") +
+            `<p class="quarry-explore-note">${matches.length ? `${matches.length} datasets` : "No datasets match."}</p>`;
+    }
+    private chooseDatasets(): void {
+        this.closeAuxiliaryPanels();
+        this.element(".quarry-explore-dataset-picker").hidden = false;
+        this.element(".quarry-explore-manage").setAttribute(
+            "aria-expanded",
+            "true",
+        );
+        this.renderDatasetOptions();
+        this.element<HTMLInputElement>(
+            ".quarry-explore-dataset-search",
+        ).focus();
+    }
+    private updateDatasets(datasets: DatasetDto[], reset: boolean): void {
+        const previous = this.dataset.name;
+        this.datasets = datasets;
+        this.dataset =
+            datasets.find((dataset) => dataset.name === previous) ??
+            datasets[0];
+        this.fields = sharedExploreColumns(datasets);
+        if (reset) {
+            this.filters = [this.blankFilter()];
+            this.outputs = [];
+            this.format = {};
+            this.element<HTMLInputElement>(".quarry-explore-keys").checked =
+                false;
+            this.element<HTMLTextAreaElement>(
+                ".quarry-explore-record-separator",
+            ).value = ", ";
+            this.element<HTMLTextAreaElement>(
+                ".quarry-explore-field-separator",
+            ).value = ", ";
+            this.closeAuxiliaryPanels();
+            this.element(".quarry-explore-format-panel").hidden = true;
+            this.element('[data-action="format"]').setAttribute(
+                "aria-expanded",
+                "false",
+            );
+        } else {
+            // Empty draft rows are not query clauses and can follow the shared schema.
+            this.filters = this.filters.map((row) => {
+                const field = this.fields.find(
+                    (field) =>
+                        field.name.toLowerCase() === row.column.toLowerCase(),
+                );
+                return field
+                    ? { ...row, column: field.name }
+                    : this.blankFilter();
+            });
+            this.outputs = this.outputs.map(
+                (name) =>
+                    this.fields.find(
+                        (field) =>
+                            field.name.toLowerCase() === name.toLowerCase(),
+                    )?.name ?? name,
+            );
+        }
+        this.selected = Math.min(this.selected, this.filters.length - 1);
+        this.element(".quarry-explore-dataset-picker").hidden = true;
+        if (previous !== this.dataset.name) {
+            this.element(".quarry-explore-rows").textContent =
+                "Loading dataset rows…";
+        }
+        this.renderScope();
+        this.renderFilters();
+        this.renderOutput();
+        this.renderFormatExamples();
+        this.selectRow(this.selected);
+        this.renderDraft();
+        this.setView("fields");
+        this.onSourceChange(
+            this.dataset,
+            datasets.map((dataset) => dataset.name),
+        );
+        this.testQuery();
+    }
+    private changeSource(name: string): void {
+        const dataset = this.datasets.find((dataset) => dataset.name === name);
+        if (!dataset || dataset.name === this.dataset.name) return;
+        this.dataset = dataset;
+        this.renderScope();
+
+        this.element(".quarry-explore-rows").textContent =
+            "Loading dataset rows…";
+        this.selectRow(this.selected);
+        this.onSourceChange(
+            dataset,
+            this.datasets.map((selected) => selected.name),
+        );
+    }
+    private renderResults(data: RunQueryResponse): void {
+        const results = this.element(".quarry-explore-results");
+        if (data.error || data.invalid) {
+            results.innerHTML = `<p class="quarry-preview-error">${escapeHtml(data.error ?? data.invalid ?? "Query failed.")}</p>`;
+            return;
+        }
+        const rows = data.results ?? [];
+        const total = data.total ?? 0;
+        const breakdown =
+            this.datasets.length > 1 && data.datasets?.length
+                ? `<details><summary>Matches by dataset</summary>${data.datasets.map((dataset) => `<div>${escapeHtml(dataset.name)} · ${dataset.matches.toLocaleString()} matches</div>`).join("")}</details>`
+                : "";
+        const multiple = this.datasets.length > 1;
+        const table = rows.length
+            ? renderResultTable(
+                  rows
+                      .map((row) =>
+                          renderResultRow(
+                              row.prompt,
+                              data.highlights ?? [],
+                              multiple
+                                  ? `<button type="button" class="quarry-explore-query-dataset quarry-explore-result-source" data-action="choose-datasets">${escapeHtml(row.dataset)}</button>`
+                                  : "",
+                          ),
+                      )
+                      .join(""),
+              )
+            : `<p class="quarry-preview-empty">${total > 0 ? "Matching rows were counted, but no sample output was returned." : "No matching rows."}</p>`;
+        results.innerHTML = `<div class="quarry-explore-result-summary"><h6>Results</h6><span>${rows.length.toLocaleString()} random result${rows.length === 1 ? "" : "s"} · ${total.toLocaleString()} matches</span>${breakdown}</div><div class="quarry-explore-result-heading">${multiple ? `${this.datasets.length} datasets` : `<button type="button" class="quarry-explore-query-dataset" data-action="choose-datasets" title="Switch dataset or add another dataset">${escapeHtml(this.dataset.name)}</button>`}</div><div class="quarry-explore-result-scroll" tabindex="0" role="region" aria-label="Query results">${table}</div>`;
+    }
+    private closeAuxiliaryPanels(): void {
+        this.element(".quarry-explore-field").hidden = true;
+
+        this.openValueRow = null;
+        this.host.querySelectorAll("[data-values-row]").forEach((button) => {
+            button.setAttribute("aria-expanded", "false");
+        });
+    }
+    private renderFormatExamples(): void {
+        const keys = this.format.keys;
+        this.element(".quarry-explore-record-example").textContent = [
+            keys ? "prompt: portrait" : "portrait",
+            keys ? "style: watercolor" : "watercolor",
+        ].join(this.format.recordSeparator ?? ", ");
+        this.element(".quarry-explore-field-example").textContent = [
+            keys ? "hair: blonde" : "blonde",
+            keys ? "expression: smiling" : "smiling",
+        ].join(this.format.fieldSeparator ?? ", ");
+    }
+    private renderQuerySuffix(suffix: string): string {
+        if (!this.outputs.length) return escapeHtml(suffix);
+        const start = suffix.startsWith("[") ? suffix.indexOf("]") + 1 : 0;
+        const tokens = this.outputs
+            .map(
+                (name, index) =>
+                    `<span class="quarry-explore-output-token" data-output-index="${index}" draggable="true" tabindex="0" title="Drag to reorder. Alt+Left/Right also moves this column."><span class="quarry-output-grip" aria-hidden="true"></span>${escapeHtml(name)}<button type="button" class="quarry-output-remove" data-remove-output="${index}" aria-label="Remove output ${escapeHtml(name)}"></button></span>`,
+            )
+            .join(",");
+        return (
+            escapeHtml(suffix.slice(0, start + 1)) +
+            tokens +
+            escapeHtml(suffix.slice(start + 1 + this.outputs.join(",").length))
+        );
+    }
+    private moveOutput(from: number, to: number): void {
+        if (
+            !Number.isInteger(from) ||
+            !Number.isInteger(to) ||
+            from === to ||
+            from < 0 ||
+            to < 0 ||
+            from >= this.outputs.length ||
+            to >= this.outputs.length
+        )
+            return;
+        const [column] = this.outputs.splice(from, 1);
+        this.outputs.splice(to, 0, column);
+        this.renderOutput();
+        this.renderDraft();
+        this.element<HTMLElement>(`[data-output-index="${to}"]`).focus();
+    }
+    private dragstart = (event: DragEvent): void => {
+        const token = (event.target as HTMLElement).closest<HTMLElement>(
+            "[data-output-index]",
+        );
+        if (token && event.dataTransfer) {
+            event.dataTransfer.setData(
+                "application/x-quarry-output",
+                token.dataset.outputIndex ?? "",
+            );
+            event.dataTransfer.effectAllowed = "move";
+        }
+    };
+    private clearDropMarker = (): void => {
+        this.host.querySelectorAll("[data-drop-edge]").forEach((token) => {
+            token.removeAttribute("data-drop-edge");
+        });
+    };
+    private dragleave = (event: DragEvent): void => {
+        const token = (event.target as HTMLElement).closest(
+            "[data-output-index]",
+        );
+        if (token && !token.contains(event.relatedTarget as Node | null))
+            this.clearDropMarker();
+    };
+    private dragover = (event: DragEvent): void => {
+        const token = (event.target as HTMLElement).closest<HTMLElement>(
+            "[data-output-index]",
+        );
+        if (
+            !token ||
+            !event.dataTransfer?.types.includes("application/x-quarry-output")
+        )
+            return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "move";
+        this.clearDropMarker();
+        const rect = token.getBoundingClientRect();
+        token.dataset.dropEdge =
+            event.clientX < rect.left + rect.width / 2 ? "before" : "after";
+    };
+    private drop = (event: DragEvent): void => {
+        const token = (event.target as HTMLElement).closest<HTMLElement>(
+            "[data-output-index]",
+        );
+        const source = event.dataTransfer?.getData(
+            "application/x-quarry-output",
+        );
+        if (!token || !source) return;
+        event.preventDefault();
+        const from = Number(source);
+        const rect = token.getBoundingClientRect();
+        const after = event.clientX >= rect.left + rect.width / 2;
+        const insertion = Number(token.dataset.outputIndex) + (after ? 1 : 0);
+        this.clearDropMarker();
+        this.moveOutput(from, insertion > from ? insertion - 1 : insertion);
+    };
+    private keydown = (event: KeyboardEvent): void => {
+        const target = event.target as HTMLElement;
+        const token = target.closest<HTMLElement>("[data-output-index]");
+        if (
+            token &&
+            event.altKey &&
+            ["ArrowLeft", "ArrowRight"].includes(event.key)
+        ) {
+            event.preventDefault();
+            const from = Number(token.dataset.outputIndex);
+            this.moveOutput(from, from + (event.key === "ArrowLeft" ? -1 : 1));
+            return;
+        }
+        if (
+            event.key === "Escape" &&
+            !this.element(".quarry-explore-dataset-picker").hidden
+        ) {
+            event.preventDefault();
+            event.stopPropagation();
+            this.element(".quarry-explore-dataset-picker").hidden = true;
+            this.element(".quarry-explore-manage").setAttribute(
+                "aria-expanded",
+                "false",
+            );
+            this.element(".quarry-explore-manage").focus();
+            return;
+        }
+        if (
+            event.key === "Escape" &&
+            (!this.element(".quarry-explore-field").hidden ||
+                !this.element(".quarry-explore-format-panel").hidden)
+        ) {
+            event.preventDefault();
+            event.stopPropagation();
+            const format = !this.element(".quarry-explore-format-panel").hidden;
+            this.closeAuxiliaryPanels();
+            if (format) {
+                this.element(".quarry-explore-format-panel").hidden = true;
+                this.element('[data-action="format"]').setAttribute(
+                    "aria-expanded",
+                    "false",
+                );
+            }
+            this.element<HTMLButtonElement>(
+                format
+                    ? '[data-action="format"]'
+                    : `[data-values-row="${this.selected}"]`,
+            ).focus();
+            return;
+        }
+        if (
+            target.matches("[data-view]") &&
+            ["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)
+        ) {
+            event.preventDefault();
+            const views = Array.from(
+                this.host.querySelectorAll<HTMLElement>("[data-view]"),
+            )
+                .filter((tab) => !tab.hidden)
+                .map((tab) => tab.dataset.view as string);
+            const index = views.indexOf(target.dataset.view ?? "fields");
+            const view =
+                event.key === "Home"
+                    ? views[0]
+                    : event.key === "End"
+                      ? views[views.length - 1]
+                      : views[
+                            (index +
+                                (event.key === "ArrowRight" ? 1 : -1) +
+                                views.length) %
+                                views.length
+                        ];
+            const tab = this.element<HTMLButtonElement>(
+                `[data-view="${view}"]`,
+            );
+            tab.focus();
+            tab.click();
+        } else if (
+            event.key === "Escape" &&
+            !this.element(".quarry-explore-dataset-picker").hidden
+        ) {
+            event.preventDefault();
+            event.stopPropagation();
+            this.element(".quarry-explore-dataset-picker").hidden = true;
+            this.element<HTMLButtonElement>(".quarry-explore-manage").focus();
+        }
+    };
+    private element<T extends HTMLElement = HTMLElement>(selector: string): T {
+        const element = this.host.querySelector<T>(selector);
+        if (!element) throw new Error(`Missing Explore control: ${selector}`);
+        return element;
+    }
+    private blankFilter(): FilterRow {
+        const column = this.fields[0];
+        return {
+            column: column?.name ?? "",
+            operator: isNumber(column) ? "+=" : "=",
+            value: "",
+        };
+    }
+    private activeColumn(): ColumnDto | undefined {
+        return this.fields.find(
+            (column) => column.name === this.filters[this.selected]?.column,
+        );
+    }
+    private renderFilters(): void {
+        this.element<HTMLButtonElement>('[data-action="add"]').disabled =
+            !this.fields.length;
+        this.element(".quarry-explore-filters").innerHTML = this.filters
+            .map((filter, index) => {
+                const column = this.fields.find(
+                    (field) => field.name === filter.column,
+                );
+                const operators = isNumber(column)
+                    ? numberOperators
+                    : column?.kind === "scalar"
+                      ? [...textOperators, ...lengthOperators]
+                      : textOperators;
+                const numericInput =
+                    isNumber(column) || isComparison(filter.operator);
+                return `<div class="quarry-explore-filter-row ${index === this.selected ? "active" : ""}" data-row="${index}">
+                <select class="quarry-explore-column auto-dropdown" aria-label="Field ${index + 1}">${this.fields.map((field) => `<option value="${escapeHtml(field.name)}" ${field.name === filter.column ? "selected" : ""}>${escapeHtml(field.name)}</option>`).join("")}</select>
+                <select class="quarry-explore-operator auto-dropdown" aria-label="Match ${index + 1}">${operators.map(([value, label]) => `<option value="${value}" ${value === filter.operator ? "selected" : ""}>${label}</option>`).join("")}</select>
+                <input ${column ? "" : "disabled"} class="quarry-explore-value auto-text" aria-label="Value ${index + 1}" type="${numericInput ? "number" : "text"}" ${numericInput ? (isNumber(column) ? 'step="any"' : 'step="1" min="0"') : ""} placeholder="${isNumber(column) ? "Number" : numericInput ? "Character count" : "Search terms"}" value="${escapeHtml(filter.value)}">
+                <button type="button" class="basic-button quarry-explore-values-toggle" data-values-row="${index}" aria-expanded="false" hidden>Choose values</button>
+                <button type="button" class="basic-button" data-remove="${index}" ${this.filters.length === 1 ? "hidden" : ""} aria-label="Remove filter ${index + 1}">×</button>
+            </div>`;
+            })
+            .join("");
+        this.updateValueButtons();
+    }
+    private updateValueButtons(): void {
+        this.host
+            .querySelectorAll<HTMLButtonElement>("[data-values-row]")
+            .forEach((button) => {
+                const index = Number(button.dataset.valuesRow);
+                const row = this.filters[index];
+                button.hidden =
+                    !row ||
+                    isComparison(row.operator) ||
+                    !this.recurringFields.get(
+                        `${this.dataset.name}:${row.column}`,
+                    );
+                button.textContent = "Choose values";
+                button.setAttribute(
+                    "aria-expanded",
+                    String(
+                        index === this.selected &&
+                            !this.element(".quarry-explore-field").hidden,
+                    ),
+                );
+            });
+    }
+    private selectRow(index: number): void {
+        if (this.searchTimer) clearTimeout(this.searchTimer);
+        this.selected = index;
+        this.host.querySelectorAll<HTMLElement>("[data-row]").forEach((row) => {
+            row.classList.toggle("active", Number(row.dataset.row) === index);
+        });
+        this.valueRequest++;
+        this.valueSearch = "";
+        this.valueResponse = null;
+        this.valueItems = [];
+        this.valueBusy = false;
+        this.renderDiscovery();
+        this.loadValues();
+    }
+    private renderDiscovery(): void {
+        const column = this.activeColumn();
+        const pane = this.element(".quarry-explore-field");
+        if (!column) {
+            pane.textContent = "No fields to explore.";
+            return;
+        }
+        pane.innerHTML = `<div class="quarry-explore-value-heading"><strong>Values for ${escapeHtml(column.name)} · Filter ${this.selected + 1}</strong><button type="button" class="basic-button" data-action="close-values" aria-label="Close values">Close</button></div><div class="quarry-explore-popover-content">
+            ${this.datasets.length > 1 ? `<div class="quarry-explore-value-source">${this.sourceSelector("Values from")}</div>` : ""}<div class="quarry-explore-value-picker">
+                <label class="quarry-explore-search-label" hidden>Search values<input class="quarry-explore-search auto-text" type="search" placeholder="Search values" value="${escapeHtml(this.valueSearch)}"></label>
+                <div class="quarry-explore-suggestions" aria-live="polite"></div>
+            </div>
+            </div>`;
+        this.renderSuggestions();
+    }
+    private renderOutput(): void {
+        this.element<HTMLSelectElement>(
+            ".quarry-explore-output-add",
+        ).innerHTML =
+            '<option value="">Add column…</option>' +
+            this.fields
+                .filter((column) => !this.outputs.includes(column.name))
+                .map(
+                    (column) =>
+                        `<option value="${escapeHtml(column.name)}">${escapeHtml(column.name)}</option>`,
+                )
+                .join("");
+        this.element(".quarry-explore-output-selected").textContent = this
+            .outputs.length
+            ? this.outputs.length > 1
+                ? "Drag column tags in the query to reorder."
+                : ""
+            : `Dataset default: ${this.datasets.length === 1 ? (this.dataset.resolvedPromptColumn ?? "first available column") : "each dataset’s default output"}`;
+    }
+    private focus = (event: Event): void => {
+        const row = (event.target as HTMLElement).closest<HTMLElement>(
+            "[data-row]",
+        );
+        if (row && Number(row.dataset.row) !== this.selected)
+            this.selectRow(Number(row.dataset.row));
+    };
+    private edit = (event: Event): void => {
+        const target = event.target as HTMLInputElement;
+        if (target.matches(".quarry-explore-dataset-search")) {
+            if (event.type !== "input") return;
+            this.datasetSearch = target.value;
+            this.renderDatasetOptions();
+            return;
+        }
+        if (target.matches(".quarry-explore-source-select")) {
+            if (event.type === "change") this.changeSource(target.value);
+            return;
+        }
+        if (target.matches(".quarry-explore-search")) {
+            if (event.type !== "input") return;
+            this.valueSearch = target.value;
+            if (this.searchTimer) clearTimeout(this.searchTimer);
+            this.valueRequest++;
+            this.valueBusy = true;
+            this.valueItems = [];
+            this.renderSuggestions();
+            this.searchTimer = setTimeout(() => this.loadValues(), 250);
+            return;
+        }
+        const row = target.closest<HTMLElement>("[data-row]");
+        if (row) {
+            const index = Number(row.dataset.row);
+            const filter = this.filters[index];
+            if (target.matches(".quarry-explore-column")) {
+                if (event.type !== "change") return;
+                filter.column = target.value;
+                filter.operator = isNumber(
+                    this.fields.find((field) => field.name === filter.column),
+                )
+                    ? "+="
+                    : "=";
+                filter.value = "";
+                this.renderFilters();
+                this.selectRow(index);
+                this.element<HTMLSelectElement>(
+                    `[data-row="${index}"] .quarry-explore-column`,
+                ).focus();
+            } else if (target.matches(".quarry-explore-operator")) {
+                if (event.type !== "change") return;
+                const changedType =
+                    isComparison(filter.operator) !==
+                    isComparison(target.value);
+                filter.operator = target.value;
+                if (changedType) filter.value = "";
+                this.renderFilters();
+                this.element<HTMLSelectElement>(
+                    `[data-row="${index}"] .quarry-explore-operator`,
+                ).focus();
+            } else if (target.matches(".quarry-explore-value")) {
+                filter.value = target.value;
+                if (index !== this.selected) this.selectRow(index);
+                this.renderSuggestions();
+            }
+        } else if (target.matches(".quarry-explore-output-add")) {
+            if (!target.value || event.type !== "change") return;
+            if (!this.outputs.includes(target.value))
+                this.outputs.push(target.value);
+            target.value = "";
+            this.renderOutput();
+        } else if (target.matches(".quarry-explore-keys")) {
+            this.format.keys = target.checked;
+        } else if (target.matches(".quarry-explore-record-separator")) {
+            this.format.recordSeparator = target.value;
+        } else if (target.matches(".quarry-explore-field-separator")) {
+            this.format.fieldSeparator = target.value;
+        } else return;
+        this.renderFormatExamples();
+        this.renderDraft();
+    };
+    private loadValues(append = false): void {
+        const column = this.activeColumn();
+        if (
+            !column ||
+            isNumber(column) ||
+            column.kind !== "scalar" ||
+            !this.dataset.columns.some(
+                (source) =>
+                    source.name.toLowerCase() === column.name.toLowerCase(),
+            )
+        )
+            return;
+        const request = ++this.valueRequest;
+        const search = this.valueSearch;
+        const offset = append ? this.valueItems.length : 0;
+        this.valueBusy = true;
+        this.renderSuggestions();
+        const receive = (data: ExploreColumnResponse): void => {
+            if (this.disposed || request !== this.valueRequest) return;
+            if (
+                append &&
+                data.success &&
+                data.revision !== this.valueResponse?.revision
+            ) {
+                this.valueItems = [];
+                this.loadValues();
+                return;
+            }
+            this.valueBusy = false;
+            this.valueResponse = data;
+            if (data.success)
+                this.recurringFields.set(
+                    `${this.dataset.name}:${column.name}`,
+                    !!data.eligible,
+                );
+            this.valueItems = data.success
+                ? append
+                    ? [...this.valueItems, ...(data.values ?? [])]
+                    : (data.values ?? [])
+                : [];
+            this.renderSuggestions();
+        };
+        genericRequest<ExploreColumnResponse>(
+            "QuarryExploreColumn",
+            { dataset: this.dataset.name, column: column.name, search, offset },
+            receive,
+            0,
+            () =>
+                receive({
+                    success: false,
+                    error: "Could not check this column. Try again.",
+                }),
+        );
+    }
+
+    private renderSuggestions(): void {
+        const area = this.host.querySelector<HTMLElement>(
+            ".quarry-explore-suggestions",
+        );
+        if (!area) return;
+        const column = this.activeColumn();
+        this.updateValueButtons();
+        const supported =
+            column &&
+            column.kind === "scalar" &&
+            !isNumber(column) &&
+            this.dataset.columns.some(
+                (source) =>
+                    source.name.toLowerCase() === column.name.toLowerCase(),
+            );
+        this.element(".quarry-explore-value-picker").hidden = !supported;
+        if (!supported) {
+            if (column)
+                this.element(
+                    ".quarry-explore-value-heading strong",
+                ).textContent =
+                    `Examples for ${column.name} · Filter ${this.selected + 1}`;
+            return;
+        }
+        const data = this.valueResponse;
+        const eligible = data?.success && data.eligible;
+        this.element(".quarry-explore-value-heading strong").textContent =
+            `${eligible || !data?.success ? "Values" : "Examples"} for ${column.name} · Filter ${this.selected + 1}`;
+        this.element(".quarry-explore-search-label").hidden =
+            !eligible || ((data.totalValues ?? 0) <= 12 && !this.valueSearch);
+        if (this.valueBusy && !eligible) {
+            area.innerHTML =
+                '<p class="quarry-explore-note">Checking the entire column… You can still enter search terms in the filter row.</p>';
+            return;
+        }
+        if (!data) {
+            area.replaceChildren();
+            return;
+        }
+        if (!data.success) {
+            area.innerHTML = `<p class="quarry-explore-error">${escapeHtml(data.error ?? "Could not check this column.")}</p><button type="button" class="basic-button" data-action="retry-values">Retry</button>`;
+            return;
+        }
+        if (!eligible) {
+            const reason =
+                data.reason === "distinct_limit"
+                    ? `This column has at least ${data.uniqueLimit?.toLocaleString()} distinct values.`
+                    : data.reason === "length_limit"
+                      ? `This column contains a value at least ${data.lengthLimit} characters long.`
+                      : data.reason === "percentage_limit"
+                        ? `${data.distinctCount?.toLocaleString()} distinct values across ${data.totalRows?.toLocaleString()} rows exceed the ${data.maxDistinctPercent}% limit.`
+                        : data.reason === "empty"
+                          ? "This column has no nonempty values."
+                          : "Use text matching for this field.";
+            area.innerHTML = `<details class="quarry-explore-profile-reason"><summary>About value suggestions</summary><p>${reason}</p></details>`;
+            return;
+        }
+        const chosen = this.readValues();
+        area.innerHTML =
+            '<p class="quarry-explore-note">Click a value to add or remove it from this filter.</p>' +
+            this.valueItems
+                .map(
+                    (value) =>
+                        `<button type="button" class="basic-button" data-value="${escapeHtml(value.trim())}" aria-pressed="${chosen.includes(value.trim())}" ${canSuggestValue(value) ? "" : 'disabled title="Contains query separators; enter a shorter search term above."'}>${escapeHtml(value)}</button>`,
+                )
+                .join("") +
+            `<p class="quarry-explore-note">${this.valueBusy ? "Loading values…" : this.valueItems.length ? `Showing ${this.valueItems.length.toLocaleString()} of ${(data.matchingValues ?? 0).toLocaleString()} matching values · ${(data.totalValues ?? 0).toLocaleString()} distinct values in the entire column.` : "No matching values. You can still enter search terms in the filter row."}</p>` +
+            (data.hasMore
+                ? `<button type="button" class="basic-button" data-action="more-values" ${this.valueBusy ? "disabled" : ""}>Show more values</button>`
+                : "") +
+            `<p class="quarry-explore-note">Checked the entire column. Change recurring-value limits in Settings.</p>`;
+    }
+
+    private readValues(): string[] {
+        return this.values(this.filters[this.selected]?.value ?? "");
+    }
+    private values(value: string): string[] {
+        return value
+            .split(",")
+            .map((part) => part.trim())
+            .filter(Boolean);
+    }
+    private draft(): { query: string; error: string } {
+        const filters: ExploreFilter[] = [];
+        for (const [index, row] of this.filters.entries()) {
+            const values = this.values(row.value);
+            if (!values.length) continue;
+            if (!this.fields.some((field) => field.name === row.column))
+                return {
+                    query: "",
+                    error: "Choose a field shared by the selected datasets.",
+                };
+            if (
+                values.some((value) => !canSuggestValue(value)) ||
+                /[=,;[\]<>|:]/.test(row.column)
+            )
+                return {
+                    query: "",
+                    error: `Filter ${index + 1} contains query separators. Enter shorter search terms.`,
+                };
+            const column = this.fields.find(
+                (field) => field.name === row.column,
+            );
+            if (
+                isComparison(row.operator) &&
+                (values.length !== 1 ||
+                    !Number.isFinite(Number(values[0])) ||
+                    (!isNumber(column) &&
+                        (!Number.isInteger(Number(values[0])) ||
+                            Number(values[0]) < 0)))
+            )
+                return {
+                    query: "",
+                    error: `Filter ${index + 1} needs ${isNumber(column) ? "a valid number" : "a whole character count of zero or more"}.`,
+                };
+            filters.push({
+                column: row.column,
+                operator: row.operator,
+                values,
+            });
+        }
+        if (
+            this.datasets.some((dataset) =>
+                /[,;[\]<>|:*?]/.test(dataset.name),
+            ) ||
+            this.outputs.some((column) => /[,;[\]<>|:]/.test(column))
+        )
+            return {
+                query: "",
+                error: "This dataset or column name contains query separators. Use Run Query to write the query manually.",
+            };
+        return {
+            query: buildExploreQuery(
+                this.datasets.map((dataset) => dataset.name).join(","),
+                filters,
+                this.outputs,
+                this.format,
+            ),
+            error: "",
+        };
+    }
+    private renderDraft(): void {
+        if (!this.element(".quarry-explore-dataset-picker").hidden)
+            this.renderDatasetOptions();
+        const { query, error } = this.draft();
+        if (query !== this.draftQuery) {
+            this.request++;
+            this.pendingQuery = null;
+            this.draftQuery = query;
+        }
+        this.element(".quarry-explore-error").textContent = error;
+        const names = this.datasets.map((dataset) => dataset.name);
+        this.element(".quarry-explore-query").innerHTML = query
+            ? "&lt;q:" +
+              names
+                  .map(
+                      (name) =>
+                          `<button type="button" class="quarry-explore-query-dataset" data-action="choose-datasets" title="Switch dataset or add another dataset">${escapeHtml(name)}</button>`,
+                  )
+                  .join(",") +
+              this.renderQuerySuffix(query.slice(3 + names.join(",").length))
+            : "";
+        this.element(".quarry-explore-result-status").textContent =
+            this.resultsQuery && this.resultsQuery !== query
+                ? "Results from the last test. Test query to update."
+                : this.pendingQuery
+                  ? "Drawing random matches…"
+                  : this.resultsQuery
+                    ? ""
+                    : "Test query to preview these settings.";
+        this.element('[data-action="copy"]').textContent = "Copy tag";
+        for (const action of ["test", "use", "copy"])
+            this.element<HTMLButtonElement>(
+                `[data-action="${action}"]`,
+            ).disabled =
+                !!error || (action === "test" && this.pendingQuery === query);
+    }
+    testQuery(): void {
+        const { query, error } = this.draft();
+        if (error) return;
+        const request = ++this.request;
+        this.pendingQuery = query;
+        const button = this.element<HTMLButtonElement>('[data-action="test"]');
+        button.disabled = true;
+        this.element(".quarry-explore-result-status").textContent =
+            "Drawing random matches…";
+        genericRequest<RunQueryResponse>(
+            "QuarryRunQuery",
+            { query, maxResults: 100 },
+            (data) => {
+                if (this.disposed || request !== this.request) return;
+                button.disabled = false;
+                this.pendingQuery = null;
+                this.resultsQuery = query;
+                this.element(".quarry-explore-result-status").textContent = "";
+                this.renderResults(data);
+            },
+            0,
+            () => {
+                if (this.disposed || request !== this.request) return;
+                button.disabled = false;
+                this.pendingQuery = null;
+                this.element(".quarry-explore-result-status").textContent =
+                    "Query failed. Try again.";
+            },
+        );
+    }
+    private click = (event: Event): void => {
+        const target = event.target as HTMLElement;
+        if (
+            !target.closest(
+                ".quarry-explore-popover, [data-values-row], [data-action='format']",
+            )
+        )
+            this.closeAuxiliaryPanels();
+        const button = target.closest<HTMLButtonElement>("button");
+        if (!button || button.disabled) return;
+        if (button.dataset.valuesRow !== undefined) {
+            if (button.hidden) return;
+            const index = Number(button.dataset.valuesRow);
+            const wasOpen =
+                this.openValueRow === index &&
+                !this.element(".quarry-explore-field").hidden;
+            this.closeAuxiliaryPanels();
+            if (!wasOpen) {
+                if (index !== this.selected) this.selectRow(index);
+                this.openValueRow = index;
+                this.element(".quarry-explore-field").hidden = false;
+                this.renderSuggestions();
+                this.element<HTMLButtonElement>(
+                    '[data-action="close-values"]',
+                ).focus();
+            }
+        } else if (button.dataset.action === "close-values") {
+            this.closeAuxiliaryPanels();
+            this.element<HTMLButtonElement>(
+                `[data-values-row="${this.selected}"]`,
+            ).focus();
+        } else if (button.dataset.action === "format") {
+            const open = this.element(".quarry-explore-format-panel").hidden;
+            this.closeAuxiliaryPanels();
+            this.element(".quarry-explore-format-panel").hidden = !open;
+            button.setAttribute("aria-expanded", String(open));
+        } else if (button.dataset.action === "choose-datasets") {
+            this.chooseDatasets();
+        } else if (button.dataset.action === "close-datasets") {
+            this.setView("fields");
+            this.element<HTMLButtonElement>(".quarry-explore-manage").focus();
+        } else if (button.dataset.switchDataset || button.dataset.addDataset) {
+            const name =
+                button.dataset.switchDataset ?? button.dataset.addDataset;
+            const dataset = this.availableDatasets.find(
+                (candidate) => candidate.name === name,
+            );
+            if (!dataset || dataset.error || !dataset.columns.length) return;
+            if (button.dataset.switchDataset)
+                this.updateDatasets([dataset], true);
+            else {
+                const used = [
+                    ...this.filters
+                        .filter((row) => row.value.trim())
+                        .map((row) => row.column),
+                    ...this.outputs,
+                ];
+                if (
+                    this.datasets.some((selected) => selected.name === name) ||
+                    datasetCompatibility(dataset, this.fields, used)
+                )
+                    return;
+                this.updateDatasets([...this.datasets, dataset], false);
+            }
+        } else if (button.dataset.removeDataset) {
+            const datasets = this.datasets.filter(
+                (dataset) => dataset.name !== button.dataset.removeDataset,
+            );
+            if (datasets.length && datasets.length !== this.datasets.length)
+                this.updateDatasets(datasets, false);
+        } else if (button.dataset.view) {
+            this.setView(button.dataset.view);
+            if (button.dataset.view === "rows") this.newSample();
+        } else if (button.dataset.value !== undefined) {
+            const values = this.readValues();
+            const value = button.dataset.value;
+            this.filters[this.selected].value = (
+                values.includes(value)
+                    ? values.filter((item) => item !== value)
+                    : [...values, value]
+            ).join(", ");
+            this.element<HTMLInputElement>(
+                `[data-row="${this.selected}"] .quarry-explore-value`,
+            ).value = this.filters[this.selected].value;
+            this.renderSuggestions();
+            this.renderDraft();
+        } else if (button.dataset.remove !== undefined) {
+            if (this.filters.length === 1) return;
+            const index = Number(button.dataset.remove);
+            this.filters.splice(index, 1);
+            if (!this.filters.length) this.filters.push(this.blankFilter());
+            this.selected = Math.min(index, this.filters.length - 1);
+            this.renderFilters();
+            this.selectRow(this.selected);
+            this.renderDraft();
+        } else if (button.dataset.removeOutput !== undefined) {
+            this.outputs.splice(Number(button.dataset.removeOutput), 1);
+            this.renderOutput();
+            this.renderDraft();
+        } else if (button.dataset.action === "more-values")
+            this.loadValues(true);
+        else if (button.dataset.action === "retry-values") this.loadValues();
+        else if (button.dataset.action === "add") {
+            const row = this.filters[this.selected] ?? this.blankFilter();
+            this.filters.push({ ...row, value: "" });
+            this.selected = this.filters.length - 1;
+            this.renderFilters();
+            this.selectRow(this.selected);
+            this.element<HTMLInputElement>(
+                `[data-row="${this.selected}"] .quarry-explore-value`,
+            ).focus();
+            this.renderDraft();
+        } else if (button.dataset.action === "clear-filters") {
+            this.filters = [this.blankFilter()];
+            this.selected = 0;
+            this.closeAuxiliaryPanels();
+            this.renderFilters();
+            this.selectRow(0);
+            this.renderDraft();
+            this.element<HTMLInputElement>(".quarry-explore-value").focus();
+        } else if (button.dataset.action === "test") this.testQuery();
+        else if (
+            button.dataset.action === "copy" ||
+            button.dataset.action === "use"
+        ) {
+            const { query, error } = this.draft();
+            if (error) return;
+            if (button.dataset.action === "copy") {
+                copyText(query);
+                button.textContent = "Copied";
+                if (typeof doNoticePopover === "function")
+                    doNoticePopover(
+                        "Copied!",
+                        "notice-pop-green quarry-copy-notice",
+                    );
+            } else {
+                insertQuarryQuery(query);
+                this.close();
+            }
+        } else if (button.classList.contains("quarry-runquery-copy")) {
+            copyText(
+                button
+                    .closest("tr")
+                    ?.querySelector(".quarry-runquery-prompt-text")
+                    ?.textContent ?? "",
+            );
+            if (typeof doNoticePopover === "function")
+                doNoticePopover(
+                    "Copied!",
+                    "notice-pop-green quarry-copy-notice",
+                );
+        }
+    };
+}

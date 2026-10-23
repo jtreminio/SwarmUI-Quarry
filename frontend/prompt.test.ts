@@ -1,9 +1,49 @@
-import { afterEach, describe, expect, it } from "@jest/globals";
+import { afterEach, describe, expect, it, jest } from "@jest/globals";
 import {
     computePromptEdit,
     getAddToExistingTag,
+    insertQuarryQuery,
     setAddToExistingTag,
 } from "./prompt";
+
+describe("insertQuarryQuery", () => {
+    it("keeps formatting textareas out of the prompt destination", () => {
+        const globals = globalThis as typeof globalThis & {
+            uiImprover: typeof uiImprover;
+        };
+        const originalImprover = globals.uiImprover;
+        const originalChange = globalThis.triggerChangeFor;
+        const originalRequest = globalThis.genericRequest;
+        const originalGetElement = globalThis.getRequiredElementById;
+        document.body.innerHTML = `<textarea id="alt_prompt_textbox">portrait</textarea>
+            <div class="quarry-explore"><textarea id="separator">; </textarea></div>`;
+        const prompt = document.getElementById(
+            "alt_prompt_textbox",
+        ) as HTMLTextAreaElement;
+        const separator = document.getElementById(
+            "separator",
+        ) as HTMLTextAreaElement;
+        globals.uiImprover = {
+            getLastSelectedTextbox: () => [separator, separator.value.length],
+        };
+        globalThis.triggerChangeFor = jest.fn();
+        globalThis.genericRequest = jest.fn();
+        globalThis.getRequiredElementById = (id) =>
+            document.getElementById(id) as HTMLElement;
+        try {
+            insertQuarryQuery("<q:example:prompt>");
+            expect(prompt.value).toBe("portrait <q:example:prompt>");
+            expect(separator.value).toBe("; ");
+            expect(document.activeElement).toBe(prompt);
+        } finally {
+            globals.uiImprover = originalImprover;
+            globalThis.triggerChangeFor = originalChange;
+            globalThis.genericRequest = originalRequest;
+            globalThis.getRequiredElementById = originalGetElement;
+            document.body.replaceChildren();
+        }
+    });
+});
 
 // computePromptEdit(value, cursorPos, name, addToExisting) is the pure core of a dataset-name click: it decides
 // whether to insert, toggle-off, or append to an existing tag, and returns the new prompt text + caret.

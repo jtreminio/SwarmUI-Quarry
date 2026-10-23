@@ -109,8 +109,32 @@ public static class QueryRunner
             matched.Add((plan, count));
         }
         List<QueryRunRow> rows = [];
-        foreach ((Plan plan, long _) in matched)
+        // Allocate the sample across all matching rows, so an earlier dataset
+        // does not consume the whole result limit in multi-dataset queries.
+        long[] remaining = matched.Select(m => m.Count).ToArray();
+        int[] requested = new int[matched.Count];
+        long available = total;
+        for (int draw = 0; draw < limit && available > 0; draw++)
         {
+            long index = Random.Shared.NextInt64(available--);
+            for (int i = 0; i < remaining.Length; i++)
+            {
+                if (index < remaining[i])
+                {
+                    remaining[i]--;
+                    requested[i]++;
+                    break;
+                }
+                index -= remaining[i];
+            }
+        }
+        foreach (var (match, index) in matched.Select((match, index) => (match, index)))
+        {
+            Plan plan = match.Plan;
+            if (requested[index] == 0)
+            {
+                continue;
+            }
             if (rows.Count >= limit)
             {
                 break;
@@ -118,8 +142,8 @@ public static class QueryRunner
             List<string> fetched;
             try
             {
-                fetched = DatasetManager.Backend.GetPrompts(
-                    plan.Entry.Path, plan.OutputColumns, plan.Filter, limit - rows.Count, 0);
+                fetched = DatasetManager.Backend.GetRandomPrompts(
+                    plan.Entry.Path, plan.OutputColumns, plan.Filter, requested[index], match.Count);
             }
             catch (Exception ex) when (multi)
             {
@@ -133,6 +157,11 @@ public static class QueryRunner
                     rows.Add(new QueryRunRow(plan.Entry.Name, prompt));
                 }
             }
+        }
+        for (int i = rows.Count - 1; i > 0; i--)
+        {
+            int j = Random.Shared.Next(i + 1);
+            (rows[i], rows[j]) = (rows[j], rows[i]);
         }
         List<QueryRunMatch> datasets = [.. matched
             .OrderByDescending(m => m.Count)

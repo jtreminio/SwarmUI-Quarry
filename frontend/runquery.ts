@@ -182,8 +182,15 @@ const groupResultsByDataset = (
     return groups;
 };
 
-const renderResultRow = (prompt: string, highlights: string[]): string =>
-    `<tr><td class="quarry-runquery-result-prompt"><div class="quarry-runquery-prompt-text">${highlightPrompt(prompt, highlights)}</div></td><td class="quarry-runquery-result-copy"><button type="button" class="basic-button quarry-runquery-copy" title="Copy prompt">${COPY_GLYPH}</button></td></tr>`;
+export const renderResultRow = (
+    prompt: string,
+    highlights: string[],
+    headingHtml = "",
+): string =>
+    `<tr><td class="quarry-runquery-result-prompt">${headingHtml}<div class="quarry-runquery-prompt-text">${highlightPrompt(prompt, highlights)}</div></td><td class="quarry-runquery-result-copy"><button type="button" class="basic-button quarry-runquery-copy" title="Copy prompt" aria-label="Copy prompt">${COPY_GLYPH}</button></td></tr>`;
+
+export const renderResultTable = (rowsHtml: string): string =>
+    `<table class="quarry-preview-table simple-table quarry-runquery-table"><colgroup><col class="quarry-runquery-col-prompt"><col class="quarry-runquery-col-copy"></colgroup><tbody>${rowsHtml}</tbody></table>`;
 
 const renderDatasetGroup = (
     dataset: string,
@@ -195,10 +202,7 @@ const renderDatasetGroup = (
         .join("");
     return `<div class="quarry-runquery-dataset-group">
         <div class="quarry-runquery-dataset-heading">${escapeHtml(dataset)}</div>
-        <table class="quarry-preview-table simple-table quarry-runquery-table">
-            <colgroup><col class="quarry-runquery-col-prompt"><col class="quarry-runquery-col-copy"></colgroup>
-            <tbody>${rows}</tbody>
-        </table>
+        ${renderResultTable(rows)}
     </div>`;
 };
 
@@ -249,7 +253,9 @@ export const renderRunQueryResponse = (
         ),
         body:
             renderRunQueryDatasetCounts(datasets) +
-            renderRunQueryResults(results, data.highlights ?? []),
+            (results.length === 0 && (data.total ?? 0) > 0
+                ? '<div class="quarry-preview-empty">Matching rows were counted, but no sample output was returned.</div>'
+                : renderRunQueryResults(results, data.highlights ?? [])),
     };
 };
 

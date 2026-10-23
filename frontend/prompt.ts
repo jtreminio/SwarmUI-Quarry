@@ -215,24 +215,34 @@ export const computePromptEdit = (
     return insertNewTag(value, cursorPos, name);
 };
 
-export const insertQuarryTag = (name: string): void => {
+const editPrompt = (
+    compute: (value: string, cursor: number) => PromptEdit,
+): void => {
     let [promptBox, cursorPos] = uiImprover.getLastSelectedTextbox();
-    if (!promptBox) {
+    if (!promptBox || promptBox.closest(".quarry-explore")) {
         promptBox = getRequiredElementById(
             "alt_prompt_textbox",
         ) as HTMLTextAreaElement;
         cursorPos = promptBox.value.length;
     }
-    const edit = computePromptEdit(
-        promptBox.value,
-        cursorPos,
-        name,
-        addToExistingTag,
-    );
+    const edit = compute(promptBox.value, cursorPos);
     promptBox.value = edit.value;
     promptBox.selectionStart = edit.cursor;
     promptBox.selectionEnd = edit.cursor;
     promptBox.focus();
     triggerChangeFor(promptBox);
     recomputeReferences();
+};
+
+export const insertQuarryTag = (name: string): void => {
+    editPrompt((value, cursor) =>
+        computePromptEdit(value, cursor, name, addToExistingTag),
+    );
+};
+
+/** Insert an Explore draft as its own tag so its filters never affect other datasets. */
+export const insertQuarryQuery = (query: string): void => {
+    editPrompt((value, cursor) =>
+        insertNewTag(value, cursor, query.slice(3, -1)),
+    );
 };

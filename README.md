@@ -17,7 +17,7 @@ Neat, right? Let's take the tour.
 
 ## Where it lives: the Quarry tab
 
-Everything happens in the **Quarry** tab down in SwarmUI's bottom bar, right next to Wildcards. Open it and you get a table of every dataset Quarry found, each with its prompt column, its tag columns, a row count, and a Preview button (more on all of those below).
+Everything happens in the **Quarry** tab down in SwarmUI's bottom bar, right next to Wildcards. The table lists each dataset's available columns, row count, and an **Explore** button. Saved output and tag-search defaults are in **Explore → Dataset settings**. The **Wildcards** switch controls inclusion in wildcard matches; direct dataset references still work when it is off. Dataset names still add or remove references in your prompt. Storage and other global options are under **Settings**.
 
 If Quarry asks to install its dataset reader, click the install button and wait for it to finish. You only need to do this once.
 
@@ -323,15 +323,15 @@ You never have to type any of this by hand if you would rather not. In the Quarr
 
 ### "Add to existing `<q:>` tag"
 
-There is a small checkbox in the tab: **Add to existing `<q:>` tag**, and it is **on by default**. While it is on, clicking a dataset name **adds it to the first `<q:...>` tag you already have**, so clicking "creatures" while `<q:characters>` is sitting in your prompt turns it into `<q:characters,creatures>`. It is the quickest way to build up a combined pull without wrangling brackets yourself. Prefer a separate tag every time? Switch it off, and each click inserts its own.
+Under **Settings**, the checkbox **Add dataset names to an existing `<q:>` tag** is **on by default**. While it is on, clicking a dataset name **adds it to the first `<q:...>` tag you already have**, so clicking "creatures" while `<q:characters>` is sitting in your prompt turns it into `<q:characters,creatures>`. It is the quickest way to build up a combined pull without wrangling brackets yourself. Prefer a separate tag every time? Switch it off, and each click inserts its own.
 
 ## Columns: prompt and tags
 
-Each dataset row in the tab has two column settings, and Quarry fills both in with sensible guesses, so most of the time you can leave them alone.
+Open **Explore → Dataset settings** to choose the default output column and the columns searched by `tags=`. Click **Save dataset settings** to apply changes.
 
 ### The prompt column
 
-This is the column whose text actually lands in your prompt. Quarry guesses it by looking for an obvious name like `prompt`, `text`, `caption`, `description`, or `value`, and if none of those exist it just uses the first column in the file. Guessed wrong? Pick the right one from the dropdown and click **Save Settings**.
+This is the column whose text actually lands in your prompt. Quarry guesses it by looking for an obvious name like `prompt`, `text`, `caption`, `description`, or `value`, and if none of those exist it just uses the first column in the file. Guessed wrong? Choose another column under **Default output** and click **Save dataset settings**.
 
 This setting is the default for every tag. Want a different column for one tag only? Append `:column` to the tag itself — see [Picking the prompt column](#picking-the-prompt-column-qfoobar) above.
 
@@ -339,9 +339,25 @@ This setting is the default for every tag. Want a different column for one tag o
 
 These are the columns the `tags=` keyword searches. Tick whichever columns hold tags (a dataset can have several, and Quarry searches every one you tick). Here is the friendly part: **if you do not set any tag columns at all, `tags=` just searches the prompt column instead.** So `<q:something[tags=girl]>` still does something useful on every dataset, even a bare one that has nothing but a prompt.
 
-## Peek inside: the Preview button
+## Discover values and build filters: Explore
 
-Not sure what is in a dataset, or which column is which? Hit **Preview** on its row. A pop-up shows the first rows of the dataset in a plain table with every column on display, so you can eyeball the real data, spot which column holds the prompt, and see what your tag columns actually look like. Need more? **Load 500 more** pulls the next chunk. There is also a **Clear cache** button for when you have changed a file and want a fresh look.
+Click **Explore** on a dataset row. **Query** opens with up to 100 random outputs. Filter rows support text matching, numeric comparisons, and text-length limits. All rows must match; blank rows are ignored. **+ Add filter** adds a row and **Clear filters** resets them. Editing filters preserves the previous results until you click **Test query** for a fresh random sample.
+
+**Columns to print** accepts whole columns and nested paths such as `prompt.subject`. Selected columns appear as removable tags in the generated query. Drag their grips to reorder them, or press Alt+Left/Right on a focused tag. Remove all selections to use the dataset default. **Formatting options** controls field names (`|keys`) and separators between selected columns or records (`rs`) and nested JSON fields or simple list items (`fs`). **Copy tag** copies the query; **Use in prompt** inserts it as a separate tag.
+
+**Choose datasets** opens the searchable dataset list. **Use only this dataset** starts a fresh query; **Add to query** keeps the current filters and output choices when compatible. Combined queries offer shared fields. Remove a dataset with its × button, or use **Back to query** to leave the chooser.
+
+**Full records** shows every column from up to 100 random rows, independently of query filters and output choices. **Refresh sample** replaces those rows; samples never accumulate and may overlap. For combined queries, the source selector chooses which dataset's records to show. **Dataset settings** edits that dataset's saved defaults.
+
+**Choose values** appears beside text filters whose entire column passes all three limits in the Quarry toolbar's **Settings**:
+
+- Fewer than **10,000 distinct values** by default.
+- Every value shorter than **256 characters** by default.
+- Distinct values at most **10% of the total row count** by default. Use 100% to disable this restriction.
+
+Null and empty strings do not count as distinct values; the percentage uses all rows. Values preserve original casing and whitespace, while filters remain case-insensitive. Length counts Unicode code points. Failed length or count checks may stop early; a passing check reads the whole column. Results are cached on disk until the dataset or limits change. Large value sets are searchable, with 100 values per page. Values containing reserved query separators cannot be inserted as a single term.
+
+The first exact match count for a query can require a full scan; later counts are cached. Interactive previews draw fresh random samples without changing seeded prompt generation. Image-search folder selection is under **Image Search → Search folders**.
 
 ## Try a tag before generating
 

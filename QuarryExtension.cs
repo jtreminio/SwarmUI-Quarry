@@ -34,6 +34,7 @@ public class QuarryExtension : Extension
         API.RegisterAPICall(QuarrySetDatasetEnabled, true, Permissions.FundamentalGenerateTabAccess);
         API.RegisterAPICall(QuarryRefresh, true, Permissions.FundamentalGenerateTabAccess);
         API.RegisterAPICall(QuarryPreviewDataset, false, Permissions.FundamentalGenerateTabAccess);
+        API.RegisterAPICall(QuarryExploreColumn, false, Permissions.FundamentalGenerateTabAccess);
         API.RegisterAPICall(QuarryClearPreviewCache, true, Permissions.FundamentalGenerateTabAccess);
         API.RegisterAPICall(QuarryCleanTempFiles, true, Permissions.FundamentalGenerateTabAccess);
         API.RegisterAPICall(QuarryRepairDatasets, true, Permissions.InstallFeatures);
@@ -104,6 +105,11 @@ public class QuarryExtension : Extension
             JObject settings = JObject.Parse(File.ReadAllText(SettingsFilePath));
             DatasetManager.DatasetsFolder = settings.Value<string>("datasetsFolder") ?? "";
             AddToExistingTag = settings.Value<bool?>("addToExistingTag") ?? true;
+            ExploreLimits limits = new(settings.Value<int?>("exploreUniqueLimit") ?? ExploreLimits.DefaultUniqueValues,
+                settings.Value<int?>("exploreLengthLimit") ?? ExploreLimits.DefaultValueLength,
+                settings.Value<double?>("exploreDistinctPercent") ?? ExploreLimits.DefaultDistinctPercent);
+            limits.Validate();
+            DatasetManager.ExploreValueLimits = limits;
             ImageSearchDirectories = settings["imageSearchDirectories"] is JArray directories
                 ? ImageHistoryEnumerator.NormalizeDirectories(directories.Values<string>())
                 : ImageHistoryEnumerator.NormalizeDirectories([settings.Value<string>("imageSearchDirectory") ?? ""]);
@@ -135,6 +141,9 @@ public class QuarryExtension : Extension
             {
                 ["datasetsFolder"] = DatasetManager.DatasetsFolder,
                 ["addToExistingTag"] = AddToExistingTag,
+                ["exploreUniqueLimit"] = DatasetManager.ExploreValueLimits.UniqueValues,
+                ["exploreLengthLimit"] = DatasetManager.ExploreValueLimits.ValueLength,
+                ["exploreDistinctPercent"] = DatasetManager.ExploreValueLimits.MaxDistinctPercent,
                 ["imageSearchDirectories"] = new JArray(ImageSearchDirectories),
                 ["promptColumns"] = promptColumns,
                 ["tagColumns"] = tagColumns,
@@ -238,6 +247,9 @@ public class QuarryExtension : Extension
             ["success"] = true,
             ["datasetsFolder"] = DatasetManager.DatasetsFolder,
             ["addToExistingTag"] = AddToExistingTag,
+            ["exploreUniqueLimit"] = DatasetManager.ExploreValueLimits.UniqueValues,
+            ["exploreLengthLimit"] = DatasetManager.ExploreValueLimits.ValueLength,
+            ["exploreDistinctPercent"] = DatasetManager.ExploreValueLimits.MaxDistinctPercent,
             ["canViewImageHistory"] = canViewImageHistory,
             ["active"] = DatasetManager.IsActive,
             ["requirementsInstalled"] = requirementsInstalled,
@@ -258,10 +270,14 @@ public class QuarryExtension : Extension
         return Task.FromResult(BuildSettingsResponse(session));
     }
 
-    public Task<JObject> QuarrySaveSettings(Session session, string datasetsFolder, string promptColumnsJson, string tagColumnsJson, string disabledDatasetsJson = "", bool addToExistingTag = true, string imageSearchDirectoriesJson = null)
+    public Task<JObject> QuarrySaveSettings(Session session, string datasetsFolder, string promptColumnsJson, string tagColumnsJson, string disabledDatasetsJson = "", bool addToExistingTag = true, string imageSearchDirectoriesJson = null, int exploreUniqueLimit = -1, int exploreLengthLimit = -1, double exploreDistinctPercent = -1)
     {
         try
         {
+            ExploreLimits limits = new(exploreUniqueLimit == -1 ? DatasetManager.ExploreValueLimits.UniqueValues : exploreUniqueLimit,
+                exploreLengthLimit == -1 ? DatasetManager.ExploreValueLimits.ValueLength : exploreLengthLimit,
+                exploreDistinctPercent == -1 ? DatasetManager.ExploreValueLimits.MaxDistinctPercent : exploreDistinctPercent);
+            limits.Validate();
             string[] searchDirectories = ImageSearchDirectories;
             if (imageSearchDirectoriesJson is not null)
             {
@@ -276,6 +292,7 @@ public class QuarryExtension : Extension
             DatasetManager.DatasetsFolder = datasetsFolder ?? "";
             AddToExistingTag = addToExistingTag;
             ImageSearchDirectories = searchDirectories;
+            DatasetManager.ExploreValueLimits = limits;
             JObject parsed = string.IsNullOrWhiteSpace(promptColumnsJson) ? [] : JObject.Parse(promptColumnsJson);
             DatasetManager.SetPromptColumns(ReadPromptColumns(parsed));
             JObject parsedTags = string.IsNullOrWhiteSpace(tagColumnsJson) ? [] : JObject.Parse(tagColumnsJson);
@@ -317,15 +334,14 @@ public class QuarryExtension : Extension
         return Task.FromResult(response);
     }
 
-    public Task<JObject> QuarryPreviewDataset(Session session, string dataset, int limit = DatasetManager.DefaultPreviewLimit)
+    public async Task<JObject> QuarryPreviewDataset(Session session, string dataset, int limit = DatasetManager.DefaultPreviewLimit)
     {
         int clamped = Math.Clamp(limit <= 0 ? DatasetManager.DefaultPreviewLimit : limit, 1, DatasetManager.MaxPreviewLimit);
-        (bool success, List<string> columns, List<List<string>> rows, string error) = DatasetManager.PreviewDataset(dataset, clamped);
+        (bool success, List<string> columns, List<List<string>> rows, string error) = await Task.Run(() => DatasetManager.RandomPreviewDataset(dataset, clamped));
         if (!success)
         {
-            return Task.FromResult(new JObject { ["success"] = false, ["error"] = error });
+            return new JObject { ["success"] = false, ["error"] = error };
         }
-        (columns, rows) = ColumnSchema.StripCompanions(columns, rows);
         JObject response = new()
         {
             ["success"] = true,
@@ -338,7 +354,32 @@ public class QuarryExtension : Extension
         {
             response["rowCount"] = rowCount.Value;
         }
-        return Task.FromResult(response);
+        return response;
+    }
+
+    public async Task<JObject> QuarryExploreColumn(Session session, string dataset, string column, string search = "", int offset = 0)
+    {
+        try
+        {
+            ExploreLimits limits = DatasetManager.ExploreValueLimits;
+            ColumnValueProfile profile = await Task.Run(() => DatasetManager.GetColumnValueProfile(dataset, column, limits));
+            const int pageSize = 100;
+            string[] matches = [.. profile.Values.Where(value => value.Contains(search ?? "", StringComparison.OrdinalIgnoreCase))];
+            int start = Math.Clamp(offset, 0, matches.Length);
+            return new JObject
+            {
+                ["success"] = true, ["eligible"] = profile.Eligible, ["reason"] = profile.Reason, ["revision"] = profile.Revision,
+                ["uniqueLimit"] = limits.UniqueValues, ["lengthLimit"] = limits.ValueLength,
+                ["maxDistinctPercent"] = limits.MaxDistinctPercent, ["totalRows"] = profile.TotalRows, ["distinctCount"] = profile.DistinctCount,
+                ["totalValues"] = profile.Values.Count, ["matchingValues"] = matches.Length,
+                ["values"] = ToJArray(matches.Skip(start).Take(pageSize)), ["offset"] = start,
+                ["hasMore"] = start + pageSize < matches.Length,
+            };
+        }
+        catch (Exception ex)
+        {
+            return new JObject { ["success"] = false, ["error"] = ex.Message };
+        }
     }
 
     public Task<JObject> QuarryClearPreviewCache(Session session, string dataset)
@@ -365,14 +406,14 @@ public class QuarryExtension : Extension
         });
     }
 
-    public Task<JObject> QuarryRunQuery(Session session, string query, int maxResults = QueryRunner.DefaultMaxResults)
+    public async Task<JObject> QuarryRunQuery(Session session, string query, int maxResults = QueryRunner.DefaultMaxResults)
     {
         try
         {
-            QueryRunResult result = QueryRunner.Run(query, maxResults);
+            QueryRunResult result = await Task.Run(() => QueryRunner.Run(query, maxResults));
             if (result.Invalid is not null)
             {
-                return Task.FromResult(new JObject { ["invalid"] = result.Invalid });
+                return new JObject { ["invalid"] = result.Invalid };
             }
             JArray datasets = [];
             foreach (QueryRunMatch match in result.Datasets)
@@ -384,19 +425,19 @@ public class QuarryExtension : Extension
             {
                 results.Add(new JObject { ["dataset"] = row.Dataset, ["prompt"] = row.Prompt });
             }
-            return Task.FromResult(new JObject
+            return new JObject
             {
                 ["total"] = result.Total,
                 ["datasets"] = datasets,
                 ["results"] = results,
                 ["truncated"] = result.Truncated,
                 ["highlights"] = ToJArray(result.Highlights),
-            });
+            };
         }
         catch (Exception ex)
         {
             Logs.Error($"Quarry: run-query failed for '{query}': {ex.ReadableString()}");
-            return Task.FromResult(new JObject { ["success"] = false, ["error"] = ex.Message });
+            return new JObject { ["success"] = false, ["error"] = ex.Message };
         }
     }
 

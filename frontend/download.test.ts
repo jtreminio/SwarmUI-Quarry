@@ -31,6 +31,7 @@ describe("renderRemoteDatasetRow", () => {
         expect(html).toContain("Update available!");
         expect(html).toContain('data-update="true"');
         expect(html).toContain("quarry-remote-check");
+        expect(html).toContain("✓ Installed");
         expect(
             renderRemoteDatasetRow({ ...dataset, installed: false }),
         ).not.toContain("Update available!");
@@ -142,13 +143,11 @@ describe("renderRemoteDatasets", () => {
             makeRemote("X779.Danbooruwildcards/DTR2024_1boy"),
             makeRemote("X779.Danbooruwildcards/DTR2024_1girl"),
         ]);
-        // A collapsible folder header row, collapsed by default, with a 3-column-wide header and a count of 2.
         expect(html).toContain('class="quarry-folder-row quarry-collapsed"');
         expect(html).toContain('data-folder="X779.Danbooruwildcards"');
         expect(html).toContain("quarry-folder-toggle");
         expect(html).toContain('aria-expanded="false"');
-        expect(html).toContain('colspan="3"');
-        // Member rows keep the full name in data-dataset but display only the leaf.
+        expect(html).toContain('colspan="4"');
         expect(html).toContain(
             'data-dataset="X779.Danbooruwildcards/DTR2024_1boy"',
         );
@@ -195,10 +194,10 @@ describe("renderRemoteFolderHeaderRow", () => {
         items: [makeRemote("anime/1girl"), makeRemote("anime/2girls")],
     };
 
-    it("renders a 3-column header row with a recursive dataset count", () => {
+    it("renders a folder header with a recursive dataset count", () => {
         const html = renderRemoteFolderHeaderRow(node, 0, new Set(["anime"]));
         expect(html).toContain('class="quarry-folder-row"');
-        expect(html).toContain('colspan="3"');
+        expect(html).toContain('colspan="4"');
         expect(html).toContain('aria-expanded="true"');
         expect(html).toContain('<span class="quarry-folder-name">anime</span>');
         expect(html).toContain('title="2 dataset(s)"');

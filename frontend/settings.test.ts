@@ -1,20 +1,22 @@
 import { describe, expect, it } from "@jest/globals";
 import {
     applyInPromptHighlights,
-    collectDisabledDatasets,
-    collectPromptColumns,
     collectTagColumns,
+    datasetColumnSettings,
     datasetFolder,
     datasetLeafName,
     formatDatasetsSummary,
     formatRowCount,
     isDatasetEnabled,
-    PREVIEW_LOAD_MORE_COUNT,
+    mountDatasetSettings,
     PREVIEW_ROW_LIMIT,
+    quarry,
     renderDatasetRow,
+    renderDatasetSettings,
     renderDatasets,
     renderEnableToggle,
     renderFolderHeaderRow,
+    renderForm,
     renderPreviewStatus,
     renderPreviewTable,
 } from "./settings";
@@ -47,7 +49,7 @@ describe("escapeHtml", () => {
 });
 
 describe("renderDatasetRow", () => {
-    it("pre-selects the resolved column and badges list columns", () => {
+    it("lists available columns without editable defaults or field-count labels", () => {
         const html = renderDatasetRow({
             name: "prompts/1girl",
             columns: [
@@ -61,13 +63,15 @@ describe("renderDatasetRow", () => {
             error: null,
         });
         expect(html).toContain("prompts/1girl");
-        expect(html).toContain('value="prompt" selected');
-        expect(html).toContain("tags [list]");
+        expect(html).toContain("<span>prompt</span>, <span>tags</span>");
+        expect(html).not.toContain("<select");
+        expect(html).not.toContain('type="checkbox"');
+        expect(html).not.toContain("quarry-field-count");
         expect(html).toContain('data-dataset="prompts/1girl"');
     });
 
-    it("renders tag checkboxes with configured columns checked", () => {
-        const html = renderDatasetRow({
+    it("preserves editable tag-search defaults in dataset settings", () => {
+        const html = renderDatasetSettings({
             name: "prompts/1girl",
             columns: [
                 { name: "prompt", kind: "scalar" },
@@ -103,7 +107,7 @@ describe("renderDatasetRow", () => {
         expect(html).toContain("boom");
     });
 
-    it("includes a preview button targeting the dataset", () => {
+    it("includes an Explore button targeting the dataset", () => {
         const html = renderDatasetRow({
             name: "prompts/1girl",
             columns: [{ name: "prompt", kind: "scalar" }],
@@ -115,7 +119,7 @@ describe("renderDatasetRow", () => {
         });
         expect(html).toContain("quarry-preview-button");
         expect(html).toContain('data-dataset="prompts/1girl"');
-        expect(html).toContain("Preview");
+        expect(html).toContain("Explore");
     });
 
     it("shows the row count, formatted with separators", () => {
@@ -216,6 +220,163 @@ describe("renderDatasetRow", () => {
     });
 });
 
+describe("persistent dataset defaults", () => {
+    it("opens general settings from the catalog toolbar without exposing image folder controls", () => {
+        const originalRequest = globalThis.genericRequest;
+        globalThis.genericRequest = <T>(
+            name: string,
+            _data: object,
+            callback: (response: T) => void,
+        ): void => {
+            if (name === "QuarryGetSettings")
+                callback({ success: true, datasets: [] } as T);
+        };
+        try {
+            document.body.innerHTML = '<div id="quarry-tab-body"></div>';
+            quarry.init();
+            const panel = document.getElementById(
+                "quarry-global-settings",
+            ) as HTMLElement;
+            const toggle = document.getElementById(
+                "quarry-settings-toggle",
+            ) as HTMLButtonElement;
+            expect(panel.hidden).toBe(true);
+            toggle.click();
+            expect(panel.hidden).toBe(false);
+            expect(toggle.getAttribute("aria-expanded")).toBe("true");
+            expect(panel.querySelector('button[type="submit"]')).not.toBeNull();
+            toggle.click();
+            expect(panel.hidden).toBe(true);
+            expect(renderForm("")).not.toContain("quarry-image-search-folders");
+            expect(renderForm("")).not.toContain(
+                '<details class="quarry-global-settings"',
+            );
+        } finally {
+            globalThis.genericRequest = originalRequest;
+            document.body.innerHTML = "";
+        }
+    });
+
+    it("saves dataset defaults independently and preserves them during general settings saves", () => {
+        const originalRequest = globalThis.genericRequest;
+        const datasets = [
+            makeDataset({
+                name: "target",
+                columns: [
+                    { name: "prompt", kind: "scalar" },
+                    { name: "full", kind: "scalar" },
+                ],
+            }),
+            makeDataset({
+                name: "other",
+                configuredPromptColumn: "prompt",
+                configuredTagColumns: ["prompt"],
+                enabled: false,
+            }),
+        ];
+        const saves: Record<string, unknown>[] = [];
+        globalThis.genericRequest = <T>(
+            name: string,
+            data: object,
+            callback: (response: T) => void,
+        ): void => {
+            if (name === "QuarryGetSettings")
+                callback({
+                    success: true,
+                    datasetsFolder: "saved-folder",
+                    addToExistingTag: false,
+                    exploreUniqueLimit: 2000,
+                    datasets,
+                } as T);
+            if (name === "QuarrySaveSettings") {
+                saves.push(data as Record<string, unknown>);
+                callback({
+                    success: true,
+                    datasetsFolder: "saved-folder",
+                    addToExistingTag: false,
+                    exploreUniqueLimit: 2000,
+                    datasets,
+                } as T);
+            }
+        };
+        try {
+            document.body.innerHTML = '<div id="quarry-tab-body"></div>';
+            quarry.init();
+            document
+                .getElementById("quarry-form")
+                ?.dispatchEvent(new Event("submit", { cancelable: true }));
+            expect(JSON.parse(String(saves[0].promptColumnsJson))).toEqual({
+                other: "prompt",
+            });
+            expect(JSON.parse(String(saves[0].tagColumnsJson))).toEqual({
+                target: [],
+                other: ["prompt"],
+            });
+            (
+                document.getElementById("quarry-folder") as HTMLInputElement
+            ).value = "unsaved-folder";
+            const host = document.createElement("div");
+            const cleanup = mountDatasetSettings(host, datasets[0], () => {});
+            (host.querySelector("select") as HTMLSelectElement).value = "full";
+            (
+                host.querySelector('input[value="full"]') as HTMLInputElement
+            ).checked = true;
+            (
+                host.querySelector(
+                    "[data-save-dataset-settings]",
+                ) as HTMLButtonElement
+            ).click();
+            expect(saves[1]).toMatchObject({
+                datasetsFolder: "saved-folder",
+                addToExistingTag: false,
+                exploreUniqueLimit: 2000,
+                disabledDatasetsJson: '["other"]',
+            });
+            expect(JSON.parse(String(saves[1].promptColumnsJson))).toEqual({
+                target: "full",
+                other: "prompt",
+            });
+            expect(JSON.parse(String(saves[1].tagColumnsJson))).toEqual({
+                target: ["full"],
+                other: ["prompt"],
+            });
+            cleanup();
+        } finally {
+            globalThis.genericRequest = originalRequest;
+            document.body.innerHTML = "";
+        }
+    });
+
+    it("preserves saved defaults when the catalog no longer contains editors", () => {
+        const datasets = [
+            makeDataset({ name: "automatic", resolvedPromptColumn: "prompt" }),
+            makeDataset({
+                name: "configured",
+                configuredPromptColumn: "full",
+                configuredTagColumns: ["artist", "rating"],
+            }),
+        ];
+        expect(datasetColumnSettings(datasets)).toEqual({
+            promptColumns: { configured: "full" },
+            tagColumns: { automatic: [], configured: ["artist", "rating"] },
+        });
+        expect(
+            renderDatasetSettings(makeDataset({ name: "automatic" })),
+        ).toContain('value="" selected');
+    });
+
+    it("escapes column names in the read-only catalog", () => {
+        const html = renderDatasetRow(
+            makeDataset({
+                name: "safe",
+                columns: [{ name: "<script>", kind: "scalar" }],
+            }),
+        );
+        expect(html).toContain("<span>&lt;script&gt;</span>");
+        expect(html).not.toContain("<script>");
+    });
+});
+
 describe("formatDatasetsSummary", () => {
     it("sums rows and sizes across datasets", () => {
         expect(
@@ -274,7 +435,13 @@ describe("renderDatasets", () => {
         ]);
         expect(html).toContain("quarry-datasets-table");
         expect(html).toContain("<thead>");
-        expect(html).toContain("<th>Rows</th>");
+        const container = document.createElement("div");
+        container.innerHTML = html;
+        expect(
+            [...container.querySelectorAll("th")].map(
+                (cell) => cell.textContent,
+            ),
+        ).toContain("Rows");
         expect(html).toContain('data-dataset="a"');
         expect(html).toContain('data-dataset="b"');
     });
@@ -547,12 +714,6 @@ describe("PREVIEW_ROW_LIMIT", () => {
     });
 });
 
-describe("PREVIEW_LOAD_MORE_COUNT", () => {
-    it("is 500", () => {
-        expect(PREVIEW_LOAD_MORE_COUNT).toBe(500);
-    });
-});
-
 describe("renderPreviewStatus", () => {
     it("shows the loaded count out of the total, with separators", () => {
         expect(renderPreviewStatus(600, 1234)).toBe(
@@ -637,50 +798,6 @@ describe("renderDatasetRow enable toggle", () => {
         expect(html).toContain("quarry-dataset-enable-cell");
         expect(html).toContain('aria-checked="false"');
         expect(html).toContain("quarry-dataset-disabled");
-    });
-});
-
-describe("collectDisabledDatasets", () => {
-    it("returns names of toggles that are switched off", () => {
-        const container = document.createElement("div");
-        container.innerHTML = `
-            <button class="quarry-dataset-enable" data-dataset="a" aria-checked="true"></button>
-            <button class="quarry-dataset-enable" data-dataset="b" aria-checked="false"></button>
-            <button class="quarry-dataset-enable" data-dataset="c" aria-checked="false"></button>`;
-        expect(collectDisabledDatasets(container)).toEqual(["b", "c"]);
-    });
-
-    it("returns an empty list when all datasets are enabled", () => {
-        const container = document.createElement("div");
-        container.innerHTML = `<button class="quarry-dataset-enable" data-dataset="a" aria-checked="true"></button>`;
-        expect(collectDisabledDatasets(container)).toEqual([]);
-    });
-
-    it("ignores toggles without a data-dataset attribute", () => {
-        const container = document.createElement("div");
-        container.innerHTML = `<button class="quarry-dataset-enable" aria-checked="false"></button>`;
-        expect(collectDisabledDatasets(container)).toEqual([]);
-    });
-});
-
-describe("collectPromptColumns", () => {
-    it("reads each select's value keyed by dataset name", () => {
-        const container = document.createElement("div");
-        container.innerHTML = `
-            <select class="quarry-dataset-column" data-dataset="a">
-                <option value="x">x</option>
-                <option value="y" selected>y</option>
-            </select>
-            <select class="quarry-dataset-column" data-dataset="b">
-                <option value="z" selected>z</option>
-            </select>`;
-        expect(collectPromptColumns(container)).toEqual({ a: "y", b: "z" });
-    });
-
-    it("ignores selects without a data-dataset attribute", () => {
-        const container = document.createElement("div");
-        container.innerHTML = `<select class="quarry-dataset-column"><option value="x" selected>x</option></select>`;
-        expect(collectPromptColumns(container)).toEqual({});
     });
 });
 

@@ -26,6 +26,9 @@ export interface SettingsResponse {
     imageSearchDirectoryOptions?: string[];
     canViewImageHistory?: boolean;
     addToExistingTag?: boolean;
+    exploreUniqueLimit?: number;
+    exploreLengthLimit?: number;
+    exploreDistinctPercent?: number;
     active?: boolean;
     requirementsInstalled?: boolean;
     count?: number;
@@ -59,6 +62,24 @@ export interface PreviewResponse {
     columns?: string[];
     rows?: string[][];
     rowCount?: number | null;
+    error?: string;
+}
+
+export interface ExploreColumnResponse {
+    revision?: string;
+    success: boolean;
+    eligible?: boolean;
+    reason?: string;
+    uniqueLimit?: number;
+    lengthLimit?: number;
+    maxDistinctPercent?: number;
+    totalRows?: number;
+    distinctCount?: number;
+    totalValues?: number;
+    matchingValues?: number;
+    values?: string[];
+    offset?: number;
+    hasMore?: boolean;
     error?: string;
 }
 

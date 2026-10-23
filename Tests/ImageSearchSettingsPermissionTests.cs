@@ -14,6 +14,7 @@ public sealed class ImageSearchSettingsPermissionTests : IDisposable
     private readonly string oldDataDir = Program.DataDir;
     private readonly string oldOutput = Program.ServerSettings.Paths.OutputPath;
     private readonly bool oldAppendUser = Program.ServerSettings.Paths.AppendUserNameToOutputPath;
+    private readonly ExploreLimits oldLimits = DatasetManager.ExploreValueLimits;
     private readonly string oldDatasets = DatasetManager.DatasetsFolder;
     private readonly string oldExtension = DatasetManager.ExtensionFolder;
     private readonly Dictionary<string, string> oldPromptColumns = new(DatasetManager.GetPromptColumnsSnapshot());
@@ -118,8 +119,56 @@ public sealed class ImageSearchSettingsPermissionTests : IDisposable
         Assert.Empty(persisted["imageSearchDirectories"]);
     }
 
+    [Fact]
+    public async Task ExploreSettings_PersistAndRejectInvalidLimitsBeforeChanges()
+    {
+        JObject saved = await extension.QuarrySaveSettings(MakeSession(false), DatasetManager.DatasetsFolder, "{}", "{}",
+            exploreUniqueLimit: 2000, exploreLengthLimit: 150, exploreDistinctPercent: 5);
+        Assert.True(saved.Value<bool>("success"));
+        Assert.Equal(5, saved.Value<double>("exploreDistinctPercent"));
+        JObject persisted = JObject.Parse(File.ReadAllText(Path.Combine(root, "Quarry.json")));
+        Assert.Equal(2000, persisted.Value<int>("exploreUniqueLimit"));
+        Assert.Equal(150, persisted.Value<int>("exploreLengthLimit"));
+        Assert.Equal(5, persisted.Value<double>("exploreDistinctPercent"));
+        JObject rejected = await extension.QuarrySaveSettings(MakeSession(false), "changed", "{}", "{}", exploreDistinctPercent: 101);
+        Assert.False(rejected.Value<bool>("success"));
+        Assert.Equal(Path.Combine(root, "datasets"), DatasetManager.DatasetsFolder);
+        Assert.Equal(new ExploreLimits(2000, 150, 5), DatasetManager.ExploreValueLimits);
+        JObject legacy = await extension.QuarrySaveSettings(MakeSession(false), DatasetManager.DatasetsFolder, "{}", "{}");
+        Assert.True(legacy.Value<bool>("success"));
+        Assert.Equal(5, legacy.Value<double>("exploreDistinctPercent"));
+    }
+
+    [Fact]
+    public async Task ExploreColumn_SearchesEntireSetPaginatesAndInvalidatesAfterChange()
+    {
+        string path = Path.Combine(DatasetManager.DatasetsFolder, "values.jsonl");
+        File.WriteAllLines(path, Enumerable.Range(0, 1500).Select(i => new JObject { ["value"] = $"Artist_{i % 150:D3}" }.ToString(Newtonsoft.Json.Formatting.None)));
+        DatasetManager.Sync();
+        DatasetManager.ExploreValueLimits = new(200, 100, 10);
+        JObject first = await extension.QuarryExploreColumn(MakeSession(false), "values", "value");
+        Assert.True(first.Value<bool>("eligible"));
+        Assert.Equal(150, first.Value<int>("totalValues"));
+        Assert.Equal(100, first["values"].Count());
+        Assert.True(first.Value<bool>("hasMore"));
+        JObject second = await extension.QuarryExploreColumn(MakeSession(false), "values", "value", offset: 100);
+        Assert.Equal(50, second["values"].Count());
+        Assert.False(second.Value<bool>("hasMore"));
+        Assert.Equal("Artist_100", second["values"][0].Value<string>());
+        JObject search = await extension.QuarryExploreColumn(MakeSession(false), "values", "value", search: "aRTIST_149");
+        Assert.Equal(new[] { "Artist_149" }, search["values"].Values<string>());
+        JObject missing = await extension.QuarryExploreColumn(MakeSession(false), "values", "value", search: "' OR 1=1 --");
+        Assert.Empty(missing["values"]);
+        File.AppendAllText(path, new JObject { ["value"] = new string('x', 100) }.ToString(Newtonsoft.Json.Formatting.None) + "\n");
+        JObject changed = await extension.QuarryExploreColumn(MakeSession(false), "values", "value");
+        Assert.False(changed.Value<bool>("eligible"));
+        Assert.Equal("length_limit", changed.Value<string>("reason"));
+        Assert.NotEqual(first.Value<string>("revision"), changed.Value<string>("revision"));
+    }
+
     public void Dispose()
     {
+        DatasetManager.ExploreValueLimits = oldLimits;
         Program.DataDir = oldDataDir;
         Program.ServerSettings.Paths.OutputPath = oldOutput;
         Program.ServerSettings.Paths.AppendUserNameToOutputPath = oldAppendUser;
