@@ -82,7 +82,7 @@ public static class ImageHistoryScanner
         }
     }
 
-    public static (bool Ok, string Error, int Id) Start(Session session)
+    public static (bool Ok, string Error, int Id) Start(Session session, IEnumerable<string> directories = null)
     {
         if (!DatasetManager.IsActive)
         {
@@ -96,6 +96,15 @@ public static class ImageHistoryScanner
         if (!Directory.Exists(root))
         {
             return (false, "Your image output directory does not exist yet.", 0);
+        }
+        string[] selected = ImageHistoryEnumerator.NormalizeDirectories(directories);
+        if (selected.Length == 0)
+        {
+            return (false, "Select at least one image search folder in Quarry settings before scanning.", 0);
+        }
+        if (selected.Any(path => !Directory.Exists(Path.Combine(root, path))))
+        {
+            return (false, "A selected image search folder no longer exists. Update Image search folders in Quarry settings.", 0);
         }
         string userId = session.User.UserID;
         bool starNoFolders = session.User.Settings.StarNoFolders;
@@ -112,7 +121,7 @@ public static class ImageHistoryScanner
             state.Cancel = CancellationTokenSource.CreateLinkedTokenSource(Program.GlobalProgramCancel);
             cts = state.Cancel;
             state.Status = new ScanStatus { Id = id, State = "starting" };
-            state.Task = Task.Run(() => RunScan(userId, root, starNoFolders, id, cts, cts.Token));
+            state.Task = Task.Run(() => RunScan(userId, root, starNoFolders, id, cts, cts.Token, selected));
         }
         return (true, null, id);
     }
@@ -176,7 +185,7 @@ public static class ImageHistoryScanner
 
     private const int IndexBatchSize = 5_000;
 
-    private static void RunScan(string userId, string root, bool starNoFolders, int id, CancellationTokenSource cts, CancellationToken cancel)
+    private static void RunScan(string userId, string root, bool starNoFolders, int id, CancellationTokenSource cts, CancellationToken cancel, string[] directories)
     {
         ScanState state = StateFor(userId);
         string segment = ImageHistoryIndex.SafeUserSegment(userId);
@@ -187,7 +196,7 @@ public static class ImageHistoryScanner
         try
         {
             SetState(state, id, s => s.State = "scanning");
-            List<ImageHistoryFile> files = ImageHistoryEnumerator.Enumerate(root, starNoFolders, cancel);
+            List<ImageHistoryFile> files = ImageHistoryEnumerator.Enumerate(root, starNoFolders, cancel, directories);
             SetState(state, id, s => s.FilesTotal = files.Count);
             Dictionary<string, string> existing = LoadExistingHashes(userId, lancePath);
             List<ImageHistoryFile> changed =
@@ -227,7 +236,7 @@ public static class ImageHistoryScanner
 
             SetState(state, id, s => { s.FilesDone = files.Count; s.FilesIndexed = done; s.State = "finalizing"; });
             string livePaths = null;
-            if (files.Count > 0 || existing.Count == 0)
+            if (files.Count > 0 || existing.Count == 0 || !directories.Contains(""))
             {
                 WritePathsJson(livePathsPath, files);
                 livePaths = livePathsPath;

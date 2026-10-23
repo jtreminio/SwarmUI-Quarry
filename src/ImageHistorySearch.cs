@@ -13,7 +13,7 @@ public static class ImageHistorySearch
     private static readonly HashSet<string> Sortable =
         new(ImageHistoryIndex.ResultColumns, StringComparer.OrdinalIgnoreCase);
 
-    public static ImageSearchResult Search(string userId, JArray filters, string sortBy, bool sortDescending, int limit, int offset)
+    public static ImageSearchResult Search(string userId, JArray filters, string sortBy, bool sortDescending, int limit, int offset, IEnumerable<string> directories = null)
     {
         if (!ImageHistoryIndex.Exists(userId))
         {
@@ -23,6 +23,7 @@ public static class ImageHistorySearch
         ColumnSchema schema = SchemaCache.GetOrAdd(
             ImageHistoryIndex.SafeUserSegment(userId), _ => DatasetManager.Backend.GetSchema(lancePath));
         SqlFilter filter = ImageSearchFilterBuilder.Build(filters, schema, out List<string> warnings);
+        filter = LimitToDirectories(filter, directories);
         string sortColumn = ResolveSort(sortBy);
         (List<string> columns, List<List<string>> rows) =
             DatasetManager.Backend.GetFilteredRows(lancePath, ImageHistoryIndex.ResultColumns, filter, sortColumn, sortDescending, limit, offset);
@@ -30,6 +31,26 @@ public static class ImageHistorySearch
             ? rows.Count
             : DatasetManager.Backend.CountRows(lancePath, filter);
         return new ImageSearchResult(true, columns, rows, total, warnings);
+    }
+
+    internal static SqlFilter LimitToDirectories(SqlFilter filter, IEnumerable<string> directories)
+    {
+        string[] selected = ImageHistoryEnumerator.NormalizeDirectories(directories);
+        if (selected.Contains(""))
+        {
+            return filter;
+        }
+        List<QueryParameter> parameters = [.. filter.Parameters];
+        List<string> terms = [];
+        foreach (string directory in selected)
+        {
+            string name = $"imageSearchDirectory{terms.Count}";
+            terms.Add($"starts_with(\"path\", ${name})");
+            parameters.Add(new QueryParameter(name, directory + "/"));
+        }
+        string restriction = terms.Count == 0 ? "FALSE" : $"({string.Join(" OR ", terms)})";
+        return new SqlFilter(filter.IsEmpty ? restriction : $"({filter.WhereClause}) AND {restriction}",
+            parameters);
     }
 
     public static (IReadOnlyList<ImageSearchField> Core, IReadOnlyList<string> Discovered) Fields(string userId)

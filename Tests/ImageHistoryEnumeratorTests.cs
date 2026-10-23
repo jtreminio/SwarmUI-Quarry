@@ -4,6 +4,81 @@ namespace Quarry.Tests;
 
 public class ImageHistoryEnumeratorTests
 {
+    [Theory]
+    [InlineData(null, "")]
+    [InlineData("  ", "")]
+    [InlineData("./", "")]
+    [InlineData(" raw//2026/./ ", "raw/2026")]
+    [InlineData("raw\\2026\\", "raw/2026")]
+    public void NormalizeDirectory_AcceptsRelativeFolders(string input, string expected)
+        => Assert.Equal(expected, ImageHistoryEnumerator.NormalizeDirectory(input));
+
+    [Theory]
+    [InlineData("../outside")]
+    [InlineData("raw/../../outside")]
+    [InlineData("/tmp/images")]
+    [InlineData("C:\\images")]
+    [InlineData("\\\\server\\images")]
+    public void NormalizeDirectory_RejectsTraversalAndAbsolutePaths(string input)
+        => Assert.Throws<ArgumentException>(() => ImageHistoryEnumerator.NormalizeDirectory(input));
+
+    [Fact]
+    public void NormalizeDirectories_AllOverridesOthersAndParentsCoverDescendants()
+    {
+        Assert.Equal(new[] { "" }, ImageHistoryEnumerator.NormalizeDirectories(["raw", "", "Starred"]));
+        Assert.Equal(new[] { "raw", "Starred" }, ImageHistoryEnumerator.NormalizeDirectories(["raw/nested", "raw", "raw/", "Starred"]));
+        Assert.Empty(ImageHistoryEnumerator.NormalizeDirectories([]));
+        Assert.Equal(new[] { "" }, ImageHistoryEnumerator.NormalizeDirectories(null));
+    }
+
+    [Fact]
+    public void ListDirectories_StopsAtTwoLevelsAndScanContinuesDeeper()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "quarry-folder-list-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            foreach (string folder in new[] { "raw/2026/deep", "Starred", "Grids/batch", ".hidden/child" })
+            {
+                Directory.CreateDirectory(Path.Combine(root, folder));
+                System.IO.File.WriteAllText(Path.Combine(root, folder, "image.png"), "image");
+            }
+            Assert.Equal(new[] { "Grids", "Grids/batch", "Starred", "raw", "raw/2026" }, ImageHistoryEnumerator.ListDirectories(root));
+            var files = ImageHistoryEnumerator.Enumerate(root, false, CancellationToken.None, ["raw", "raw/2026", "Grids"]);
+            Assert.Equal(new[] { "Grids/batch/image.png", "raw/2026/deep/image.png" }, files.Select(f => f.RelativePath).Order());
+            Assert.Empty(ImageHistoryEnumerator.Enumerate(root, false, CancellationToken.None, []));
+            Assert.Empty(ImageHistoryEnumerator.ListDirectories(Path.Combine(root, "missing")));
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public void Enumerate_LimitsRecursivelyAndPreservesOutputRelativePaths()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "quarry-search-directory-" + Guid.NewGuid().ToString("N"));
+        string[] paths = ["raw/a.png", "raw/nested/b.webp", "raw-other/c.png", "other/d.png", "Starred/raw/a.png"];
+        try
+        {
+            foreach (string path in paths)
+            {
+                string absolute = Path.Combine(root, path);
+                Directory.CreateDirectory(Path.GetDirectoryName(absolute)!);
+                System.IO.File.WriteAllText(absolute, "image");
+            }
+            List<ImageHistoryFile> files = ImageHistoryEnumerator.Enumerate(root, false, CancellationToken.None, ["raw/"]);
+            Assert.Equal(new[] { "raw/a.png", "raw/nested/b.webp" }, files.Select(f => f.RelativePath).Order());
+            Assert.All(files, file => Assert.Equal(Path.Combine(root, file.RelativePath), file.AbsolutePath));
+            Assert.Equal(4, ImageHistoryEnumerator.Enumerate(root, false, CancellationToken.None).Count);
+            Assert.Throws<DirectoryNotFoundException>(() => ImageHistoryEnumerator.Enumerate(root, false, CancellationToken.None, ["missing"]));
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
     private static ImageHistoryFile File(string relative) => new(relative, $"/abs/{relative}", 1L, "1:1");
 
     [Fact]

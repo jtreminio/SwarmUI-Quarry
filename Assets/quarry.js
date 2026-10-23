@@ -2645,6 +2645,220 @@
     loadAvailable();
   };
 
+  // frontend/folderPicker.ts
+  var escapeAttr = escapeHtml;
+  var renderFolderPills = (selected) => {
+    if (selected.length === 0) {
+      return `<span class="quarry-search-folder-placeholder">No folders selected</span>`;
+    }
+    return selected.map(
+      (value) => `<span class="quarry-search-folder-pill">${escapeHtml(value || "All")}<button type="button" class="quarry-search-folder-pill-x" data-quarry-search-folder-pill-remove data-value="${escapeAttr(value)}" title="Remove ${escapeAttr(value || "All")}">✕</button></span>`
+    ).join("");
+  };
+  var renderFolderPicker = (selected, options) => {
+    const withValues = ["", ...options.filter(Boolean)];
+    const availableSelected = selected.filter(
+      (value) => withValues.includes(value)
+    );
+    const checked = (value) => availableSelected.some(
+      (parent) => parent === "" || parent === value || value.startsWith(`${parent}/`)
+    );
+    const checkboxes = withValues.map(
+      (opt) => `<label class="quarry-search-folder-option"><input type="checkbox" data-quarry-search-folder-check value="${escapeAttr(opt)}"${checked(opt) ? " checked" : ""}><span>${escapeHtml(opt || "All")}</span></label>`
+    ).join("");
+    return `
+            <div class="quarry-search-folder-picker" data-quarry-search-folder-picker>
+                <div class="quarry-search-folder-trigger" data-quarry-search-folder-trigger role="button" tabindex="0" aria-label="Image search folders" aria-expanded="false" title="Image search folders - click to edit">
+                    <span class="quarry-search-folder-pills" data-quarry-search-folder-pills>${renderFolderPills(availableSelected)}</span>
+                    <span class="quarry-search-folder-caret">▾</span>
+                </div>
+                <div class="quarry-search-folder-panel" data-quarry-search-folder-panel hidden>
+                    <input type="text" class="auto-text quarry-search-folder-filter" data-quarry-search-folder-filter aria-label="Filter image search folders" placeholder="Filter folders..." autocomplete="off">
+                    <div class="quarry-search-folder-list">${checkboxes}</div>
+                    <div class="quarry-search-folder-actions">
+                        <span class="quarry-search-folder-count" data-quarry-search-folder-count></span>
+                        <button type="button" class="basic-button quarry-search-folder-clear" data-quarry-search-folder-clear>Clear</button>
+                    </div>
+                </div>
+            </div>`;
+  };
+  var checkedValues = (picker) => Array.from(
+    picker.querySelectorAll(
+      "[data-quarry-search-folder-check]"
+    )
+  ).filter((box) => box.checked).map((box) => box.value);
+  var selectedFolderValues = (picker) => {
+    const values = checkedValues(picker);
+    return values.includes("") ? [""] : values.filter(
+      (value) => !values.some((parent) => value.startsWith(`${parent}/`))
+    );
+  };
+  var changeSelection = (picker, value, checked) => {
+    for (const box of picker.querySelectorAll(
+      "[data-quarry-search-folder-check]"
+    )) {
+      if (value === "" || box.value === value || box.value.startsWith(`${value}/`)) {
+        box.checked = checked;
+      } else if (!checked && (box.value === "" || value.startsWith(`${box.value}/`))) {
+        box.checked = false;
+      }
+    }
+    syncPicker(picker);
+  };
+  var syncPicker = (picker) => {
+    const selected = selectedFolderValues(picker);
+    const pills = picker.querySelector("[data-quarry-search-folder-pills]");
+    if (pills) {
+      pills.innerHTML = renderFolderPills(selected);
+    }
+    const count = picker.querySelector("[data-quarry-search-folder-count]");
+    if (count) {
+      count.textContent = selected.includes("") ? "All folders selected" : `${selected.length} selected`;
+    }
+  };
+  var shouldOpenUpward = (spaceAbove, spaceBelow, panelHeight, margin = 12) => spaceBelow < panelHeight + margin && spaceAbove > spaceBelow;
+  var setPanelOpen = (picker, open) => {
+    const panel = picker.querySelector(
+      "[data-quarry-search-folder-panel]"
+    );
+    if (!panel) {
+      return;
+    }
+    panel.hidden = !open;
+    picker.querySelector("[data-quarry-search-folder-trigger]")?.setAttribute("aria-expanded", String(open));
+    if (open) {
+      syncPicker(picker);
+      panel.classList.remove("quarry-search-folder-panel-up");
+      const trigger = picker.querySelector(
+        "[data-quarry-search-folder-trigger]"
+      );
+      if (trigger) {
+        const rect = trigger.getBoundingClientRect();
+        if (shouldOpenUpward(
+          rect.top,
+          window.innerHeight - rect.bottom,
+          panel.offsetHeight
+        )) {
+          panel.classList.add("quarry-search-folder-panel-up");
+        }
+      }
+      picker.querySelector(
+        "[data-quarry-search-folder-filter]"
+      )?.focus();
+    }
+  };
+  var closeAllPanels = (root, except) => {
+    for (const picker of Array.from(
+      root.querySelectorAll("[data-quarry-search-folder-picker]")
+    )) {
+      if (picker !== except) {
+        setPanelOpen(picker, false);
+      }
+    }
+  };
+  var applyFilter = (picker, filterText) => {
+    const wanted = filterText.trim().toLowerCase();
+    for (const label of Array.from(
+      picker.querySelectorAll(".quarry-search-folder-option")
+    )) {
+      const value = label.querySelector(
+        "[data-quarry-search-folder-check]"
+      )?.value ?? "";
+      label.style.display = !wanted || value === "" || value.toLowerCase().includes(wanted) ? "" : "none";
+    }
+  };
+  var started = false;
+  var initFolderPickers = (root) => {
+    if (started) {
+      return;
+    }
+    started = true;
+    root.addEventListener("click", (e) => {
+      const target = e.target;
+      if (!target) {
+        return;
+      }
+      const pillRemove = target.closest(
+        "[data-quarry-search-folder-pill-remove]"
+      );
+      if (pillRemove) {
+        const picker = pillRemove.closest(
+          "[data-quarry-search-folder-picker]"
+        );
+        if (picker) {
+          changeSelection(picker, pillRemove.dataset.value ?? "", false);
+        }
+        e.stopPropagation();
+        return;
+      }
+      const trigger = target.closest("[data-quarry-search-folder-trigger]");
+      if (trigger) {
+        const picker = trigger.closest(
+          "[data-quarry-search-folder-picker]"
+        );
+        if (picker) {
+          const panel = picker.querySelector(
+            "[data-quarry-search-folder-panel]"
+          );
+          closeAllPanels(root, picker);
+          setPanelOpen(picker, panel ? Boolean(panel.hidden) : true);
+        }
+        return;
+      }
+      const clear = target.closest("[data-quarry-search-folder-clear]");
+      if (clear) {
+        const picker = clear.closest("[data-quarry-search-folder-picker]");
+        if (picker) {
+          changeSelection(picker, "", false);
+        }
+        return;
+      }
+      if (!target.closest("[data-quarry-search-folder-picker]")) {
+        closeAllPanels(root);
+      }
+    });
+    root.addEventListener("change", (e) => {
+      const target = e.target;
+      if (!target?.matches?.("[data-quarry-search-folder-check]")) {
+        return;
+      }
+      const picker = target.closest("[data-quarry-search-folder-picker]");
+      if (picker) {
+        changeSelection(picker, target.value, target.checked);
+      }
+    });
+    root.addEventListener("input", (e) => {
+      const target = e.target;
+      if (!target?.matches?.("[data-quarry-search-folder-filter]")) {
+        return;
+      }
+      const picker = target.closest("[data-quarry-search-folder-picker]");
+      if (picker) {
+        applyFilter(picker, target.value);
+      }
+    });
+    root.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        const openPicker = root.querySelector(
+          "[data-quarry-search-folder-panel]:not([hidden])"
+        )?.closest("[data-quarry-search-folder-picker]");
+        openPicker?.querySelector(
+          "[data-quarry-search-folder-trigger]"
+        )?.focus();
+        closeAllPanels(root);
+        return;
+      }
+      const target = e.target;
+      if (e.key === "Enter" && target?.matches("[data-quarry-search-folder-filter]")) {
+        e.preventDefault();
+      }
+      if ((e.key === "Enter" || e.key === " ") && target?.matches?.("[data-quarry-search-folder-trigger]")) {
+        e.preventDefault();
+        target.click();
+      }
+    });
+  };
+
   // frontend/runquery.ts
   var RUNQUERY_DEFAULT_MAX = 25;
   var RUNQUERY_MIN_MAX = 1;
@@ -3176,6 +3390,11 @@
                         <label for="quarry-folder"><span class="auto-input-name">Datasets folder</span></label>
                         <input class="auto-text" type="text" id="quarry-folder" value="${escapeHtml(folder)}" placeholder="/path/to/datasets" autocomplete="off">
                     </div>
+                    <div class="quarry-search-folder-setting" hidden>
+                        <div class="quarry-search-folder-label">Image search folders</div>
+                        <div id="quarry-image-search-folders">${renderFolderPicker([""], [])}</div>
+                        <p class="quarry-search-folder-help">Choose output folders from the first two levels. Each selected folder includes all descendants. All includes the entire output directory and future folders. Save, then use Rescan history in Image Search to update the index.</p>
+                    </div>
                     <div class="quarry-setting-row">
                         <span class="auto-input-qbutton info-popover-button" onclick="doPopover('${ADD_TO_EXISTING_TAG_ID}', arguments[0])">?</span>
                         <label for="${ADD_TO_EXISTING_TAG_ID}">Add to existing <code>&lt;q:&gt;</code> tag</label>
@@ -3256,6 +3475,7 @@
     }
   };
   var currentDatasets = [];
+  var canViewImageHistory = false;
   var updateDatasetsSummary = () => {
     const el2 = document.getElementById(SUMMARY_ID2);
     if (el2) {
@@ -3264,11 +3484,28 @@
   };
   var applyResponse = (data) => {
     currentDatasets = data.datasets ?? [];
+    canViewImageHistory = data.canViewImageHistory === true;
     const folderEl = document.getElementById(
       "quarry-folder"
     );
     if (folderEl) {
       folderEl.value = data.datasetsFolder ?? "";
+    }
+    const searchFolders = document.getElementById(
+      "quarry-image-search-folders"
+    );
+    if (searchFolders) {
+      const setting = searchFolders.closest(
+        ".quarry-search-folder-setting"
+      );
+      if (setting) {
+        setting.hidden = !canViewImageHistory;
+      }
+      searchFolders.innerHTML = canViewImageHistory ? renderFolderPicker(
+        data.imageSearchDirectories ?? [""],
+        data.imageSearchDirectoryOptions ?? []
+      ) : "";
+      syncPicker(searchFolders);
     }
     const addToExisting = data.addToExistingTag ?? true;
     const addToExistingEl = document.getElementById(
@@ -3330,6 +3567,15 @@
       "QuarrySaveSettings",
       {
         datasetsFolder: folder,
+        ...canViewImageHistory ? {
+          imageSearchDirectoriesJson: JSON.stringify(
+            selectedFolderValues(
+              document.getElementById(
+                "quarry-image-search-folders"
+              )
+            )
+          )
+        } : {},
         promptColumnsJson: JSON.stringify(promptColumns),
         tagColumnsJson: JSON.stringify(tagColumns),
         disabledDatasetsJson: JSON.stringify(disabledDatasets),
@@ -3639,6 +3885,7 @@
     }
   };
   var ensureFormRendered = () => {
+    initFolderPickers(document);
     if (document.getElementById("quarry-form")) {
       return;
     }

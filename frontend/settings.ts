@@ -1,6 +1,12 @@
 import { setCompletionDatasets } from "./complete";
 import { openDownloadModal } from "./download";
 import {
+    initFolderPickers,
+    renderFolderPicker,
+    selectedFolderValues,
+    syncPicker,
+} from "./folderPicker";
+import {
     insertQuarryTag,
     onReferences,
     recomputeReferences,
@@ -290,6 +296,11 @@ export const renderForm = (folder: string): string => `
                         <label for="quarry-folder"><span class="auto-input-name">Datasets folder</span></label>
                         <input class="auto-text" type="text" id="quarry-folder" value="${escapeHtml(folder)}" placeholder="/path/to/datasets" autocomplete="off">
                     </div>
+                    <div class="quarry-search-folder-setting" hidden>
+                        <div class="quarry-search-folder-label">Image search folders</div>
+                        <div id="quarry-image-search-folders">${renderFolderPicker([""], [])}</div>
+                        <p class="quarry-search-folder-help">Choose output folders from the first two levels. Each selected folder includes all descendants. All includes the entire output directory and future folders. Save, then use Rescan history in Image Search to update the index.</p>
+                    </div>
                     <div class="quarry-setting-row">
                         <span class="auto-input-qbutton info-popover-button" onclick="doPopover('${ADD_TO_EXISTING_TAG_ID}', arguments[0])">?</span>
                         <label for="${ADD_TO_EXISTING_TAG_ID}">Add to existing <code>&lt;q:&gt;</code> tag</label>
@@ -383,6 +394,7 @@ const applyTableHighlights = (names: string[]): void => {
 };
 
 let currentDatasets: DatasetDto[] = [];
+let canViewImageHistory = false;
 
 const updateDatasetsSummary = (): void => {
     const el = document.getElementById(SUMMARY_ID);
@@ -393,11 +405,30 @@ const updateDatasetsSummary = (): void => {
 
 const applyResponse = (data: SettingsResponse): void => {
     currentDatasets = data.datasets ?? [];
+    canViewImageHistory = data.canViewImageHistory === true;
     const folderEl = document.getElementById(
         "quarry-folder",
     ) as HTMLInputElement | null;
     if (folderEl) {
         folderEl.value = data.datasetsFolder ?? "";
+    }
+    const searchFolders = document.getElementById(
+        "quarry-image-search-folders",
+    );
+    if (searchFolders) {
+        const setting = searchFolders.closest<HTMLElement>(
+            ".quarry-search-folder-setting",
+        );
+        if (setting) {
+            setting.hidden = !canViewImageHistory;
+        }
+        searchFolders.innerHTML = canViewImageHistory
+            ? renderFolderPicker(
+                  data.imageSearchDirectories ?? [""],
+                  data.imageSearchDirectoryOptions ?? [],
+              )
+            : "";
+        syncPicker(searchFolders);
     }
     const addToExisting = data.addToExistingTag ?? true;
     const addToExistingEl = document.getElementById(
@@ -466,6 +497,17 @@ const saveSettings = (): void => {
         "QuarrySaveSettings",
         {
             datasetsFolder: folder,
+            ...(canViewImageHistory
+                ? {
+                      imageSearchDirectoriesJson: JSON.stringify(
+                          selectedFolderValues(
+                              document.getElementById(
+                                  "quarry-image-search-folders",
+                              ) as HTMLElement,
+                          ),
+                      ),
+                  }
+                : {}),
             promptColumnsJson: JSON.stringify(promptColumns),
             tagColumnsJson: JSON.stringify(tagColumns),
             disabledDatasetsJson: JSON.stringify(disabledDatasets),
@@ -812,6 +854,7 @@ const datasetsClickHandler = (event: Event): void => {
 };
 
 const ensureFormRendered = (): void => {
+    initFolderPickers(document);
     if (document.getElementById("quarry-form")) {
         return;
     }

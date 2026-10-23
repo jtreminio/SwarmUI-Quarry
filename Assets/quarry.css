@@ -948,3 +948,138 @@
 .quarry-repair-status:empty {
     display: none;
 }
+
+/* Image search folder picker. */
+.quarry-search-folder-setting {
+    flex: 0 0 100%;
+    min-width: 0;
+    box-sizing: border-box;
+}
+.quarry-search-folder-label {
+    margin-bottom: 0.4rem;
+}
+.quarry-search-folder-help {
+    margin: 0.4rem 0 0;
+    color: var(--text-soft);
+}
+.quarry-search-folder-picker {
+    position: relative;
+    width: min(100%, 32rem);
+}
+.quarry-search-folder-option span {
+    overflow-wrap: anywhere;
+}
+/* Closed state: pills inside a control styled like SwarmUI's dropdowns. */
+.quarry-search-folder-trigger {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    min-height: 2rem;
+    padding: 0.2rem 0.5rem;
+    background-color: var(--background);
+    border: 1px solid var(--shadow);
+    border-radius: 0.5rem;
+    cursor: pointer;
+    box-sizing: border-box;
+}
+.quarry-search-folder-trigger:focus-visible {
+    outline: 1px solid var(--emphasis);
+}
+.quarry-search-folder-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.quarry-search-folder-placeholder {
+    color: var(--text-soft);
+}
+.quarry-search-folder-caret {
+    color: var(--text-soft);
+    flex: none;
+}
+.quarry-search-folder-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.2rem;
+    padding: 0.05rem 0.25rem 0.05rem 0.55rem;
+    background-color: var(--box-selected-background);
+    border: 1px solid var(--box-selected-border);
+    border-radius: 1rem;
+    font-size: 0.85em;
+    min-width: 0;
+    max-width: 100%;
+    box-sizing: border-box;
+    overflow-wrap: anywhere;
+}
+.quarry-search-folder-pill-x {
+    flex: none;
+    border: none;
+    background: none;
+    color: var(--text-soft);
+    cursor: pointer;
+    padding: 0 0.2rem;
+    font-size: 1em;
+    line-height: 1;
+}
+.quarry-search-folder-pill-x:hover {
+    color: var(--text);
+}
+
+/* Open state: floating filter + checkbox panel; stays open during selection. */
+.quarry-search-folder-panel {
+    position: absolute;
+    z-index: 100;
+    top: calc(100% + 0.25rem);
+    left: 0;
+    right: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    padding: 0.5rem;
+    background-color: var(--background);
+    border: 1px solid var(--shadow);
+    border-radius: 0.5rem;
+    box-shadow: 0 0.5rem 1.5rem rgb(0 0 0 / 45%);
+    box-sizing: border-box;
+}
+.quarry-search-folder-panel[hidden] {
+    display: none;
+}
+/* Flipped above the trigger when the viewport has no room below. */
+.quarry-search-folder-panel.quarry-search-folder-panel-up {
+    top: auto;
+    bottom: calc(100% + 0.25rem);
+}
+.quarry-search-folder-filter {
+    width: 100%;
+    box-sizing: border-box;
+}
+.quarry-search-folder-list {
+    display: flex;
+    flex-direction: column;
+    max-height: 14rem;
+    overflow-y: auto;
+}
+.quarry-search-folder-option {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.15rem 0.25rem;
+    margin: 0;
+    border-radius: 0.3rem;
+    cursor: pointer;
+}
+.quarry-search-folder-option:hover {
+    background-color: var(--background-soft);
+}
+.quarry-search-folder-actions {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.quarry-search-folder-count {
+    color: var(--text-soft);
+    font-size: 0.85em;
+}

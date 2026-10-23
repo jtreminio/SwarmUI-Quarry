@@ -35,15 +35,79 @@ public static class ImageHistoryEnumerator
         return hash;
     }
 
-    public static List<ImageHistoryFile> Enumerate(string root, bool starNoFolders, CancellationToken cancel)
+    public static string NormalizeDirectory(string directory)
+    {
+        string normalized = (directory ?? "").Trim().Replace('\\', '/');
+        string[] segments = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (normalized.StartsWith('/') || normalized.Contains(':') || normalized.Contains('\0') || segments.Contains(".."))
+        {
+            throw new ArgumentException("Image search directory must be a subfolder relative to your image output directory, without '..'.");
+        }
+        return string.Join('/', segments.Where(segment => segment != "."));
+    }
+
+    public static string[] NormalizeDirectories(IEnumerable<string> directories)
+    {
+        string[] normalized = directories is null ? [""] : [.. directories.Select(NormalizeDirectory).Distinct(StringComparer.Ordinal)];
+        if (normalized.Contains(""))
+        {
+            return [""];
+        }
+        // A selected parent already includes its descendants.
+        return [.. normalized.Where(path => !normalized.Any(parent => path.StartsWith(parent + "/", StringComparison.Ordinal)))];
+    }
+
+    public static List<string> ListDirectories(string root)
+    {
+        List<string> result = [];
+        if (!Directory.Exists(root))
+        {
+            return result;
+        }
+        EnumerationOptions options = new()
+        {
+            RecurseSubdirectories = false,
+            IgnoreInaccessible = true,
+            AttributesToSkip = FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReparsePoint,
+        };
+        void Visit(string parent, int depth)
+        {
+            foreach (string path in Directory.EnumerateDirectories(parent, "*", options).Order(StringComparer.Ordinal))
+            {
+                if (Path.GetFileName(path).StartsWith('.'))
+                {
+                    continue;
+                }
+                result.Add(Path.GetRelativePath(root, path).Replace('\\', '/'));
+                if (depth < 2)
+                {
+                    Visit(path, depth + 1);
+                }
+            }
+        }
+        Visit(root, 1);
+        return result;
+    }
+
+    public static List<ImageHistoryFile> Enumerate(string root, bool starNoFolders, CancellationToken cancel, IEnumerable<string> directories = null)
     {
         Dictionary<string, ImageHistoryFile> byRelative = new(StringComparer.Ordinal);
+        string[] selected = NormalizeDirectories(directories);
         if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
         {
+            if (selected.Any(path => path.Length > 0))
+            {
+                throw new DirectoryNotFoundException("Your image output directory does not exist.");
+            }
             return [];
         }
+        string[] scanRoots = [.. selected.Select(path => Path.Combine(root, path))];
+        if (scanRoots.Any(path => !Directory.Exists(path)))
+        {
+            throw new DirectoryNotFoundException("A selected image search folder no longer exists. Update Image search folders in Quarry settings.");
+        }
         int counter = 0;
-        foreach (string abs in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+        foreach (string abs in scanRoots.SelectMany(scanRoot => Directory.EnumerateFiles(scanRoot, "*", SearchOption.AllDirectories)))
         {
             if ((counter++ & 1023) == 0)
             {

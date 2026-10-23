@@ -12,6 +12,7 @@ public class QuarryExtension : Extension
     private string SettingsFilePath => $"{Program.DataDir}/Quarry.json";
     private static readonly SemaphoreSlim InstallLock = new(1, 1);
     private static bool AddToExistingTag = true;
+    private static string[] ImageSearchDirectories = [""];
 
     public override void OnPreInit()
     {
@@ -103,6 +104,9 @@ public class QuarryExtension : Extension
             JObject settings = JObject.Parse(File.ReadAllText(SettingsFilePath));
             DatasetManager.DatasetsFolder = settings.Value<string>("datasetsFolder") ?? "";
             AddToExistingTag = settings.Value<bool?>("addToExistingTag") ?? true;
+            ImageSearchDirectories = settings["imageSearchDirectories"] is JArray directories
+                ? ImageHistoryEnumerator.NormalizeDirectories(directories.Values<string>())
+                : ImageHistoryEnumerator.NormalizeDirectories([settings.Value<string>("imageSearchDirectory") ?? ""]);
             DatasetManager.SetPromptColumns(ReadPromptColumns(settings["promptColumns"] as JObject));
             DatasetManager.SetTagColumns(ReadTagColumns(settings["tagColumns"] as JObject));
             DatasetManager.SetDisabledDatasets(ReadDisabledDatasets(settings["disabledDatasets"] as JArray));
@@ -131,6 +135,7 @@ public class QuarryExtension : Extension
             {
                 ["datasetsFolder"] = DatasetManager.DatasetsFolder,
                 ["addToExistingTag"] = AddToExistingTag,
+                ["imageSearchDirectories"] = new JArray(ImageSearchDirectories),
                 ["promptColumns"] = promptColumns,
                 ["tagColumns"] = tagColumns,
                 ["disabledDatasets"] = new JArray(DatasetManager.GetDisabledDatasetsSnapshot()),
@@ -191,7 +196,10 @@ public class QuarryExtension : Extension
     #endregion
 
     #region API endpoints
-    private static JObject BuildSettingsResponse(bool includeRowCounts = false)
+    private static string ImageOutputRoot(Session session)
+        => Utilities.CombinePathWithAbsolute(Environment.CurrentDirectory, session.User.OutputDirectory);
+
+    private static JObject BuildSettingsResponse(Session session, bool includeRowCounts = false)
     {
         bool requirementsInstalled = DatasetManager.RequirementsInstalled;
         JArray datasets = [];
@@ -224,29 +232,50 @@ public class QuarryExtension : Extension
                 });
             }
         }
-        return new JObject
+        bool canViewImageHistory = session.User.HasPermission(Permissions.ViewImageHistory);
+        JObject response = new()
         {
             ["success"] = true,
             ["datasetsFolder"] = DatasetManager.DatasetsFolder,
             ["addToExistingTag"] = AddToExistingTag,
+            ["canViewImageHistory"] = canViewImageHistory,
             ["active"] = DatasetManager.IsActive,
             ["requirementsInstalled"] = requirementsInstalled,
             ["count"] = DatasetManager.Count,
             ["datasets"] = datasets,
         };
+        if (canViewImageHistory)
+        {
+            List<string> available = ImageHistoryEnumerator.ListDirectories(ImageOutputRoot(session));
+            response["imageSearchDirectories"] = new JArray(ImageSearchDirectories.Where(path => path == "" || available.Contains(path)));
+            response["imageSearchDirectoryOptions"] = new JArray(available);
+        }
+        return response;
     }
 
     public Task<JObject> QuarryGetSettings(Session session)
     {
-        return Task.FromResult(BuildSettingsResponse());
+        return Task.FromResult(BuildSettingsResponse(session));
     }
 
-    public Task<JObject> QuarrySaveSettings(Session session, string datasetsFolder, string promptColumnsJson, string tagColumnsJson, string disabledDatasetsJson = "", bool addToExistingTag = true)
+    public Task<JObject> QuarrySaveSettings(Session session, string datasetsFolder, string promptColumnsJson, string tagColumnsJson, string disabledDatasetsJson = "", bool addToExistingTag = true, string imageSearchDirectoriesJson = null)
     {
         try
         {
+            string[] searchDirectories = ImageSearchDirectories;
+            if (imageSearchDirectoriesJson is not null)
+            {
+                if (!session.User.HasPermission(Permissions.ViewImageHistory))
+                {
+                    return Task.FromResult(new JObject { ["success"] = false, ["error"] = "You do not have permission to change image search folders." });
+                }
+                searchDirectories = ImageHistoryEnumerator.NormalizeDirectories(JArray.Parse(imageSearchDirectoriesJson).Values<string>());
+                HashSet<string> available = ["", .. ImageHistoryEnumerator.ListDirectories(ImageOutputRoot(session))];
+                searchDirectories = [.. searchDirectories.Where(available.Contains)];
+            }
             DatasetManager.DatasetsFolder = datasetsFolder ?? "";
             AddToExistingTag = addToExistingTag;
+            ImageSearchDirectories = searchDirectories;
             JObject parsed = string.IsNullOrWhiteSpace(promptColumnsJson) ? [] : JObject.Parse(promptColumnsJson);
             DatasetManager.SetPromptColumns(ReadPromptColumns(parsed));
             JObject parsedTags = string.IsNullOrWhiteSpace(tagColumnsJson) ? [] : JObject.Parse(tagColumnsJson);
@@ -255,7 +284,7 @@ public class QuarryExtension : Extension
             DatasetManager.SetDisabledDatasets(ReadDisabledDatasets(parsedDisabled));
             DatasetManager.Sync();
             SaveSettings();
-            return Task.FromResult(BuildSettingsResponse());
+            return Task.FromResult(BuildSettingsResponse(session));
         }
         catch (Exception ex)
         {
@@ -282,7 +311,7 @@ public class QuarryExtension : Extension
             return Task.FromResult(new JObject { ["success"] = false, ["error"] = error });
         }
         int warmed = DatasetManager.WarmAll();
-        JObject response = BuildSettingsResponse(includeRowCounts: true);
+        JObject response = BuildSettingsResponse(session, includeRowCounts: true);
         response["message"] = warmed > 0 ? $"{message} Warmed {warmed} dataset(s)." : message;
         response["count"] = count;
         return Task.FromResult(response);
@@ -498,7 +527,7 @@ public class QuarryExtension : Extension
     #region Image Search API endpoints
     public Task<JObject> QuarryRescanImageHistory(Session session)
     {
-        (bool ok, string error, int id) = ImageHistoryScanner.Start(session);
+        (bool ok, string error, int id) = ImageHistoryScanner.Start(session, ImageSearchDirectories);
         return Task.FromResult(ok
             ? new JObject { ["success"] = true, ["id"] = id }
             : new JObject { ["success"] = false, ["error"] = error });
@@ -540,7 +569,7 @@ public class QuarryExtension : Extension
             JArray filters = string.IsNullOrWhiteSpace(filtersJson) ? [] : JArray.Parse(filtersJson);
             int clampedLimit = Math.Clamp(limit <= 0 ? 100 : limit, 1, 10000);
             int clampedOffset = Math.Max(0, offset);
-            ImageSearchResult result = ImageHistorySearch.Search(session.User.UserID, filters, sortBy, sortDescending, clampedLimit, clampedOffset);
+            ImageSearchResult result = ImageHistorySearch.Search(session.User.UserID, filters, sortBy, sortDescending, clampedLimit, clampedOffset, ImageSearchDirectories);
             return Task.FromResult(new JObject
             {
                 ["success"] = true,

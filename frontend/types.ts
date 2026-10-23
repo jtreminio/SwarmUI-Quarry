@@ -22,6 +22,9 @@ export interface DatasetDto {
 export interface SettingsResponse {
     success: boolean;
     datasetsFolder?: string;
+    imageSearchDirectories?: string[];
+    imageSearchDirectoryOptions?: string[];
+    canViewImageHistory?: boolean;
     addToExistingTag?: boolean;
     active?: boolean;
     requirementsInstalled?: boolean;
