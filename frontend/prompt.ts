@@ -55,22 +55,32 @@ const schedule = (): void => {
 };
 
 let watching = false;
+let lastPromptBox: HTMLTextAreaElement | null = null;
 export const startPromptWatcher = (): void => {
     if (watching) {
         return;
     }
     watching = true;
+    document.addEventListener("focusin", (event) => {
+        const target = event.target;
+        if (
+            target instanceof HTMLTextAreaElement &&
+            [
+                ...PROMPT_BOX_IDS,
+                "input_prompt",
+                "input_negativeprompt",
+            ].includes(target.id)
+        )
+            lastPromptBox = target;
+    });
     for (const id of PROMPT_BOX_IDS) {
-        document.getElementById(id)?.addEventListener("input", schedule);
+        const prompt = document.getElementById(
+            id,
+        ) as HTMLTextAreaElement | null;
+        prompt?.addEventListener("input", schedule);
     }
 };
 
-let addToExistingTag = true;
-export const setAddToExistingTag = (value: boolean): void => {
-    addToExistingTag = value;
-};
-
-export const getAddToExistingTag = (): boolean => addToExistingTag;
 const Q_TAG_PATTERN = "<(q(?:\\[\\d+(?:-\\d+)?\\])?):([^>]*)>";
 
 interface QuarryTag {
@@ -170,12 +180,11 @@ const addDatasetToFirstTag = (
     };
 };
 
-const insertNewTag = (
+const insertTag = (
     value: string,
     cursorPos: number,
-    name: string,
+    tag: string,
 ): PromptEdit => {
-    const tag = `<q:${name}>`;
     const prefix = trimSpacesOnly(value.slice(0, cursorPos));
     const suffix = trimSpacesOnly(value.slice(cursorPos));
     if (prefix.length > 0 && suffix.length > 0) {
@@ -212,13 +221,15 @@ export const computePromptEdit = (
             return combined;
         }
     }
-    return insertNewTag(value, cursorPos, name);
+    return insertTag(value, cursorPos, `<q:${name}>`);
 };
 
 const editPrompt = (
     compute: (value: string, cursor: number) => PromptEdit,
 ): void => {
-    let [promptBox, cursorPos] = uiImprover.getLastSelectedTextbox();
+    let [promptBox, cursorPos] = lastPromptBox?.isConnected
+        ? [lastPromptBox, lastPromptBox.selectionEnd]
+        : uiImprover.getLastSelectedTextbox();
     if (!promptBox || promptBox.closest(".quarry-explore")) {
         promptBox = getRequiredElementById(
             "alt_prompt_textbox",
@@ -235,14 +246,10 @@ const editPrompt = (
 };
 
 export const insertQuarryTag = (name: string): void => {
-    editPrompt((value, cursor) =>
-        computePromptEdit(value, cursor, name, addToExistingTag),
-    );
+    editPrompt((value, cursor) => computePromptEdit(value, cursor, name, true));
 };
 
 /** Insert an Explore draft as its own tag so its filters never affect other datasets. */
 export const insertQuarryQuery = (query: string): void => {
-    editPrompt((value, cursor) =>
-        insertNewTag(value, cursor, query.slice(3, -1)),
-    );
+    editPrompt((value, cursor) => insertTag(value, cursor, query));
 };

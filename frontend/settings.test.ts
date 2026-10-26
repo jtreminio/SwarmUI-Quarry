@@ -201,7 +201,7 @@ describe("renderDatasetRow", () => {
         expect(html).toContain('data-dataset="anime/1girl"');
         // The visible button label is the short leaf name.
         expect(html).toContain(
-            'title="Add a reference to this dataset to your prompt">1girl</button>',
+            'title="Add or remove this dataset in the prompt">1girl</button>',
         );
         expect(html).not.toContain(">anime/1girl</button>");
     });

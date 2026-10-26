@@ -183,6 +183,33 @@ describe("Dataset rail", () => {
     const last = { ...dataset, name: "tags/zeta" };
     const other = { ...dataset, name: "nl/other" };
 
+    it("shows row counts and column names except prompt in both selection modes", () => {
+        const extra: DatasetDto = {
+            ...dataset,
+            name: "tags/metadata",
+            rowCount: null,
+            enabled: false,
+            columns: [
+                { name: "prompt", kind: "scalar" as const },
+                { name: "<tags>", kind: "scalar" as const },
+            ],
+        };
+        const { get, click } = setup([dataset, extra]);
+        expect(
+            get('[data-browse-dataset="tags/example"] small').textContent,
+        ).toBe("1,000,000 rows · rating · artist · score · subject");
+        const metadata = get('[data-browse-dataset="tags/metadata"] small');
+        expect(metadata.textContent).toBe(
+            "Rows unknown · <tags> · Wildcards off",
+        );
+        expect(metadata.querySelector("tags")).toBeNull();
+        click('[data-dataset-mode="combine"]');
+        expect(
+            get('[data-include-dataset="tags/metadata"]').closest("label")
+                ?.textContent,
+        ).toContain("Rows unknown · <tags> · Wildcards off");
+    });
+
     it("skips disabled datasets in both directions but permits a manual visit", () => {
         const disabled = { ...dataset, name: "tags/middle", enabled: false };
         const { click, query, get } = setup([dataset, disabled, last]);
@@ -191,9 +218,7 @@ describe("Dataset rail", () => {
         );
         expect(button.disabled).toBe(false);
         expect(button.closest(".is-disabled-dataset")).not.toBeNull();
-        expect(get(".quarry-explore-rail-position").textContent).toBe(
-            "Dataset 1 of 2 in tags/*",
-        );
+        expect(get(".quarry-explore-rail-position").textContent).toBe("");
         click('[data-action="next-dataset"]');
         expect(query()).toBe("<q:tags/zeta>");
         click('[data-action="previous-dataset"]');
@@ -346,9 +371,7 @@ describe("Dataset rail", () => {
         expect(
             get('[data-namespace="nl/"]').getAttribute("aria-expanded"),
         ).toBe("false");
-        expect(get(".quarry-explore-rail-position").textContent).toBe(
-            "Dataset 2 of 3 in tags/*",
-        );
+        expect(get(".quarry-explore-rail-position").textContent).toBe("");
         click('[data-action="next-dataset"]');
         expect(query()).toBe("<q:tags/zeta>");
         expect(
@@ -360,9 +383,7 @@ describe("Dataset rail", () => {
         expect(
             get<HTMLButtonElement>('[data-action="previous-dataset"]').disabled,
         ).toBe(true);
-        expect(get(".quarry-explore-rail-position").textContent).toBe(
-            "Dataset 1 of 3 in tags/*",
-        );
+        expect(get(".quarry-explore-rail-position").textContent).toBe("");
     });
 
     it("restores each dataset's filters, outputs and formatting without changing the prompt", () => {
@@ -477,9 +498,7 @@ describe("Dataset rail", () => {
         const { click, get } = setup([dataset, root, other]);
         click('[data-action="choose-datasets"]');
         click('[data-browse-dataset="root"]');
-        expect(get(".quarry-explore-rail-position").textContent).toBe(
-            "Dataset 1 of 1 in Root",
-        );
+        expect(get(".quarry-explore-rail-position").textContent).toBe("");
         expect(get('[data-namespace=""]').getAttribute("aria-expanded")).toBe(
             "true",
         );
@@ -1484,4 +1503,342 @@ it("dismisses suggestions when keyboard focus leaves the checklist", () => {
     expect(get(".quarry-explore-field").hidden).toBe(false);
     get('[data-action="test"]').focus();
     expect(get(".quarry-explore-field").hidden).toBe(true);
+});
+
+describe("Query text", () => {
+    it("keeps builder and text drafts separate without locking Browse navigation", () => {
+        const other = { ...dataset, name: "tags/other" };
+        const { click, edit, query, get, value } = setup([dataset, other]);
+        value("g");
+        const builder = query();
+        click('[data-action="edit-tag"]');
+        expect(get<HTMLTextAreaElement>(".quarry-query-text-input").value).toBe(
+            builder,
+        );
+        edit(".quarry-query-text-input", "<q[3]:nl/*,tags/**:prompt>");
+        expect(query()).toBe("<q[3]:nl/*,tags/**:prompt>");
+        expect(
+            get<HTMLButtonElement>('[data-browse-dataset="tags/other"]')
+                .disabled,
+        ).toBe(false);
+        expect(
+            get<HTMLButtonElement>('[data-action="next-dataset"]').disabled,
+        ).toBe(false);
+        click('[data-action="use-builder"]');
+        expect(query()).toBe(builder);
+        click('[data-action="edit-tag"]');
+        expect(query()).toBe(builder);
+    });
+    it("runs text only on demand, preserves count tags, and rejects stale replies", () => {
+        const { click, edit, get } = setup();
+        const requests: Record<string, unknown>[] = [];
+        const replies: ((data: RunQueryResponse) => void)[] = [];
+        globalThis.genericRequest = <T>(
+            name: string,
+            data: Record<string, unknown>,
+            callback: (data: T) => void,
+        ) => {
+            if (name === "QuarryRunQuery") {
+                requests.push(data);
+                replies.push(callback as (data: RunQueryResponse) => void);
+            }
+        };
+        click('[data-action="edit-tag"]');
+        edit(".quarry-query-text-input", "<q[3]:tags/**>");
+        edit(".quarry-query-limit input", "12", "change");
+        expect(requests).toHaveLength(0);
+        get(".quarry-query-text-input").dispatchEvent(
+            new KeyboardEvent("keydown", {
+                key: "Enter",
+                ctrlKey: true,
+                bubbles: true,
+            }),
+        );
+        expect(requests).toEqual([{ query: "<q[3]:tags/**>", maxResults: 12 }]);
+        edit(".quarry-query-text-input", "nl/*");
+        replies[0]({
+            total: 1,
+            results: [{ dataset: "tags/example", prompt: "stale response" }],
+        });
+        expect(get(".quarry-explore-results").textContent).not.toContain(
+            "stale response",
+        );
+        click('[data-action="test"]');
+        expect(requests[1].query).toBe("nl/*");
+        replies[1]({ invalid: "Invalid example" });
+        expect(get(".quarry-explore-results").textContent).toContain(
+            "Invalid example",
+        );
+        expect(get<HTMLTextAreaElement>(".quarry-query-text-input").value).toBe(
+            "nl/*",
+        );
+    });
+    it("marks results stale when only the sample limit changes", () => {
+        const { click, edit, get } = setup();
+        globalThis.genericRequest = <T>(
+            name: string,
+            _data: unknown,
+            callback: (data: T) => void,
+        ) => {
+            if (name === "QuarryRunQuery")
+                callback({ total: 0, results: [] } as T);
+        };
+        click('[data-action="edit-tag"]');
+        click('[data-action="test"]');
+        edit(".quarry-query-limit input", "25", "change");
+        expect(get(".quarry-explore-result-status").textContent).toContain(
+            "Test query to update",
+        );
+    });
+});
+
+it("tests bare query text unchanged while escaping quoted delimiters for prompt tags", () => {
+    const { click, edit, query, get } = setup();
+    const requests: Record<string, unknown>[] = [];
+    globalThis.genericRequest = <T>(
+        name: string,
+        data: Record<string, unknown>,
+        _callback: (data: T) => void,
+    ) => {
+        if (name === "QuarryRunQuery") requests.push(data);
+    };
+    click('[data-action="edit-tag"]');
+    edit(".quarry-query-text-input", 'tags/example|rs=" > "');
+    expect(query()).toBe('<q:tags/example|rs=" \\u003e ">');
+    get(".quarry-query-text-input").dispatchEvent(
+        new KeyboardEvent("keydown", {
+            key: "Enter",
+            ctrlKey: true,
+            bubbles: true,
+        }),
+    );
+    get(".quarry-query-text-input").dispatchEvent(
+        new KeyboardEvent("keydown", {
+            key: "Enter",
+            ctrlKey: true,
+            bubbles: true,
+        }),
+    );
+    expect(requests).toEqual([
+        { query: 'tags/example|rs=" > "', maxResults: 100 },
+    ]);
+    edit(".quarry-query-text-input", 'tags/example[prompt="a>b"]');
+    expect(get<HTMLButtonElement>('[data-action="test"]').disabled).toBe(false);
+    expect(get<HTMLButtonElement>('[data-action="use"]').disabled).toBe(true);
+    expect(get<HTMLButtonElement>('[data-action="copy"]').disabled).toBe(true);
+});
+
+it("does not run query text automatically after dataset settings are saved", () => {
+    let saved: ((data: DatasetDto) => void) | undefined;
+    const { click } = setup([dataset], (_host, _dataset, onSaved) => {
+        saved = onSaved;
+        return () => {};
+    });
+    const request = jest.fn();
+    globalThis.genericRequest = request;
+    click('[data-action="edit-tag"]');
+    click('[data-view="settings"]');
+    saved?.({ ...dataset, resolvedPromptColumn: "artist" });
+    expect(request).not.toHaveBeenCalled();
+});
+
+it("reconciles combined sources and shared fields when the catalog refreshes", () => {
+    const other = { ...dataset, name: "tags/other" };
+    const { explorer, click, get, query } = setup([dataset, other]);
+    click('[data-dataset-mode="combine"]');
+    click('[data-include-dataset="tags/other"]');
+    explorer.updateCatalog([
+        {
+            ...dataset,
+            columns: [
+                { name: "prompt", kind: "scalar" },
+                { name: "new_column", kind: "scalar" },
+            ],
+        },
+    ]);
+    expect(query()).toBe("<q:tags/example>");
+    expect(get(".quarry-explore-scope").textContent).not.toContain(
+        "tags/other",
+    );
+    expect(get(".quarry-explore-output-add").textContent).toContain(
+        "new_column",
+    );
+    expect(get(".quarry-explore-output-add").textContent).not.toContain(
+        "artist",
+    );
+    expect(get(".quarry-explore-settings-source").textContent).not.toContain(
+        "tags/other",
+    );
+});
+
+it("reloads query results after a catalog refresh and ignores the old pending sample", () => {
+    const { explorer, get } = setup();
+    const pending: ((data: RunQueryResponse) => void)[] = [];
+    globalThis.genericRequest = <T>(
+        name: string,
+        _data: Record<string, unknown>,
+        callback: (data: T) => void,
+    ) => {
+        if (name === "QuarryRunQuery")
+            pending.push(callback as (data: RunQueryResponse) => void);
+    };
+    explorer.expand();
+    explorer.updateCatalog([dataset]);
+    expect(pending).toHaveLength(2);
+    pending[1]({ results: [{ dataset: dataset.name, prompt: "New sample" }] });
+    pending[0]({ results: [{ dataset: dataset.name, prompt: "Old sample" }] });
+    expect(get(".quarry-explore-results").textContent).toContain("New sample");
+    expect(get(".quarry-explore-results").textContent).not.toContain(
+        "Old sample",
+    );
+});
+
+it("reconciles blank filter columns after a schema refresh and when restoring a saved draft", () => {
+    const other = { ...dataset, name: "tags/other" };
+    const { explorer, click, edit, get, query } = setup([dataset, other]);
+    click('[data-browse-dataset="tags/other"]');
+    explorer.updateCatalog([
+        {
+            ...dataset,
+            columns: [{ name: "caption", kind: "scalar" }],
+        },
+        { ...other, columns: [{ name: "caption", kind: "scalar" }] },
+    ]);
+    expect(get<HTMLSelectElement>(".quarry-explore-column").value).toBe(
+        "caption",
+    );
+    expect(get<HTMLInputElement>(".quarry-explore-value").disabled).toBe(false);
+    click('[data-browse-dataset="tags/example"]');
+    expect(get<HTMLSelectElement>(".quarry-explore-column").value).toBe(
+        "caption",
+    );
+    expect(get<HTMLInputElement>(".quarry-explore-value").disabled).toBe(false);
+    edit(".quarry-explore-value", "portrait");
+    expect(query()).toBe("<q:tags/example[caption=portrait]>");
+});
+
+it("preserves populated missing filters visibly and allows selecting the sole remaining column", () => {
+    const { explorer, value, field, get, query } = setup();
+    value("g");
+    explorer.updateCatalog([
+        { ...dataset, columns: [{ name: "caption", kind: "scalar" }] },
+    ]);
+    expect(get<HTMLSelectElement>(".quarry-explore-column").value).toBe(
+        "rating",
+    );
+    expect(get(".quarry-explore-column").textContent).toContain(
+        "rating (unavailable)",
+    );
+    expect(get<HTMLInputElement>(".quarry-explore-value").value).toBe("g");
+    expect(get(".quarry-explore-error").textContent).toContain(
+        "Choose a field shared",
+    );
+    expect(get<HTMLButtonElement>('[data-action="test"]').disabled).toBe(true);
+    field("caption");
+    expect(get<HTMLInputElement>(".quarry-explore-value").disabled).toBe(false);
+    expect(query()).toBe("<q:tags/example>");
+});
+
+it("keeps malformed inline edits open and restores focus when returning to builder", () => {
+    const { click, edit, get } = setup();
+    click('[data-action="edit-tag"]');
+    edit(".quarry-query-text-input", "<q:broken");
+    click('[data-action="done-tag"]');
+    expect(get(".quarry-query-text").hidden).toBe(false);
+    expect(get(".quarry-explore-error").textContent).toContain("complete");
+    get('[data-action="use-builder"]').focus();
+    click('[data-action="use-builder"]');
+    expect(document.activeElement).toBe(get('[data-action="edit-tag"]'));
+    expect(get<HTMLFieldSetElement>(".quarry-explore-editor").disabled).toBe(
+        false,
+    );
+});
+
+it("discards pending overview samples when switching to a name that needs a manual query", () => {
+    const pending: ((response: RunQueryResponse) => void)[] = [];
+    globalThis.genericRequest = <T>(
+        name: string,
+        _data: Record<string, unknown>,
+        callback: (response: T) => void,
+    ) => {
+        if (name === "QuarryRunQuery")
+            pending.push(callback as (response: RunQueryResponse) => void);
+    };
+    const unsafe = { ...dataset, name: "tags/needs:manual" };
+    const { explorer, get } = setup([dataset, unsafe]);
+    explorer.showOverview();
+    const old = pending.at(-1);
+    explorer.selectDataset(unsafe.name);
+    old?.({ results: [{ dataset: dataset.name, prompt: "Stale sample" }] });
+    expect(get(".quarry-library-sample").textContent).toContain("Open Explore");
+    expect(
+        get<HTMLButtonElement>('[data-action="use-overview"]').disabled,
+    ).toBe(true);
+    expect(get<HTMLButtonElement>("[data-prompt-dataset]").disabled).toBe(true);
+    const requests = pending.length;
+    explorer.selectDataset(dataset.name);
+    expect(pending.length).toBe(requests + 1);
+});
+
+it("preserves manual drafts while browsing to another dataset and back", () => {
+    const other = { ...dataset, name: "tags/other" };
+    const { click, edit, get, query } = setup([dataset, other]);
+    click('[data-action="edit-tag"]');
+    const manual = "<q[3]:tags/example[rating=g]:prompt>";
+    edit(".quarry-query-text-input", manual);
+    click('[data-action="done-tag"]');
+    click('[data-action="next-dataset"]');
+    expect(query()).toBe("<q:tags/other>");
+    expect(get<HTMLFieldSetElement>(".quarry-explore-editor").disabled).toBe(
+        false,
+    );
+    click('[data-action="previous-dataset"]');
+    expect(query()).toBe(manual);
+    expect(get(".quarry-query-text").hidden).toBe(true);
+    expect(
+        get<HTMLButtonElement>('[data-browse-dataset="tags/other"]').disabled,
+    ).toBe(false);
+    click('[data-action="edit-tag"]');
+    edit(".quarry-query-text-input", "<q:unfinished");
+    click('[data-browse-dataset="tags/other"]');
+    click('[data-browse-dataset="tags/example"]');
+    expect(get<HTMLTextAreaElement>(".quarry-query-text-input").value).toBe(
+        "<q:unfinished",
+    );
+    expect(get(".quarry-query-text").hidden).toBe(false);
+});
+
+it("restores a combined manual query after browsing elsewhere and selecting that combination again", () => {
+    const other = { ...dataset, name: "tags/other" };
+    const third = { ...dataset, name: "tags/third" };
+    const { click, edit, value, output, get, query } = setup([
+        dataset,
+        other,
+        third,
+    ]);
+    value("g");
+    output("artist");
+    const keys = get<HTMLInputElement>(".quarry-explore-keys");
+    keys.checked = true;
+    keys.dispatchEvent(new Event("change", { bubbles: true }));
+    click('[data-dataset-mode="combine"]');
+    click('[data-include-dataset="tags/other"]');
+    click('[data-action="edit-tag"]');
+    const manual = "<q[3]:tags/example,tags/other[rating=g]>";
+    edit(".quarry-query-text-input", manual);
+    click('[data-action="done-tag"]');
+    expect(
+        get<HTMLButtonElement>('[data-dataset-mode="browse"]').disabled,
+    ).toBe(false);
+    click('[data-dataset-mode="browse"]');
+    click('[data-browse-dataset="tags/third"]');
+    expect(query()).toBe("<q:tags/third>");
+    click('[data-browse-dataset="tags/other"]');
+    click('[data-dataset-mode="combine"]');
+    click('[data-include-dataset="tags/example"]');
+    expect(query()).toBe(manual);
+    expect(get(".quarry-query-text").hidden).toBe(true);
+    click('[data-action="use-builder"]');
+    expect(query()).toBe("<q:tags/other,tags/example[rating=g]:artist|keys>");
+    expect(get<HTMLInputElement>(".quarry-explore-keys").checked).toBe(true);
 });

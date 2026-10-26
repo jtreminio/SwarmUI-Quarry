@@ -1,13 +1,15 @@
-import { afterEach, describe, expect, it, jest } from "@jest/globals";
+import { describe, expect, it, jest } from "@jest/globals";
 import {
     computePromptEdit,
-    getAddToExistingTag,
     insertQuarryQuery,
-    setAddToExistingTag,
+    startPromptWatcher,
 } from "./prompt";
 
 describe("insertQuarryQuery", () => {
-    it("keeps formatting textareas out of the prompt destination", () => {
+    it.each([
+        "<q:example:prompt>",
+        '<q[3-5]:tags/**[tags=girl]|keys;rs="; ">',
+    ])("inserts %s unchanged outside Explore textareas", (query) => {
         const globals = globalThis as typeof globalThis & {
             uiImprover: typeof uiImprover;
         };
@@ -31,8 +33,8 @@ describe("insertQuarryQuery", () => {
         globalThis.getRequiredElementById = (id) =>
             document.getElementById(id) as HTMLElement;
         try {
-            insertQuarryQuery("<q:example:prompt>");
-            expect(prompt.value).toBe("portrait <q:example:prompt>");
+            insertQuarryQuery(query);
+            expect(prompt.value).toBe(`portrait ${query}`);
             expect(separator.value).toBe("; ");
             expect(document.activeElement).toBe(prompt);
         } finally {
@@ -330,19 +332,53 @@ describe("computePromptEdit — boil down to an empty filtered tag", () => {
     });
 });
 
-describe("add-to-existing-tag preference", () => {
-    afterEach(() => {
-        setAddToExistingTag(true);
-    });
-
-    it("defaults to on", () => {
-        expect(getAddToExistingTag()).toBe(true);
-    });
-
-    it("reflects the last set value", () => {
-        setAddToExistingTag(true);
-        expect(getAddToExistingTag()).toBe(true);
-        setAddToExistingTag(false);
-        expect(getAddToExistingTag()).toBe(false);
-    });
+it("remembers the prompt and caret after time spent editing another textarea", () => {
+    const globals = globalThis as typeof globalThis & {
+        uiImprover: typeof uiImprover;
+    };
+    const originalImprover = globals.uiImprover;
+    const originalChange = globalThis.triggerChangeFor;
+    const originalRequest = globalThis.genericRequest;
+    document.body.innerHTML =
+        '<textarea id="alt_prompt_textbox">before after</textarea><textarea id="alt_negativeprompt_textbox">negative end</textarea><div class="quarry-explore"><textarea id="editor"></textarea></div>';
+    const prompt = document.getElementById(
+        "alt_prompt_textbox",
+    ) as HTMLTextAreaElement;
+    const negative = document.getElementById(
+        "alt_negativeprompt_textbox",
+    ) as HTMLTextAreaElement;
+    const editor = document.getElementById("editor") as HTMLTextAreaElement;
+    globals.uiImprover = { getLastSelectedTextbox: () => [null, -1] };
+    globalThis.triggerChangeFor = jest.fn();
+    globalThis.genericRequest = jest.fn();
+    try {
+        startPromptWatcher();
+        prompt.focus();
+        prompt.setSelectionRange(6, 6);
+        editor.focus();
+        insertQuarryQuery("<q:first>");
+        expect(prompt.value).toBe("before <q:first> after");
+        negative.focus();
+        negative.setSelectionRange(8, 8);
+        editor.focus();
+        insertQuarryQuery("<q:second>");
+        expect(negative.value).toBe("negative <q:second> end");
+        for (const id of ["input_prompt", "input_negativeprompt"]) {
+            const standard = document.createElement("textarea");
+            standard.id = id;
+            standard.value = "start finish";
+            document.body.append(standard);
+            standard.focus();
+            standard.setSelectionRange(5, 5);
+            editor.focus();
+            insertQuarryQuery("<q:standard>");
+            expect(standard.value).toBe("start <q:standard> finish");
+            expect(negative.value).toBe("negative <q:second> end");
+        }
+    } finally {
+        globals.uiImprover = originalImprover;
+        globalThis.triggerChangeFor = originalChange;
+        globalThis.genericRequest = originalRequest;
+        document.body.replaceChildren();
+    }
 });

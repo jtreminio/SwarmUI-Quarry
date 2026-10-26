@@ -18,7 +18,6 @@ import {
     refreshFolderVisibility,
 } from "./util";
 
-const MODAL_ID = "quarry-download-modal";
 const BODY_ID = "quarry-download-body";
 const MESSAGE_ID = "quarry-download-message";
 const PROGRESS_ID = "quarry-download-progress";
@@ -703,42 +702,24 @@ const bodyClickHandler = (event: Event): void => {
     }
 };
 
-const ensureDownloadModal = (): void => {
-    if (document.getElementById(MODAL_ID)) {
-        return;
-    }
-    const modal = document.createElement("div");
-    modal.className = "modal";
-    modal.id = MODAL_ID;
-    modal.tabIndex = -1;
-    modal.setAttribute("role", "dialog");
-    modal.setAttribute("aria-labelledby", "quarry-download-title");
-    modal.innerHTML = `
-        <div class="modal-dialog modal-lg quarry-download-dialog" role="document">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title" id="quarry-download-title">Download datasets</h5>
-                </div>
-                <div class="modal-body">
-                    <div id="${BODY_ID}" class="quarry-download-body"></div>
-                    <div id="${PROGRESS_ID}" class="quarry-download-progress" style="display: none;"></div>
-                    <div id="${MESSAGE_ID}" class="quarry-download-message" role="status"></div>
-                    <div id="quarry-repair-status" class="quarry-repair-status" role="status" aria-live="polite"></div>
-                </div>
-                <div class="modal-footer quarry-download-footer">
-                    <div class="quarry-download-footer-actions">
-                        <button type="button" id="${START_ID}" class="basic-button quarry-download-primary" disabled>Download selected</button>
-                        <button type="button" id="${REFRESH_ID}" class="basic-button">Refresh</button>
-                        <button type="button" id="${REPAIR_ID}" class="basic-button" title="Fix casing errors caused by stale downloaded versions using existing local files. No dataset download is needed; previous metadata is backed up.">Repair datasets</button>
-                    </div>
-                    <button type="button" class="basic-button" data-bs-dismiss="modal">Close</button>
-                </div>
+export const mountDownloads = (
+    host: HTMLElement,
+    onChangedCb: () => void,
+): void => {
+    onChanged = onChangedCb;
+    if (host.querySelector(`#${BODY_ID}`)) return;
+    host.innerHTML = `
+        <div id="${BODY_ID}" class="quarry-download-body"></div>
+        <div id="${PROGRESS_ID}" class="quarry-download-progress" style="display: none;"></div>
+        <div id="${MESSAGE_ID}" class="quarry-download-message" role="status"></div>
+        <div id="quarry-repair-status" class="quarry-repair-status" role="status" aria-live="polite"></div>
+        <div class="quarry-download-footer">
+            <div class="quarry-download-footer-actions">
+                <button type="button" id="${START_ID}" class="basic-button quarry-download-primary" disabled>Download selected</button>
+                <button type="button" id="${REFRESH_ID}" class="basic-button">Refresh</button>
+                <button type="button" id="${REPAIR_ID}" class="basic-button" title="Fix casing errors caused by stale downloaded versions using existing local files. No dataset download is needed; previous metadata is backed up.">Repair datasets</button>
             </div>
         </div>`;
-    document.body.appendChild(modal);
-    modal
-        .querySelector('[data-bs-dismiss="modal"]')
-        ?.addEventListener("click", hideDownloadModal);
     document.getElementById(START_ID)?.addEventListener("click", startBatch);
     document
         .getElementById(REFRESH_ID)
@@ -759,23 +740,5 @@ const ensureDownloadModal = (): void => {
     document
         .getElementById(PROGRESS_ID)
         ?.addEventListener("click", progressClickHandler);
-};
-
-const showDownloadModal = (): void => {
-    if (typeof $ === "function") {
-        $(`#${MODAL_ID}`).modal("show");
-    }
-};
-
-const hideDownloadModal = (): void => {
-    if (typeof $ === "function") {
-        $(`#${MODAL_ID}`).modal("hide");
-    }
-};
-
-export const openDownloadModal = (onChangedCb: () => void): void => {
-    onChanged = onChangedCb;
-    ensureDownloadModal();
-    showDownloadModal();
     loadAvailable();
 };

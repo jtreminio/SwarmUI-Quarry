@@ -85,11 +85,6 @@ describe("image search settings permissions", () => {
                 document.getElementById("quarry-folder") as HTMLInputElement
             ).value = "unsaved-folder";
             (
-                document.getElementById(
-                    "quarry-add-to-existing-tag",
-                ) as HTMLInputElement
-            ).checked = false;
-            (
                 panel.querySelector(
                     "[data-save-search-folders]",
                 ) as HTMLButtonElement
@@ -104,13 +99,6 @@ describe("image search settings permissions", () => {
                 (document.getElementById("quarry-folder") as HTMLInputElement)
                     .value,
             ).toBe("unsaved-folder");
-            expect(
-                (
-                    document.getElementById(
-                        "quarry-add-to-existing-tag",
-                    ) as HTMLInputElement
-                ).checked,
-            ).toBe(false);
         } else {
             expect(panel.hidden).toBe(true);
             expect(

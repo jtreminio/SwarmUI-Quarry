@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, jest } from "@jest/globals";
 import datasetSources from "../dataset-sources.json";
 import {
-    openDownloadModal,
+    mountDownloads,
     progressPercent,
     renderProgressInfo,
     renderRemoteDatasetName,
@@ -500,7 +500,9 @@ describe("download update selection", () => {
             callback(response as T);
         };
         const changed = jest.fn();
-        openDownloadModal(changed);
+        const host = document.createElement("section");
+        document.body.append(host);
+        mountDownloads(host, changed);
         return { downloads, changed, refreshed: () => refresh };
     };
 

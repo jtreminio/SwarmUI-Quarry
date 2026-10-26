@@ -60,6 +60,15 @@ export const injectQuarryTab = (): void => {
     pane.setAttribute("role", "tabpanel");
     pane.innerHTML = `<div class="quarry-tab-body" id="${QUARRY_TAB_BODY_ID}"></div>`;
     content.appendChild(pane);
+    const body = pane.firstElementChild as HTMLElement;
+    const fitViewport = (): void => {
+        if (!pane.getClientRects().length) return;
+        body.style.maxHeight = `${Math.max(0, window.innerHeight - pane.getBoundingClientRect().top)}px`;
+    };
+    if (typeof ResizeObserver !== "undefined")
+        new ResizeObserver(fitViewport).observe(pane);
+    window.addEventListener("resize", fitViewport);
+    fitViewport();
     const navLink = li.querySelector("a");
     if (navLink) {
         registerTabWithLayout(navLink);
