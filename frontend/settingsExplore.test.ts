@@ -229,10 +229,10 @@ describe("Explore integration", () => {
         });
         openPreview("test");
         document
-            .querySelector<HTMLButtonElement>('[data-action="choose-datasets"]')
+            .querySelector<HTMLButtonElement>('[data-dataset-mode="combine"]')
             ?.click();
         document
-            .querySelector<HTMLButtonElement>('[data-add-dataset="other"]')
+            .querySelector<HTMLInputElement>('[data-include-dataset="other"]')
             ?.click();
         document
             .querySelector<HTMLButtonElement>('[data-view="settings"]')
@@ -288,6 +288,29 @@ describe("Explore integration", () => {
                 ) as HTMLInputElement
             ).checked,
         ).toBe(true);
+    });
+    it("locks dataset settings while saving and unlocks them after success or failure", () => {
+        const { completeSave, failSave } = setup({ deferSaves: true });
+        openPreview("test");
+        const controls = Array.from(
+            document.querySelectorAll<
+                HTMLInputElement | HTMLSelectElement | HTMLButtonElement
+            >(
+                ".quarry-explore-settings-content input, .quarry-explore-settings-content select, .quarry-explore-settings-content button",
+            ),
+        );
+        const save = document.querySelector<HTMLButtonElement>(
+            "[data-save-dataset-settings]",
+        );
+        if (!save) throw new Error("Missing dataset settings save button");
+        save.click();
+        expect(controls.every((control) => control.disabled)).toBe(true);
+        completeSave();
+        expect(controls.every((control) => !control.disabled)).toBe(true);
+        save.click();
+        expect(controls.every((control) => control.disabled)).toBe(true);
+        failSave();
+        expect(controls.every((control) => !control.disabled)).toBe(true);
     });
     it("continues queued saves after a request error and restores the failed save button", () => {
         const { saves, completeSave, failSave } = setup({ deferSaves: true });

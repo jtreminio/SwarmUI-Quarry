@@ -538,14 +538,22 @@ export const mountDatasetSettings = (
         ".quarry-dataset-column",
     );
     if (!button || !status || !outputSelect) return () => {};
+    const controls = host.querySelectorAll<
+        HTMLInputElement | HTMLSelectElement | HTMLButtonElement
+    >("input, select, button");
+    const setSaving = (saving: boolean): void => {
+        controls.forEach((control) => {
+            control.disabled = saving;
+        });
+    };
     const save = (): void => {
         const output = outputSelect.value;
         const tags = collectTagColumns(host)[dataset.name] ?? [];
-        button.disabled = true;
+        setSaving(true);
         status.textContent = "Saving…";
         const fail = (message: string): void => {
             if (disposed) return;
-            button.disabled = false;
+            setSaving(false);
             status.textContent = message;
         };
         requestSettings(
@@ -576,7 +584,7 @@ export const mountDatasetSettings = (
                     );
                 recomputeReferences();
                 if (disposed) return;
-                button.disabled = false;
+                setSaving(false);
                 status.textContent = "Dataset settings saved.";
                 const updated = currentDatasets.find(
                     (item) => item.name === dataset.name,
@@ -920,7 +928,7 @@ export const openPreview = (dataset: string): void => {
     previewTotal = null;
     const titleEl = document.getElementById(PREVIEW_TITLE_ID);
     if (titleEl) {
-        titleEl.textContent = `Explore — ${dataset}`;
+        titleEl.textContent = "Explore";
     }
     const bodyEl = document.getElementById(PREVIEW_BODY_ID);
     if (bodyEl) {
@@ -937,17 +945,12 @@ export const openPreview = (dataset: string): void => {
                 if (status) status.hidden = !showRows;
             },
             currentDatasets,
-            (source, names) => {
-                const title = document.getElementById(PREVIEW_TITLE_ID);
-                if (title)
-                    title.textContent =
-                        names.length > 1
-                            ? `Explore — ${names.length} datasets`
-                            : `Explore — ${source.name}`;
+            (source) => {
                 if (previewDataset !== source.name) {
                     previewDataset = source.name;
                     previewShown = 0;
                     previewTotal = null;
+                    previewError = "";
                     previewRequest++;
                     previewBusy = false;
                     if (

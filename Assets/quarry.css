@@ -364,12 +364,122 @@
 }
 .quarry-explore {
     position: relative;
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-template-columns: minmax(14rem, 23%) minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    column-gap: 1rem;
     flex: 1;
     min-height: 0;
     min-width: 0;
     overflow: hidden;
+}
+.quarry-explore-rail {
+    grid-column: 1;
+    grid-row: 1 / -1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    min-height: 0;
+    min-width: 0;
+    padding-right: 0.75rem;
+    border-right: 1px solid var(--light-border);
+}
+.quarry-explore-rail-heading {
+    margin: 0;
+    font-size: 0.95em;
+    overflow-wrap: anywhere;
+}
+.quarry-explore-rail-list {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    overscroll-behavior: contain;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    padding: 0 0.2rem 0.2rem;
+}
+.quarry-explore .quarry-explore-rail-list [data-browse-dataset],
+.quarry-explore .quarry-explore-dataset-choice {
+    flex: none;
+    width: 100%;
+    text-align: left;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    background: var(--background-soft);
+    color: var(--text);
+    border: 1px solid var(--light-border);
+}
+.quarry-explore .quarry-explore-rail-list [data-browse-dataset][aria-current="true"],
+.quarry-explore .quarry-explore-dataset-choice.is-selected {
+    border-color: var(--emphasis);
+    background: color-mix(in srgb, var(--emphasis) 16%, var(--background));
+}
+.quarry-explore .quarry-explore-rail-list [data-browse-dataset][aria-current="true"] {
+    box-shadow: inset 3px 0 var(--emphasis);
+}
+.quarry-explore-rail-search { font-size: 0.9em; }
+.quarry-explore-rail-search input { margin-top: 0.25rem; }
+.quarry-explore-rail-modes { display: flex; gap: 0.3rem; }
+.quarry-explore-rail-modes button { flex: 1; }
+.quarry-explore .quarry-explore-rail-modes [aria-pressed="true"] {
+    color: var(--text);
+    border-color: var(--emphasis);
+    background: color-mix(in srgb, var(--emphasis) 16%, var(--background));
+}
+.quarry-explore-namespace { flex: none; min-width: 0; }
+.quarry-explore-namespace-toggle {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    width: 100%;
+    margin: 0;
+    padding: 0.5rem 0.2rem;
+    border: 0;
+    border-radius: 0;
+    background: var(--background);
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+}
+.quarry-explore-namespace-toggle::before { content: "▸"; }
+.quarry-explore-namespace-toggle[aria-expanded="true"]::before { content: "▾"; }
+.quarry-explore-namespace-toggle small { margin-left: auto; color: var(--text-soft); }
+.quarry-explore-namespace-items { display: grid; gap: 0.35rem; }
+.quarry-explore-dataset-choice {
+    display: flex;
+    align-items: start;
+    gap: 0.45rem;
+    padding: 0.35rem 0.5rem;
+    margin: 0;
+    border-radius: 0.3rem;
+    font-size: 0.9em;
+}
+.quarry-explore-dataset-choice input { flex: none; margin-top: 0.25rem; accent-color: var(--emphasis); }
+.quarry-explore-dataset-choice:has(input:disabled):not(.is-selected) { opacity: 0.65; }
+.quarry-explore-rail-row small { display: block; color: var(--text-soft); font-size: 0.8em; overflow-wrap: anywhere; padding: 0.15rem 0.4rem; }
+.quarry-explore-rail-position {
+    font-variant-numeric: tabular-nums;
+}
+.quarry-explore-rail-actions {
+    display: flex;
+    gap: 0.4rem;
+}
+.quarry-explore-rail-actions button {
+    flex: 1;
+}
+.quarry-explore > .quarry-explore-top {
+    grid-column: 2;
+    grid-row: 1;
+}
+.quarry-explore > .quarry-explore-fields-view,
+.quarry-explore > .quarry-explore-rows-view,
+.quarry-explore > .quarry-explore-settings-view {
+    grid-column: 2;
+    grid-row: 2;
 }
 /* Keep navigation stationary when the selected dataset chips wrap. */
 .quarry-explore-top {
@@ -377,7 +487,7 @@
     flex: none;
     min-width: 0;
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr);
     align-items: start;
     gap: 0.5rem 0.75rem;
 }
@@ -488,9 +598,6 @@
     padding: 0.25rem 0.5rem;
 }
 
-.quarry-explore-manage {
-    flex: none;
-}
 .quarry-explore-source {
     display: grid;
     gap: 0.35rem;
@@ -502,66 +609,6 @@
 .quarry-explore-dataset-search {
     min-width: 0;
     width: 100%;
-}
-.quarry-explore-dataset-picker {
-    display: flex;
-    flex-direction: column;
-    flex: 1;
-    min-height: 0;
-    min-width: 0;
-    overflow: hidden;
-    margin: 0;
-    padding: 0.75rem;
-    border: 1px solid var(--light-border);
-    border-radius: 0.4rem;
-    background: var(--background);
-}
-.quarry-explore:has(> .quarry-explore-dataset-picker:not([hidden])) > .quarry-explore-fields-view,
-.quarry-explore:has(> .quarry-explore-dataset-picker:not([hidden])) > .quarry-explore-rows-view {
-    display: none;
-}
-.quarry-explore-dataset-options {
-    flex: 1;
-    min-height: 0;
-    overflow: auto;
-    overscroll-behavior: contain;
-    margin-top: 0.5rem;
-    scrollbar-gutter: stable;
-}
-.quarry-explore-picker-footer {
-    display: flex;
-    justify-content: flex-end;
-    flex: none;
-    margin: 0.5rem -0.75rem -0.75rem;
-    padding: 0.65rem 0.75rem;
-    border-top: 1px solid var(--light-border);
-    background: var(--background);
-}
-.quarry-explore-dataset-option {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 11rem 8rem;
-    align-items: center;
-    gap: 0.35rem 0.5rem;
-    padding: 0.6rem 0.25rem;
-    border-bottom: 1px solid var(--light-border);
-}
-.quarry-explore-dataset-option > button {
-    width: 100%;
-    min-width: 0;
-}
-.quarry-explore-dataset-option:last-child {
-    border-bottom: 0;
-}
-.quarry-explore-dataset-option > span {
-    min-width: 0;
-    overflow-wrap: anywhere;
-    font-family: monospace;
-    font-size: 0.9em;
-}
-.quarry-explore-dataset-option small {
-    grid-column: 1 / -1;
-    color: var(--text-soft);
-    overflow-wrap: anywhere;
 }
 .quarry-explore-section-label {
     display: block;
@@ -1057,15 +1104,6 @@ body:has(#quarry-preview-modal.show) > .modal-backdrop {
         grid-column: 1 / 3;
         grid-row: 3;
         justify-self: start;
-    }
-    .quarry-explore-dataset-option {
-        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    }
-    .quarry-explore-dataset-option > span {
-        grid-column: 1 / -1;
-    }
-    .quarry-explore-dataset-option button {
-        min-width: 0;
     }
     .quarry-explore-output > label:not(.quarry-explore-keys-label) {
         width: 100%;
@@ -1998,25 +2036,7 @@ body:has(#quarry-download-modal.show) > .modal-backdrop {
     border-radius: 0 0.3rem 0.3rem 0;
     background: transparent;
 }
-.quarry-explore-dataset-option.is-selected {
-    background: var(--background-soft);
-    border-left: 3px solid var(--emphasis);
-    padding-left: 0.5rem;
-}
-.quarry-explore-dataset-option > .quarry-explore-selected-label {
-    font-family: inherit;
-    font-weight: 600;
-    text-align: center;
-}
-.quarry-explore .quarry-explore-dataset-option > button:disabled {
-    color: var(--text-soft);
-    background: var(--background-soft);
-    border-color: var(--light-border);
-    opacity: 0.65;
-}
-#quarry-preview-modal:has(.quarry-explore-dataset-picker:not([hidden])) .modal-footer {
-    display: none;
-}
+
 .quarry-explore-output-token[data-drop-edge]::after {
     content: "";
     position: absolute;
@@ -2155,9 +2175,6 @@ body:has(#quarry-download-modal.show) > .modal-backdrop {
     overscroll-behavior: contain;
     scrollbar-gutter: stable;
 }
-.quarry-explore:has(> .quarry-explore-dataset-picker:not([hidden])) > .quarry-explore-settings-view {
-    display: none;
-}
 .quarry-explore-settings-source {
     max-width: 34rem;
     margin-bottom: 1rem;
@@ -2212,11 +2229,6 @@ body:has(#quarry-download-modal.show) > .modal-backdrop {
     display: flex;
     align-items: center;
     gap: 0.5rem;
-}
-.quarry-explore .quarry-explore-manage[aria-expanded="true"] {
-    background: color-mix(in srgb, var(--emphasis) 16%, var(--background));
-    border-color: var(--emphasis);
-    color: var(--text);
 }
 @media (max-width: 650px) {
     .quarry-explore .quarry-explore-tab { min-width: 0; }
@@ -2357,25 +2369,53 @@ body:has(#quarry-download-modal.show) > .modal-backdrop {
     }
 }
 
-.quarry-explore-top > .quarry-explore-manage {
-    grid-column: 1;
-    grid-row: 1;
-    justify-self: start;
-    align-self: center;
-}
 .quarry-explore-top > .quarry-explore-tabs {
-    grid-column: 2;
-    grid-row: 1;
+    grid-column: 1;
+    grid-row: 2;
     align-self: start;
-    margin: 0;
+    margin: 0 0 0.5rem;
 }
 .quarry-explore-top > .quarry-explore-scope {
-    grid-column: 1 / -1;
-    grid-row: 2;
+    grid-column: 1;
+    grid-row: 1;
     margin: 0 0 0.35rem;
 }
-@media (max-width: 650px) {
-    .quarry-explore-top { grid-template-columns: minmax(0, 1fr); }
-    .quarry-explore-top > .quarry-explore-tabs { grid-column: 1; grid-row: 2; }
-    .quarry-explore-top > .quarry-explore-scope { grid-row: 3; }
+@media (max-width: 850px) {
+    .quarry-explore {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: auto auto minmax(0, 1fr);
+        row-gap: 0.5rem;
+    }
+    .quarry-explore-rail {
+        grid-row: 1;
+        padding: 0 0 0.5rem;
+        border-right: 0;
+        border-bottom: 1px solid var(--light-border);
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+    }
+    .quarry-explore-rail-heading { grid-column: 1; grid-row: 1; }
+    .quarry-explore-rail-search { grid-column: 1 / -1; grid-row: 2; }
+    .quarry-explore-rail-modes { grid-column: 2; grid-row: 1; }
+    .quarry-explore-rail-list {
+        grid-column: 1 / -1;
+        grid-row: 3;
+        max-height: 6rem;
+    }
+    .quarry-explore-rail-position { grid-column: 1; grid-row: 4; font-size: 0.8em; }
+    .quarry-explore-rail-actions { grid-column: 2; grid-row: 4; }
+    .quarry-explore > .quarry-explore-top { grid-column: 1; grid-row: 2; }
+    .quarry-explore > .quarry-explore-fields-view,
+    .quarry-explore > .quarry-explore-rows-view,
+    .quarry-explore > .quarry-explore-settings-view { grid-column: 1; grid-row: 3; }
+    .quarry-explore-fields-view { overflow: auto; }
+    .quarry-explore-editor { flex: none; max-height: none; overflow: visible; }
+    .quarry-explore-draft,
+    .quarry-explore-results { flex: none; overflow: visible; }
+    .quarry-explore-result-scroll { flex: none; max-height: 50dvh; }
+}
+@media (max-width: 350px) {
+    .quarry-explore-rail-position { grid-column: 1 / -1; }
+    .quarry-explore-rail-actions { grid-column: 1 / -1; grid-row: 5; }
 }

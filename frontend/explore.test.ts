@@ -88,7 +88,10 @@ afterEach(() => {
     globals.uiImprover = originalImprover;
     globalThis.triggerChangeFor = originalChange;
 });
-const setup = (catalog: DatasetDto[] = [dataset]) => {
+const setup = (
+    catalog: DatasetDto[] = [dataset],
+    mountSettings?: ConstructorParameters<typeof DatasetExplorer>[8],
+) => {
     const host = document.createElement("div");
     document.body.append(host);
     const close = jest.fn(),
@@ -103,6 +106,7 @@ const setup = (catalog: DatasetDto[] = [dataset]) => {
         () => {},
         catalog,
         source,
+        mountSettings,
     );
     explorer.setRows(
         ["rating", "artist", "score", "prompt"],
@@ -158,6 +162,254 @@ const setup = (catalog: DatasetDto[] = [dataset]) => {
         query,
     };
 };
+
+describe("Dataset rail", () => {
+    const first = { ...dataset, name: "tags/alpha" };
+    const last = { ...dataset, name: "tags/zeta" };
+    const other = { ...dataset, name: "nl/other" };
+
+    it("searches collapsed namespaces without changing selection or remembered expansion", () => {
+        const { get, click, edit, query, host } = setup([dataset, other, last]);
+        expect(
+            get('[data-namespace="nl/"]').getAttribute("aria-expanded"),
+        ).toBe("false");
+        click('[data-namespace="tags/"]');
+        edit(".quarry-explore-dataset-search", "nl/other");
+        expect(
+            get('[data-namespace="nl/"]').getAttribute("aria-expanded"),
+        ).toBe("true");
+        expect(host.querySelectorAll("[data-browse-dataset]")).toHaveLength(1);
+        expect(query()).toBe("<q:tags/example>");
+        edit(".quarry-explore-dataset-search", "");
+        expect(
+            get('[data-namespace="nl/"]').getAttribute("aria-expanded"),
+        ).toBe("false");
+        expect(
+            get('[data-namespace="tags/"]').getAttribute("aria-expanded"),
+        ).toBe("false");
+        expect(
+            get('[data-browse-dataset="tags/example"]').getAttribute(
+                "aria-current",
+            ),
+        ).toBe("true");
+    });
+
+    it("keeps multi-selection through mode changes and only replaces it on a Browse click", () => {
+        const { click, query, get } = setup([dataset, other]);
+        click('[data-dataset-mode="combine"]');
+        click('[data-namespace="nl/"]');
+        click('[data-include-dataset="nl/other"]');
+        const combined = query();
+        expect(combined).toBe("<q:tags/example,nl/other>");
+        expect(get('[data-namespace="nl/"]').textContent).toContain(
+            "1 selected",
+        );
+        click('[data-dataset-mode="browse"]');
+        expect(query()).toBe(combined);
+        expect(
+            get<HTMLButtonElement>('[data-action="next-dataset"]').disabled,
+        ).toBe(true);
+        click('[data-browse-dataset="nl/other"]');
+        expect(query()).toBe("<q:nl/other>");
+        expect(
+            get('[data-browse-dataset="nl/other"]').getAttribute(
+                "aria-current",
+            ),
+        ).toBe("true");
+    });
+
+    it("restores checkbox membership when unsaved-settings navigation is cancelled", () => {
+        const confirm = jest.spyOn(window, "confirm").mockReturnValue(false);
+        const { click, query, get } = setup([dataset, other], (host) => {
+            host.innerHTML = '<input aria-label="Setting">';
+            return () => {};
+        });
+        try {
+            click('[data-view="settings"]');
+            get(".quarry-explore-settings-content input").dispatchEvent(
+                new Event("change", { bubbles: true }),
+            );
+            click('[data-dataset-mode="combine"]');
+            click('[data-include-dataset="nl/other"]');
+            expect(query()).toBe("<q:tags/example>");
+            expect(
+                get<HTMLInputElement>('[data-include-dataset="nl/other"]')
+                    .checked,
+            ).toBe(false);
+        } finally {
+            confirm.mockRestore();
+        }
+    });
+
+    it("orders only browsable datasets in the namespace and stops at both ends", () => {
+        const { host, get, click, query } = setup([
+            last,
+            other,
+            dataset,
+            first,
+            { ...dataset, name: "tags/broken", error: "Unavailable" },
+            { ...dataset, name: "tags/empty", columns: [] },
+            { ...dataset, name: "tags-extra/unrelated" },
+        ]);
+        expect(
+            Array.from(
+                host.querySelectorAll<HTMLElement>(
+                    '[data-browse-dataset^="tags/"]:not(:disabled)',
+                ),
+                (button) => button.dataset.browseDataset,
+            ),
+        ).toEqual([first.name, dataset.name, last.name]);
+        expect(
+            get('[data-namespace="tags/"]').getAttribute("aria-expanded"),
+        ).toBe("true");
+        expect(
+            get('[data-namespace="nl/"]').getAttribute("aria-expanded"),
+        ).toBe("false");
+        expect(get(".quarry-explore-rail-position").textContent).toBe(
+            "Dataset 2 of 3 in tags/*",
+        );
+        click('[data-action="next-dataset"]');
+        expect(query()).toBe("<q:tags/zeta>");
+        expect(
+            get<HTMLButtonElement>('[data-action="next-dataset"]').disabled,
+        ).toBe(true);
+        click('[data-action="next-dataset"]');
+        expect(query()).toBe("<q:tags/zeta>");
+        click('[data-browse-dataset="tags/alpha"]');
+        expect(
+            get<HTMLButtonElement>('[data-action="previous-dataset"]').disabled,
+        ).toBe(true);
+        expect(get(".quarry-explore-rail-position").textContent).toBe(
+            "Dataset 1 of 3 in tags/*",
+        );
+    });
+
+    it("restores each dataset's filters, outputs and formatting without changing the prompt", () => {
+        const { click, field, value, output, edit, query, get, close } = setup([
+            dataset,
+            last,
+        ]);
+        const prompt = document.createElement("textarea");
+        prompt.id = "input_prompt";
+        prompt.value = "Keep my prompt";
+        document.body.append(prompt);
+        field("artist");
+        value("ann");
+        output("subject.hair");
+        const keys = get<HTMLInputElement>(".quarry-explore-keys");
+        keys.checked = true;
+        keys.dispatchEvent(new Event("change", { bubbles: true }));
+        edit(".quarry-explore-record-separator", " / ");
+        const original = query();
+        click('[data-action="next-dataset"]');
+        expect(query()).toBe("<q:tags/zeta>");
+        value("g");
+        click('[data-action="previous-dataset"]');
+        expect(query()).toBe(original);
+        expect(keys.checked).toBe(true);
+        expect(
+            get<HTMLTextAreaElement>(".quarry-explore-record-separator").value,
+        ).toBe(" / ");
+        expect(prompt.value).toBe("Keep my prompt");
+        expect(close).not.toHaveBeenCalled();
+        click('[data-action="next-dataset"]');
+        expect(query()).toBe("<q:tags/zeta[rating=g]>");
+    });
+
+    it("clears previous results and ignores responses from a dataset left behind", () => {
+        const pending: ((data: RunQueryResponse) => void)[] = [];
+        globalThis.genericRequest = <T>(
+            name: string,
+            data: Record<string, unknown>,
+            callback: (data: T) => void,
+        ): void => {
+            if (name === "QuarryRunQuery")
+                pending.push(callback as (data: RunQueryResponse) => void);
+            else columnRequest(name, data, callback);
+        };
+        const { click, get } = setup([dataset, last]);
+        click('[data-action="test"]');
+        pending[0]({
+            results: [{ dataset: dataset.name, prompt: "Old result" }],
+        });
+        click('[data-action="test"]');
+        click('[data-action="next-dataset"]');
+        expect(get(".quarry-explore-results").textContent).toBe("");
+        pending[1]({ error: "Stale response" });
+        expect(get(".quarry-explore-results").textContent).toBe("");
+        pending[2]({ results: [{ dataset: last.name, prompt: "New result" }] });
+        expect(get(".quarry-explore-results").textContent).toContain(
+            "New result",
+        );
+    });
+
+    it("preserves Full records while browsing and leaves combined queries intact", () => {
+        const { click, get, query, source, host } = setup([dataset, last]);
+        click('[data-view="rows"]');
+        click('[data-action="next-dataset"]');
+        expect(get(".quarry-explore-rows-view").hidden).toBe(false);
+        expect(source).toHaveBeenLastCalledWith(last, [last.name]);
+        click('[data-action="choose-datasets"]');
+        click('[data-dataset-mode="combine"]');
+        click('[data-include-dataset="tags/example"]');
+        const combined = query();
+        expect(get(".quarry-explore-rail-position").textContent).toContain(
+            "2 selected",
+        );
+        for (const button of host.querySelectorAll<HTMLButtonElement>(
+            "[data-action='previous-dataset'], [data-action='next-dataset']",
+        )) {
+            expect(button.disabled).toBe(true);
+            button.click();
+        }
+        expect(query()).toBe(combined);
+    });
+
+    it("protects unsaved settings and retains the settings tab after an approved switch", () => {
+        const confirm = jest.spyOn(window, "confirm").mockReturnValue(false);
+        const { click, get, query } = setup([dataset, last], (host) => {
+            host.innerHTML =
+                '<input aria-label="Default column" value="prompt">';
+            return () => {};
+        });
+        try {
+            click('[data-view="settings"]');
+            get<HTMLInputElement>(
+                ".quarry-explore-settings-content input",
+            ).dispatchEvent(new Event("change", { bubbles: true }));
+            click('[data-action="next-dataset"]');
+            expect(confirm).toHaveBeenCalledTimes(1);
+            expect(query()).toBe("<q:tags/example>");
+            confirm.mockReturnValue(true);
+            click('[data-action="next-dataset"]');
+            expect(query()).toBe("<q:tags/zeta>");
+            expect(get(".quarry-explore-settings-view").hidden).toBe(false);
+            click('[data-action="previous-dataset"]');
+            expect(confirm).toHaveBeenCalledTimes(2);
+        } finally {
+            confirm.mockRestore();
+        }
+    });
+
+    it("uses root-only navigation and rebases scope after an explicit chooser selection", () => {
+        const root = { ...dataset, name: "root" };
+        const { click, get } = setup([dataset, root, other]);
+        click('[data-action="choose-datasets"]');
+        click('[data-browse-dataset="root"]');
+        expect(get(".quarry-explore-rail-position").textContent).toBe(
+            "Dataset 1 of 1 in Root",
+        );
+        expect(get('[data-namespace=""]').getAttribute("aria-expanded")).toBe(
+            "true",
+        );
+        expect(
+            get<HTMLButtonElement>('[data-action="next-dataset"]').disabled,
+        ).toBe(true);
+        expect(
+            get<HTMLButtonElement>('[data-action="previous-dataset"]').disabled,
+        ).toBe(true);
+    });
+});
 
 describe("Editable Explore filters", () => {
     it("updates discovery and filters from SwarmUI's non-bubbling dropdown events", () => {
@@ -445,7 +697,8 @@ describe("Explore dataset selection and presentation", () => {
         keys.checked = true;
         keys.dispatchEvent(new Event("change", { bubbles: true }));
         click(".quarry-explore-query-dataset");
-        click('[data-add-dataset="nl/second"]');
+        click('[data-dataset-mode="combine"]');
+        click('[data-include-dataset="nl/second"]');
         expect(query()).toBe(
             "<q:tags/example,nl/second[rating=g]:subject.hair|keys>",
         );
@@ -464,16 +717,19 @@ describe("Explore dataset selection and presentation", () => {
             numeric,
         ]);
         value("g");
-        click(".quarry-explore-query-dataset");
+        click('[data-dataset-mode="combine"]');
         expect(
-            get<HTMLButtonElement>('[data-add-dataset="nl/missing"]').disabled,
+            get<HTMLButtonElement>('[data-include-dataset="nl/missing"]')
+                .disabled,
         ).toBe(true);
         expect(
-            get<HTMLButtonElement>('[data-add-dataset="nl/numeric"]').disabled,
+            get<HTMLButtonElement>('[data-include-dataset="nl/numeric"]')
+                .disabled,
         ).toBe(true);
         expect(host.textContent).toContain("Missing field: rating");
         expect(host.textContent).toContain("Different field type: rating");
-        click('[data-switch-dataset="nl/missing"]');
+        click('[data-dataset-mode="browse"]');
+        click('[data-browse-dataset="nl/missing"]');
         expect(query()).toBe("<q:nl/missing>");
         expect(get<HTMLSelectElement>(".quarry-explore-column").value).toBe(
             "prompt",
@@ -498,7 +754,7 @@ describe("Explore dataset selection and presentation", () => {
         keys.dispatchEvent(new Event("change", { bubbles: true }));
         click('[data-action="test"]');
         click(".quarry-explore-query-dataset");
-        click('[data-switch-dataset="nl/second"]');
+        click('[data-browse-dataset="nl/second"]');
         expect(query()).toBe("<q:nl/second>");
         expect(keys.checked).toBe(false);
         pending[0]({ error: "stale query" });
@@ -516,7 +772,8 @@ describe("Explore dataset selection and presentation", () => {
             missing,
         ]);
         click(".quarry-explore-query-dataset");
-        click('[data-add-dataset="nl/missing"]');
+        click('[data-dataset-mode="combine"]');
+        click('[data-include-dataset="nl/missing"]');
         expect(
             Array.from(
                 get<HTMLSelectElement>(".quarry-explore-column").options,
@@ -531,7 +788,7 @@ describe("Explore dataset selection and presentation", () => {
             missing.name,
         ]);
     });
-    it("summarizes matching results and copies the rendered prompt", () => {
+    it("summarizes matching results and copies the rendered prompt", async () => {
         globalThis.genericRequest = <T>(
             name: string,
             data: Record<string, unknown>,
@@ -550,36 +807,42 @@ describe("Explore dataset selection and presentation", () => {
         expect(get(".quarry-explore-result-summary").textContent).toContain(
             "1 random result · 7,456 matches",
         );
-        const copy = globalThis.copyText,
-            notice = globalThis.doNoticePopover;
+        const clipboard = Object.getOwnPropertyDescriptor(
+            navigator,
+            "clipboard",
+        );
+        const write = jest
+            .fn<(text: string) => Promise<void>>()
+            .mockResolvedValue();
+        Object.defineProperty(navigator, "clipboard", {
+            configurable: true,
+            value: { writeText: write },
+        });
         try {
-            globalThis.copyText = jest.fn();
-            globalThis.doNoticePopover = jest.fn();
             click(".quarry-runquery-copy");
-            expect(globalThis.copyText).toHaveBeenCalledWith("Portrait");
-            expect(globalThis.doNoticePopover).toHaveBeenCalledWith(
-                "Copied!",
-                "notice-pop-green quarry-copy-notice",
-            );
+            await Promise.resolve();
+            await Promise.resolve();
+            expect(write).toHaveBeenCalledWith("Portrait");
         } finally {
-            globalThis.copyText = copy;
-            globalThis.doNoticePopover = notice;
+            if (clipboard)
+                Object.defineProperty(navigator, "clipboard", clipboard);
+            else Reflect.deleteProperty(navigator, "clipboard");
         }
     });
     it("keeps chooser buttons attached when search loses focus", () => {
         const { click, edit, get, query } = setup([dataset, second]);
-        click(".quarry-explore-manage");
+        click(".quarry-explore-query-dataset");
         edit(".quarry-explore-dataset-search", "second");
         const button = get<HTMLButtonElement>(
-            '[data-switch-dataset="nl/second"]',
+            '[data-browse-dataset="nl/second"]',
         );
         edit(".quarry-explore-dataset-search", "second", "change");
         expect(button.isConnected).toBe(true);
         button.click();
         expect(query()).toBe("<q:nl/second>");
     });
-    it("supports keyboard tabs and closes the chooser without closing Explore", () => {
-        const { click, get, sample, close } = setup();
+    it("supports keyboard tabs and clears rail search without closing Explore", () => {
+        const { click, get, sample, close, edit } = setup();
         get('[data-view="fields"]').dispatchEvent(
             new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }),
         );
@@ -587,11 +850,14 @@ describe("Explore dataset selection and presentation", () => {
             "true",
         );
         expect(sample).toHaveBeenCalledTimes(1);
-        click(".quarry-explore-manage");
+        click(".quarry-explore-query-dataset");
+        edit(".quarry-explore-dataset-search", "example");
         get(".quarry-explore-dataset-search").dispatchEvent(
             new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
         );
-        expect(get(".quarry-explore-dataset-picker").hidden).toBe(true);
+        expect(
+            get<HTMLInputElement>(".quarry-explore-dataset-search").value,
+        ).toBe("");
         expect(close).not.toHaveBeenCalled();
     });
 });
@@ -684,8 +950,8 @@ describe("Explore compact controls", () => {
                 name: `dataset-${i}`,
             })),
         );
-        click(".quarry-explore-manage");
-        expect(host.querySelectorAll("[data-switch-dataset]")).toHaveLength(
+        click(".quarry-explore-query-dataset");
+        expect(host.querySelectorAll("[data-browse-dataset]")).toHaveLength(
             131,
         );
     });
@@ -804,25 +1070,21 @@ describe("Explore output selection and drop positions", () => {
             get(".quarry-explore-query").querySelector("[data-drop-edge]"),
         ).toBeNull();
     });
-    it("groups selected datasets first and prevents adding them twice", () => {
+    it("shows checked membership and prevents removing the last selected dataset", () => {
         const other = { ...dataset, name: "nl/first" };
-        const { click, get, host } = setup([other, dataset]);
-        click(".quarry-explore-manage");
-        expect(
-            get(".quarry-explore-dataset-option").classList.contains(
-                "is-selected",
-            ),
-        ).toBe(true);
-        expect(get(".quarry-explore-selected-label").textContent).toContain(
-            "Selected",
+        const { click, get, query } = setup([other, dataset]);
+        click('[data-dataset-mode="combine"]');
+        const selected = get<HTMLInputElement>(
+            '[data-include-dataset="tags/example"]',
         );
-        expect(
-            host.querySelector('[data-add-dataset="tags/example"]'),
-        ).toBeNull();
+        expect(selected.checked).toBe(true);
+        expect(selected.disabled).toBe(true);
+        selected.click();
+        expect(query()).toBe("<q:tags/example>");
     });
 });
 
-it("Escape closes inline formatting, and Back to query restores the query view", () => {
+it("Escape closes inline formatting and rail search keeps the current view", () => {
     const { click, get } = setup();
     click('[data-action="format"]');
     get(".quarry-explore-record-separator").dispatchEvent(
@@ -833,10 +1095,10 @@ it("Escape closes inline formatting, and Back to query restores the query view",
         "false",
     );
     click('[data-view="rows"]');
-    click(".quarry-explore-manage");
-    click('[data-action="close-datasets"]');
-    expect(get(".quarry-explore-fields-view").hidden).toBe(false);
-    expect(get(".quarry-explore-rows-view").hidden).toBe(true);
+    click(".quarry-explore-query-dataset");
+    expect(document.activeElement).toBe(get(".quarry-explore-dataset-search"));
+    expect(get(".quarry-explore-fields-view").hidden).toBe(true);
+    expect(get(".quarry-explore-rows-view").hidden).toBe(false);
 });
 
 it("refreshes preview and rejects an old response when saved defaults change", () => {
@@ -952,19 +1214,14 @@ it("shows saved dataset settings in a separate tab with keyboard navigation", ()
     expect(
         host.querySelector('[data-view="rows"]')?.getAttribute("aria-selected"),
     ).toBe("true");
-    host.querySelector<HTMLButtonElement>(".quarry-explore-manage")?.click();
-    expect(
-        host
-            .querySelector(".quarry-explore-manage")
-            ?.getAttribute("aria-expanded"),
-    ).toBe("true");
     host.querySelector<HTMLButtonElement>(
-        '[data-action="close-datasets"]',
+        ".quarry-explore-query-dataset",
     )?.click();
+    expect(document.activeElement).toBe(
+        host.querySelector(".quarry-explore-dataset-search"),
+    );
     expect(
-        host
-            .querySelector(".quarry-explore-manage")
-            ?.getAttribute("aria-expanded"),
-    ).toBe("false");
+        host.querySelector('[data-view="rows"]')?.getAttribute("aria-selected"),
+    ).toBe("true");
     explorer.dispose();
 });
