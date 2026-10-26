@@ -38,6 +38,7 @@ const globals = globalThis as typeof globalThis & {
 };
 const originalImprover = globals.uiImprover;
 const originalChange = globalThis.triggerChangeFor;
+const explorers: DatasetExplorer[] = [];
 const artists = [
     "ann",
     "joanne",
@@ -82,6 +83,7 @@ beforeEach(() => {
     globalThis.genericRequest = columnRequest;
 });
 afterEach(() => {
+    for (const explorer of explorers.splice(0)) explorer.dispose();
     jest.useRealTimers();
     document.body.replaceChildren();
     globalThis.genericRequest = originalRequest;
@@ -108,6 +110,7 @@ const setup = (
         source,
         mountSettings,
     );
+    explorers.push(explorer);
     explorer.setRows(
         ["rating", "artist", "score", "prompt"],
         [
@@ -130,8 +133,20 @@ const setup = (
     };
     const field = (value: string, row = 0) =>
         edit(`[data-row="${row}"] .quarry-explore-column`, value, "change");
-    const value = (text: string, row = 0) =>
+    const value = (text: string, row = 0) => {
+        const control = get(
+            `[data-row="${row}"] .quarry-explore-value-control`,
+        );
+        const selected =
+            '[data-remove-term], [data-value][aria-pressed="true"]';
+        const count = control.querySelectorAll(selected).length;
+        for (let i = 0; i < count; i++)
+            control.querySelector<HTMLButtonElement>(selected)?.click();
         edit(`[data-row="${row}"] .quarry-explore-value`, text);
+        get(`[data-row="${row}"] .quarry-explore-value`).dispatchEvent(
+            new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+        );
+    };
     const operator = (text: string, row = 0) =>
         edit(`[data-row="${row}"] .quarry-explore-operator`, text, "change");
     const output = (text: string) =>
@@ -465,7 +480,7 @@ describe("Editable Explore filters", () => {
         const { get, click, query, host, value } = setup();
         click('[data-value="g"]');
         click('[data-action="add"]');
-        click('[data-value="s"]');
+        click('[data-row="1"] [data-value="s"]');
         get<HTMLInputElement>('[data-row="0"] input').focus();
         click('[data-value="q"]');
         expect(query()).toBe("<q:tags/example[rating=g,q;rating=s]>");
@@ -483,7 +498,9 @@ describe("Editable Explore filters", () => {
         value("g");
         output("artist");
         explorer.setRows(["rating"], [["q"]]);
-        expect(get<HTMLInputElement>(".quarry-explore-value").value).toBe("g");
+        expect(
+            get('[data-row="0"] [data-value="g"]').getAttribute("aria-pressed"),
+        ).toBe("true");
         click('[data-view="rows"]');
         click('[data-view="fields"]');
         click('[data-view="rows"]');
@@ -598,16 +615,103 @@ describe("Output selection and formatting", () => {
 });
 
 describe("Verified value pickers", () => {
-    it("pages and searches values beyond the first page, accepting manual terms", () => {
-        const { host, field, click, edit, value, query } = setup();
+    it.each([
+        "g",
+        "o'neil",
+        'a"b',
+    ])("keeps inactive row chip %s attached through focus, preserving keyboard selection", (term) => {
+        globalThis.genericRequest = <T>(
+            _name: string,
+            _data: object,
+            callback: (data: T) => void,
+        ): void => {
+            callback({
+                success: true,
+                eligible: true,
+                values: [term],
+                totalValues: 1,
+                hasMore: false,
+            } as T);
+        };
+        const { click, get, query } = setup();
+        click('[data-action="add"]');
+        const chip = get<HTMLButtonElement>('[data-row="0"] [data-value]');
+        chip.focus();
+        expect(chip.isConnected).toBe(true);
+        chip.click();
+        expect(query()).toContain(`rating=${term}`);
+        expect(document.activeElement?.getAttribute("data-value")).toBe(term);
+    });
+    it("keeps the checklist open across selections and removals, then closes on outside click", () => {
+        const { field, click, get, query, edit } = setup();
+        field("artist");
+        const input = get<HTMLInputElement>(".quarry-explore-value");
+        input.focus();
+        const pane = get(".quarry-explore-field");
+        click('[data-value="ann"]');
+        click('[data-value="joanne"]');
+        expect(pane.hidden).toBe(false);
+        expect(query()).toContain("artist=ann,joanne");
+        click('[data-remove-term="ann"]');
+        expect(pane.hidden).toBe(false);
+        expect(query()).toContain("artist=joanne");
+        edit(".quarry-explore-value", "artist_12");
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+        click('[data-value="artist_129"]');
+        expect(query()).toContain("artist=joanne,artist_129");
+        expect(query()).not.toContain("artist_12,");
+        expect(pane.hidden).toBe(false);
+        document.body.click();
+        expect(pane.hidden).toBe(true);
+        expect(query()).toContain("artist=joanne,artist_129");
+        input.focus();
+        edit(".quarry-explore-value", "ann");
+        document.body.click();
+        expect(query()).toContain("artist=joanne,artist_129,ann");
+        click(".quarry-explore-value");
+        expect(input.value).toBe("");
+        expect(pane.querySelectorAll("[data-value]")).toHaveLength(100);
+    });
+    it("does not reopen dismissed suggestions when a search response arrives", () => {
+        const { field, get, edit } = setup();
+        field("artist");
+        const pending: ((data: ExploreColumnResponse) => void)[] = [];
+        globalThis.genericRequest = <T>(
+            _name: string,
+            _data: object,
+            callback: (data: T) => void,
+        ): void => {
+            pending.push(callback as (data: ExploreColumnResponse) => void);
+        };
+        const input = get<HTMLInputElement>(".quarry-explore-value");
+        input.focus();
+        edit(".quarry-explore-value", "ann");
+        input.dispatchEvent(
+            new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+        );
+        pending[0]({
+            success: true,
+            eligible: true,
+            totalValues: 132,
+            values: ["ann"],
+            hasMore: false,
+        });
+        expect(get(".quarry-explore-field").hidden).toBe(true);
+        expect(document.activeElement).toBe(input);
+    });
+
+    it("scrolls one continuous list and searches beyond the initial batch, accepting manual terms", () => {
+        const { host, field, edit, value, query } = setup();
         field("artist");
         expect(host.querySelectorAll("[data-value]")).toHaveLength(100);
-        click('[data-action="more-values"]');
+        host.querySelector(".quarry-explore-field")?.dispatchEvent(
+            new Event("scroll"),
+        );
         expect(host.querySelectorAll("[data-value]")).toHaveLength(132);
-        edit(".quarry-explore-search", "ARTIST_129");
+        edit(".quarry-explore-value", "ARTIST_129");
         expect(host.querySelectorAll("[data-value]")).toHaveLength(1);
         expect(host.textContent).toContain("artist_129");
-        edit(".quarry-explore-search", "unknown");
+        edit(".quarry-explore-value", "unknown");
         expect(host.textContent).toContain("No matching values.");
         value("unseen_artist");
         expect(query()).toContain("artist=unseen_artist");
@@ -617,7 +721,10 @@ describe("Verified value pickers", () => {
         field("prompt");
         explorer.setRows(["prompt"], [["short"], ["short"]]);
         expect(host.querySelectorAll("[data-value]")).toHaveLength(0);
-        expect(host.textContent).toContain("at least 256 characters");
+        expect(
+            host.querySelector<HTMLInputElement>(".quarry-explore-value")
+                ?.placeholder,
+        ).toBe("Search terms");
     });
     it("ignores stale column responses and responses after closing", () => {
         const pending: ((data: ExploreColumnResponse) => void)[] = [];
@@ -637,7 +744,7 @@ describe("Verified value pickers", () => {
         expect(host.textContent).not.toContain("closed");
     });
     it("discards pages from an older dataset revision", () => {
-        const { host, field, click } = setup();
+        const { host, field } = setup();
         field("artist");
         globalThis.genericRequest = <T>(
             name: string,
@@ -653,7 +760,9 @@ describe("Verified value pickers", () => {
                 } as T),
             );
         };
-        click('[data-action="more-values"]');
+        host.querySelector(".quarry-explore-field")?.dispatchEvent(
+            new Event("scroll"),
+        );
         expect(host.querySelectorAll("[data-value]")).toHaveLength(1);
         expect(host.textContent).toContain("fresh first page");
         expect(host.textContent).not.toContain("old offset");
@@ -957,13 +1066,13 @@ describe("Explore compact controls", () => {
     });
     it("toggles verified values and expands formatting inline", () => {
         const { click, get, field } = setup();
-        field("rating");
+        field("artist");
         click('[data-values-row="0"]');
         expect(get(".quarry-explore-field").hidden).toBe(false);
         click('[data-values-row="0"]');
         expect(get(".quarry-explore-field").hidden).toBe(true);
         click('[data-values-row="0"]');
-        get('[data-action="close-values"]').dispatchEvent(
+        get(".quarry-explore-value").dispatchEvent(
             new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
         );
         expect(get(".quarry-explore-field").hidden).toBe(true);
@@ -1004,17 +1113,48 @@ describe("Text length and stable recurring controls", () => {
         value("portrait");
         expect(query()).toBe("<q:tags/example[prompt=portrait]>");
     });
-    it("keeps recurring buttons stable across filter focus and hides them for free text", () => {
-        const { click, field, get } = setup();
-        expect(get('[data-values-row="0"]').textContent).toBe("Choose values");
+    it("keeps small value sets inline across filter focus and uses plain input for free text", () => {
+        globalThis.genericRequest = <T>(
+            name: string,
+            data: Record<string, unknown>,
+            callback: (data: T) => void,
+        ): void => {
+            if (name === "QuarryExploreColumn" && data.column === "rating")
+                callback({
+                    success: true,
+                    eligible: true,
+                    totalValues: 3,
+                    values: [" g ", "g", "s"],
+                    hasMore: false,
+                } as T);
+            else columnRequest(name, data, callback);
+        };
+        const { click, field, get, host, query } = setup();
+        expect(
+            host.querySelectorAll('[data-row="0"] [data-value="g"]'),
+        ).toHaveLength(1);
+        click('[data-value="g"]');
+        expect(get('[data-value="g"]').getAttribute("aria-pressed")).toBe(
+            "true",
+        );
+        expect(query()).toContain("rating=g");
+        click('[data-value="g"]');
+        expect(query()).not.toContain("rating=");
+        expect(get('[data-row="0"] .quarry-explore-inline-values').hidden).toBe(
+            false,
+        );
         click('[data-action="add"]');
-        expect(get('[data-values-row="0"]').hidden).toBe(false);
-        expect(get('[data-values-row="0"]').textContent).toBe("Choose values");
+        expect(get('[data-values-row="0"]').hidden).toBe(true);
+        expect(get('[data-row="0"] .quarry-explore-inline-values').hidden).toBe(
+            false,
+        );
         field("prompt", 1);
         click('[data-action="add"]');
         expect(get('[data-values-row="1"]').hidden).toBe(true);
         expect(get('[data-values-row="2"]').hidden).toBe(true);
-        expect(get('[data-values-row="0"]').textContent).toBe("Choose values");
+        expect(get('[data-row="0"] .quarry-explore-inline-values').hidden).toBe(
+            false,
+        );
     });
 });
 
@@ -1224,4 +1364,58 @@ it("shows saved dataset settings in a separate tab with keyboard navigation", ()
         host.querySelector('[data-view="rows"]')?.getAttribute("aria-selected"),
     ).toBe("true");
     explorer.dispose();
+});
+
+describe("Adaptive input state transitions", () => {
+    it("commits pending terms before combining through a change event", () => {
+        const missing: DatasetDto = {
+            ...dataset,
+            name: "nl/missing",
+            columns: [{ name: "prompt", kind: "scalar" }],
+        };
+        const { click, edit, get, query } = setup([dataset, missing]);
+        click('[data-dataset-mode="combine"]');
+        edit(".quarry-explore-value", "g");
+        const checkbox = get<HTMLInputElement>(
+            '[data-include-dataset="nl/missing"]',
+        );
+        checkbox.checked = true;
+        checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+        expect(query()).toBe("<q:tags/example[rating=g]>");
+        expect(
+            get<HTMLInputElement>('[data-include-dataset="nl/missing"]')
+                .disabled,
+        ).toBe(true);
+    });
+
+    it("loads suggestions when a restored length filter switches back to text", () => {
+        const other = { ...dataset, name: "tags/other" };
+        let first = true;
+        globalThis.genericRequest = (name, data, callback) => {
+            if (name === "QuarryExploreColumn" && first) {
+                first = false;
+                return;
+            }
+            columnRequest(name, data, callback);
+        };
+        const { click, operator, get, host } = setup([dataset, other]);
+        operator("+=");
+        click('[data-browse-dataset="tags/other"]');
+        click('[data-browse-dataset="tags/example"]');
+        operator("=");
+        expect(get(".quarry-explore-inline-values").hidden).toBe(false);
+        expect(
+            host.querySelectorAll(".quarry-explore-inline-values [data-value]"),
+        ).toHaveLength(4);
+    });
+});
+
+it("dismisses suggestions when keyboard focus leaves the checklist", () => {
+    const { field, get } = setup();
+    field("artist");
+    get(".quarry-explore-value").focus();
+    get(".quarry-explore-field [data-value]").focus();
+    expect(get(".quarry-explore-field").hidden).toBe(false);
+    get('[data-action="test"]').focus();
+    expect(get(".quarry-explore-field").hidden).toBe(true);
 });

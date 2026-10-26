@@ -19,6 +19,7 @@ interface FilterRow {
     column: string;
     operator: string;
     value: string;
+    term?: string;
 }
 interface ExploreDraft {
     filters: FilterRow[];
@@ -70,7 +71,10 @@ export const buildExploreQuery = (
     return `<q:${dataset}${filters.length ? `[${filters.map((filter) => `${filter.column}${filter.operator}${filter.values.join(",")}`).join(";")}]` : ""}${outputs.length ? `:${outputs.join(",")}` : ""}${flags.length ? `|${flags.join(";")}` : ""}>`;
 };
 
+let valueListSequence = 0;
+
 export class DatasetExplorer {
+    private readonly valueListId = `quarry-values-${++valueListSequence}`;
     private selected = 0;
     private filters: FilterRow[] = [];
     private outputs: string[] = [];
@@ -94,7 +98,8 @@ export class DatasetExplorer {
     private valueBusy = false;
     private valueSearch = "";
     private valueResponse: ExploreColumnResponse | null = null;
-    private recurringFields = new Map<string, boolean>();
+    private profiles = new Map<string, ExploreColumnResponse>();
+    private valueMarkup = new WeakMap<HTMLElement, string>();
     private valueItems: string[] = [];
     private searchTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -178,7 +183,7 @@ export class DatasetExplorer {
             </div>
             <div class="quarry-explore-rows-view" hidden><div class="quarry-explore-source"></div><p class="quarry-explore-rows-caption">100 random records with every column. Query filters do not apply.</p><div class="quarry-explore-rows" hidden></div></div>
             <div class="quarry-explore-settings-view" hidden><div class="quarry-explore-settings-source"></div><div class="quarry-explore-settings-content"></div></div>
-            <div class="quarry-explore-field quarry-explore-popover" role="dialog" aria-label="Filter values" hidden></div>
+            <div class="quarry-explore-field" aria-label="Value suggestions" hidden></div>
             <section class="quarry-explore-format-panel" aria-label="Formatting options" hidden>
                 <div class="quarry-explore-popover-content">
                     <label class="quarry-explore-keys-label"><input class="quarry-explore-keys" type="checkbox"> Include field names</label>
@@ -193,6 +198,14 @@ export class DatasetExplorer {
             this.element(".quarry-explore-format-panel"),
         );
         host.addEventListener("click", this.click);
+        document.addEventListener("click", this.outsideValues);
+        document.addEventListener("focusin", this.outsideValues);
+        window.addEventListener("resize", this.positionValues);
+        host.addEventListener("scroll", this.positionValues, true);
+        this.element(".quarry-explore-field").addEventListener(
+            "scroll",
+            this.scrollValues,
+        );
         host.addEventListener("input", this.edit, true);
         host.addEventListener("change", this.edit, true);
         host.addEventListener("focusin", this.focus);
@@ -215,6 +228,14 @@ export class DatasetExplorer {
         this.settingsCleanup?.();
         if (this.searchTimer) clearTimeout(this.searchTimer);
         this.host.removeEventListener("click", this.click);
+        document.removeEventListener("click", this.outsideValues);
+        document.removeEventListener("focusin", this.outsideValues);
+        window.removeEventListener("resize", this.positionValues);
+        this.host.removeEventListener("scroll", this.positionValues, true);
+        this.element(".quarry-explore-field").removeEventListener(
+            "scroll",
+            this.scrollValues,
+        );
         this.host.removeEventListener("input", this.edit, true);
         this.host.removeEventListener("change", this.edit, true);
         this.host.removeEventListener("focusin", this.focus);
@@ -249,7 +270,6 @@ export class DatasetExplorer {
             });
     }
     setRows(columns: string[], rows: string[][]): void {
-        this.renderDiscovery();
         const region = this.element(".quarry-explore-rows");
         region.innerHTML = this.renderRows(columns, rows);
         const table = region.querySelector("table");
@@ -612,9 +632,13 @@ export class DatasetExplorer {
         this.element(".quarry-explore-field").hidden = true;
 
         this.openValueRow = null;
-        this.host.querySelectorAll("[data-values-row]").forEach((button) => {
-            button.setAttribute("aria-expanded", "false");
-        });
+        this.host
+            .querySelectorAll(
+                "[aria-expanded][data-values-row], .quarry-explore-value[aria-expanded]",
+            )
+            .forEach((button) => {
+                button.setAttribute("aria-expanded", "false");
+            });
     }
     private renderFormatExamples(): void {
         const keys = this.format.keys;
@@ -717,6 +741,58 @@ export class DatasetExplorer {
     };
     private keydown = (event: KeyboardEvent): void => {
         const target = event.target as HTMLElement;
+        const valueInput = target.matches(".quarry-explore-value");
+        const inValues = this.element(".quarry-explore-field").contains(target);
+        if (valueInput && event.key === "Tab") {
+            this.commitTerm();
+            this.closeAuxiliaryPanels();
+        }
+        if (
+            valueInput &&
+            event.key === "Enter" &&
+            this.profile(this.filters[this.selected])?.eligible
+        ) {
+            event.preventDefault();
+            this.commitTerm();
+            this.valueSearch = "";
+            if (this.searchTimer) clearTimeout(this.searchTimer);
+            this.loadValues();
+            return;
+        }
+        if (
+            (valueInput || inValues) &&
+            this.profile(this.filters[this.selected])?.eligible &&
+            !this.smallValues(this.filters[this.selected]).length &&
+            ["ArrowDown", "ArrowUp"].includes(event.key)
+        ) {
+            event.preventDefault();
+            this.openValues();
+            const options = Array.from(
+                this.element(
+                    ".quarry-explore-field",
+                ).querySelectorAll<HTMLButtonElement>("button:not(:disabled)"),
+            );
+            const index = options.indexOf(target as HTMLButtonElement);
+            options[
+                (index < 0
+                    ? event.key === "ArrowDown"
+                        ? 0
+                        : options.length - 1
+                    : index +
+                      (event.key === "ArrowDown" ? 1 : -1) +
+                      options.length) % options.length
+            ]?.focus();
+            return;
+        }
+        if (event.key === "Escape" && this.openValueRow !== null) {
+            event.preventDefault();
+            event.stopPropagation();
+            this.element<HTMLInputElement>(
+                `[data-row="${this.selected}"] .quarry-explore-value`,
+            ).focus();
+            this.closeAuxiliaryPanels();
+            return;
+        }
         const token = target.closest<HTMLElement>("[data-output-index]");
         if (
             token &&
@@ -742,25 +818,16 @@ export class DatasetExplorer {
         }
         if (
             event.key === "Escape" &&
-            (!this.element(".quarry-explore-field").hidden ||
-                !this.element(".quarry-explore-format-panel").hidden)
+            !this.element(".quarry-explore-format-panel").hidden
         ) {
             event.preventDefault();
             event.stopPropagation();
-            const format = !this.element(".quarry-explore-format-panel").hidden;
-            this.closeAuxiliaryPanels();
-            if (format) {
-                this.element(".quarry-explore-format-panel").hidden = true;
-                this.element('[data-action="format"]').setAttribute(
-                    "aria-expanded",
-                    "false",
-                );
-            }
-            this.element<HTMLButtonElement>(
-                format
-                    ? '[data-action="format"]'
-                    : `[data-values-row="${this.selected}"]`,
-            ).focus();
+            this.element(".quarry-explore-format-panel").hidden = true;
+            this.element('[data-action="format"]').setAttribute(
+                "aria-expanded",
+                "false",
+            );
+            this.element<HTMLButtonElement>('[data-action="format"]').focus();
             return;
         }
         if (
@@ -828,37 +895,129 @@ export class DatasetExplorer {
                 return `<div class="quarry-explore-filter-row ${index === this.selected ? "active" : ""}" data-row="${index}">
                 <select class="quarry-explore-column auto-dropdown" aria-label="Field ${index + 1}">${this.fields.map((field) => `<option value="${escapeHtml(field.name)}" ${field.name === filter.column ? "selected" : ""}>${escapeHtml(field.name)}</option>`).join("")}</select>
                 <select class="quarry-explore-operator auto-dropdown" aria-label="Match ${index + 1}">${operators.map(([value, label]) => `<option value="${value}" ${value === filter.operator ? "selected" : ""}>${label}</option>`).join("")}</select>
-                <input ${column ? "" : "disabled"} class="quarry-explore-value auto-text" aria-label="Value ${index + 1}" type="${numericInput ? "number" : "text"}" ${numericInput ? (isNumber(column) ? 'step="any"' : 'step="1" min="0"') : ""} placeholder="${isNumber(column) ? "Number" : numericInput ? "Character count" : "Search terms"}" value="${escapeHtml(filter.value)}">
-                <button type="button" class="basic-button quarry-explore-values-toggle" data-values-row="${index}" aria-expanded="false" hidden>Choose values</button>
+                <div class="quarry-explore-value-control"><div class="quarry-explore-inline-values" hidden></div><div class="quarry-explore-terms"></div><input ${column ? "" : "disabled"} class="quarry-explore-value auto-text" aria-label="Value ${index + 1}" type="${numericInput ? "number" : "text"}" ${numericInput ? (isNumber(column) ? 'step="any"' : 'step="1" min="0"') : ""} placeholder="${isNumber(column) ? "Number" : numericInput ? "Character count" : "Search terms"}" value="${escapeHtml(filter.value)}">
+                <button type="button" class="basic-button quarry-explore-values-toggle" data-values-row="${index}" aria-expanded="false" hidden aria-label="Value suggestions">⌄</button></div>
                 <button type="button" class="basic-button" data-remove="${index}" ${this.filters.length === 1 ? "hidden" : ""} aria-label="Remove filter ${index + 1}">×</button>
             </div>`;
             })
             .join("");
-        this.updateValueButtons();
+        this.updateValueInputs();
     }
-    private updateValueButtons(): void {
-        this.host
-            .querySelectorAll<HTMLButtonElement>("[data-values-row]")
-            .forEach((button) => {
-                const index = Number(button.dataset.valuesRow);
-                const row = this.filters[index];
-                button.hidden =
-                    !row ||
-                    isComparison(row.operator) ||
-                    !this.recurringFields.get(
-                        `${this.dataset.name}:${row.column}`,
-                    );
-                button.textContent = "Choose values";
-                button.setAttribute(
-                    "aria-expanded",
-                    String(
-                        index === this.selected &&
-                            !this.element(".quarry-explore-field").hidden,
-                    ),
-                );
-            });
+    private profile(row: FilterRow): ExploreColumnResponse | undefined {
+        return isComparison(row.operator)
+            ? undefined
+            : this.profiles.get(`${this.dataset.name}:${row.column}`);
+    }
+    private smallValues(row: FilterRow): string[] {
+        const profile = this.profile(row);
+        const values = [
+            ...new Set((profile?.values ?? []).map((value) => value.trim())),
+        ];
+        return profile?.eligible &&
+            !profile.hasMore &&
+            (profile.totalValues ?? values.length) <= 6 &&
+            values.every(
+                (value) => value.length <= 12 && canSuggestValue(value),
+            )
+            ? values
+            : [];
+    }
+    private updateValueMarkup(element: HTMLElement, markup: string): void {
+        if (this.valueMarkup.get(element) === markup) return;
+        element.innerHTML = markup;
+        this.valueMarkup.set(element, markup);
+    }
+    private updateValueInputs(): void {
+        this.filters.forEach((filter, index) => {
+            const selector = `[data-row="${index}"]`;
+            const profile = this.profile(filter);
+            const adaptive = !!profile?.eligible;
+            const small = this.smallValues(filter);
+            const chosen = this.values(filter.value);
+            const input = this.element<HTMLInputElement>(
+                `${selector} .quarry-explore-value`,
+            );
+            const control = this.element<HTMLElement>(
+                `${selector} .quarry-explore-value-control`,
+            );
+            control.classList.toggle("adaptive", adaptive);
+            const terms = this.element<HTMLElement>(
+                `${selector} .quarry-explore-terms`,
+            );
+            const termsHtml = adaptive
+                ? chosen
+                      .filter((value) => !small.includes(value))
+                      .map(
+                          (value) =>
+                              `<button type="button" class="quarry-explore-term" data-remove-term="${escapeHtml(value)}" aria-label="Remove ${escapeHtml(value)}">${escapeHtml(value)}<span aria-hidden="true">×</span></button>`,
+                      )
+                      .join("")
+                : "";
+            this.updateValueMarkup(terms, termsHtml);
+            const chips = this.element<HTMLElement>(
+                `${selector} .quarry-explore-inline-values`,
+            );
+            const focusedValue = chips.contains(document.activeElement)
+                ? (document.activeElement as HTMLElement).dataset.value
+                : undefined;
+            const chipsHtml = small
+                .map(
+                    (value) =>
+                        `<button type="button" class="basic-button" data-value="${escapeHtml(value)}" aria-pressed="${chosen.includes(value)}">${escapeHtml(value)}</button>`,
+                )
+                .join("");
+            this.updateValueMarkup(chips, chipsHtml);
+            if (focusedValue !== undefined)
+                Array.from(
+                    chips.querySelectorAll<HTMLButtonElement>("[data-value]"),
+                )
+                    .find((button) => button.dataset.value === focusedValue)
+                    ?.focus({ preventScroll: true });
+            chips.hidden = !small.length;
+            const text = adaptive ? (filter.term ?? "") : filter.value;
+            if (input.value !== text) input.value = text;
+            if (!isComparison(filter.operator))
+                input.placeholder = adaptive
+                    ? small.length
+                        ? "Or type a term…"
+                        : "Type or select…"
+                    : "Search terms";
+            const expanded = index === this.openValueRow;
+            input.setAttribute("aria-expanded", String(expanded));
+            if (adaptive && !small.length) {
+                input.setAttribute("aria-controls", this.valueListId);
+            } else {
+                input.removeAttribute("aria-controls");
+                input.removeAttribute("aria-expanded");
+            }
+            const button = this.element<HTMLButtonElement>(
+                `${selector} [data-values-row]`,
+            );
+            button.hidden =
+                !(adaptive && !small.length) && profile?.success !== false;
+            button.textContent = profile?.success === false ? "↻" : "⌄";
+            button.setAttribute(
+                "aria-label",
+                profile?.success === false
+                    ? "Retry value suggestions"
+                    : `Suggestions for ${filter.column}`,
+            );
+            button.setAttribute("aria-expanded", String(expanded));
+        });
+    }
+    private commitTerm(index = this.selected): void {
+        const row = this.filters[index];
+        if (!row?.term) return;
+        row.value = [
+            ...new Set([...this.values(row.value), ...this.values(row.term)]),
+        ].join(", ");
+        row.term = "";
+        this.updateValueInputs();
+        this.renderDraft();
     }
     private selectRow(index: number): void {
+        this.commitTerm();
+        this.closeAuxiliaryPanels();
         if (this.searchTimer) clearTimeout(this.searchTimer);
         this.selected = index;
         this.host.querySelectorAll<HTMLElement>("[data-row]").forEach((row) => {
@@ -873,20 +1032,67 @@ export class DatasetExplorer {
         this.loadValues();
     }
     private renderDiscovery(): void {
-        const column = this.activeColumn();
-        const pane = this.element(".quarry-explore-field");
-        if (!column) {
-            pane.textContent = "No fields to explore.";
-            return;
-        }
-        pane.innerHTML = `<div class="quarry-explore-value-heading"><strong>Values for ${escapeHtml(column.name)} · Filter ${this.selected + 1}</strong><button type="button" class="basic-button" data-action="close-values" aria-label="Close values">Close</button></div><div class="quarry-explore-popover-content">
-            ${this.datasets.length > 1 ? `<div class="quarry-explore-value-source">${this.sourceSelector("Values from")}</div>` : ""}<div class="quarry-explore-value-picker">
-                <label class="quarry-explore-search-label" hidden>Search values<input class="quarry-explore-search auto-text" type="search" placeholder="Search values" value="${escapeHtml(this.valueSearch)}"></label>
-                <div class="quarry-explore-suggestions" aria-live="polite"></div>
-            </div>
-            </div>`;
+        this.element(".quarry-explore-field").innerHTML =
+            `${this.datasets.length > 1 ? `<div class="quarry-explore-value-source">${this.sourceSelector("Suggestions from")}</div>` : ""}<div class="quarry-explore-suggestions" role="group" aria-label="Suggested search terms" id="${this.valueListId}"></div>`;
         this.renderSuggestions();
     }
+    private openValues(): void {
+        const row = this.filters[this.selected];
+        if (!this.profile(row)?.eligible || this.smallValues(row).length)
+            return;
+        const search = row.term ?? "";
+        if (this.valueSearch !== search) {
+            this.valueSearch = search;
+            if (this.searchTimer) clearTimeout(this.searchTimer);
+            this.loadValues();
+        }
+        this.openValueRow = this.selected;
+        this.element(".quarry-explore-field").hidden = false;
+        this.updateValueInputs();
+        this.positionValues();
+    }
+    private positionValues = (): void => {
+        if (this.openValueRow === null) return;
+        const control = this.element(
+            `[data-row="${this.openValueRow}"] .quarry-explore-value-control`,
+        );
+        const rect = control.getBoundingClientRect();
+        const pane = this.element(".quarry-explore-field");
+        const below = window.innerHeight - rect.bottom - 12;
+        const above = rect.top - 12;
+        const upwards = below < 180 && above > below;
+        pane.style.width = `${Math.min(rect.width, window.innerWidth - 16)}px`;
+        pane.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - rect.width - 8))}px`;
+        pane.style.maxHeight = `${Math.max(80, Math.min(300, upwards ? above : below))}px`;
+        pane.style.top = upwards ? "auto" : `${rect.bottom + 4}px`;
+        pane.style.bottom = upwards
+            ? `${window.innerHeight - rect.top + 4}px`
+            : "auto";
+    };
+    private outsideValues = (event: Event): void => {
+        const path = event.composedPath();
+        if (
+            path.includes(this.element(".quarry-explore-field")) ||
+            path.some(
+                (item) =>
+                    item instanceof Element &&
+                    item.matches(".quarry-explore-value-control"),
+            )
+        )
+            return;
+        if (event.type === "click") this.commitTerm();
+        this.closeAuxiliaryPanels();
+    };
+    private scrollValues = (event: Event): void => {
+        if (event.target !== this.element(".quarry-explore-field")) return;
+        const pane = event.target as HTMLElement;
+        if (
+            !this.valueBusy &&
+            this.valueResponse?.hasMore &&
+            pane.scrollTop + pane.clientHeight >= pane.scrollHeight - 40
+        )
+            this.loadValues(true);
+    };
     private renderOutput(): void {
         this.element<HTMLSelectElement>(
             ".quarry-explore-output-add",
@@ -912,12 +1118,15 @@ export class DatasetExplorer {
         );
         if (row && Number(row.dataset.row) !== this.selected)
             this.selectRow(Number(row.dataset.row));
+        if ((event.target as HTMLElement).matches(".quarry-explore-value"))
+            this.openValues();
     };
     private edit = (event: Event): void => {
         const target = event.target as HTMLInputElement;
         if (target.dataset.includeDataset !== undefined) {
             if (event.type !== "change" || target.disabled || !this.combine)
                 return;
+            this.commitTerm();
             const name = target.dataset.includeDataset;
             const dataset = this.availableDatasets.find(
                 (item) => item.name === name,
@@ -965,17 +1174,6 @@ export class DatasetExplorer {
             if (event.type === "change") this.changeSource(target.value);
             return;
         }
-        if (target.matches(".quarry-explore-search")) {
-            if (event.type !== "input") return;
-            this.valueSearch = target.value;
-            if (this.searchTimer) clearTimeout(this.searchTimer);
-            this.valueRequest++;
-            this.valueBusy = true;
-            this.valueItems = [];
-            this.renderSuggestions();
-            this.searchTimer = setTimeout(() => this.loadValues(), 250);
-            return;
-        }
         const row = target.closest<HTMLElement>("[data-row]");
         if (row) {
             const index = Number(row.dataset.row);
@@ -989,6 +1187,8 @@ export class DatasetExplorer {
                     ? "+="
                     : "=";
                 filter.value = "";
+                filter.term = "";
+                this.closeAuxiliaryPanels();
                 this.renderFilters();
                 this.selectRow(index);
                 this.element<HTMLSelectElement>(
@@ -996,18 +1196,41 @@ export class DatasetExplorer {
                 ).focus();
             } else if (target.matches(".quarry-explore-operator")) {
                 if (event.type !== "change") return;
+                this.commitTerm(index);
                 const changedType =
                     isComparison(filter.operator) !==
                     isComparison(target.value);
                 filter.operator = target.value;
-                if (changedType) filter.value = "";
+                if (changedType) {
+                    filter.value = "";
+                    filter.term = "";
+                    this.closeAuxiliaryPanels();
+                }
                 this.renderFilters();
+                if (changedType && !isComparison(filter.operator))
+                    this.loadValues();
                 this.element<HTMLSelectElement>(
                     `[data-row="${index}"] .quarry-explore-operator`,
                 ).focus();
             } else if (target.matches(".quarry-explore-value")) {
-                filter.value = target.value;
+                if (event.type !== "input") return;
                 if (index !== this.selected) this.selectRow(index);
+                if (this.profile(filter)?.eligible) {
+                    filter.term = target.value;
+                    if (target.value.includes(",")) this.commitTerm(index);
+                    this.valueSearch = filter.term ?? "";
+                    if (this.searchTimer) clearTimeout(this.searchTimer);
+                    this.valueRequest++;
+                    if (!this.smallValues(filter).length) {
+                        this.valueBusy = true;
+                        this.valueItems = [];
+                        this.openValues();
+                        this.searchTimer = setTimeout(
+                            () => this.loadValues(),
+                            250,
+                        );
+                    }
+                } else filter.value = target.value;
                 this.renderSuggestions();
             }
         } else if (target.matches(".quarry-explore-output-add")) {
@@ -1031,6 +1254,7 @@ export class DatasetExplorer {
         if (
             !column ||
             isNumber(column) ||
+            isComparison(this.filters[this.selected].operator) ||
             column.kind !== "scalar" ||
             !this.dataset.columns.some(
                 (source) =>
@@ -1056,11 +1280,8 @@ export class DatasetExplorer {
             }
             this.valueBusy = false;
             this.valueResponse = data;
-            if (data.success)
-                this.recurringFields.set(
-                    `${this.dataset.name}:${column.name}`,
-                    !!data.eligible,
-                );
+            if (!search && !append)
+                this.profiles.set(`${this.dataset.name}:${column.name}`, data);
             this.valueItems = data.success
                 ? append
                     ? [...this.valueItems, ...(data.values ?? [])]
@@ -1082,76 +1303,58 @@ export class DatasetExplorer {
     }
 
     private renderSuggestions(): void {
+        this.updateValueInputs();
         const area = this.host.querySelector<HTMLElement>(
             ".quarry-explore-suggestions",
         );
         if (!area) return;
-        const column = this.activeColumn();
-        this.updateValueButtons();
-        const supported =
-            column &&
-            column.kind === "scalar" &&
-            !isNumber(column) &&
-            this.dataset.columns.some(
-                (source) =>
-                    source.name.toLowerCase() === column.name.toLowerCase(),
-            );
-        this.element(".quarry-explore-value-picker").hidden = !supported;
-        if (!supported) {
-            if (column)
-                this.element(
-                    ".quarry-explore-value-heading strong",
-                ).textContent =
-                    `Examples for ${column.name} · Filter ${this.selected + 1}`;
-            return;
-        }
+        const pane = this.element(".quarry-explore-field");
+        const scroll = pane.scrollTop;
+        const focused =
+            document.activeElement instanceof HTMLElement
+                ? document.activeElement.dataset.value
+                : undefined;
         const data = this.valueResponse;
-        const eligible = data?.success && data.eligible;
-        this.element(".quarry-explore-value-heading strong").textContent =
-            `${eligible || !data?.success ? "Values" : "Examples"} for ${column.name} · Filter ${this.selected + 1}`;
-        this.element(".quarry-explore-search-label").hidden =
-            !eligible || ((data.totalValues ?? 0) <= 12 && !this.valueSearch);
-        if (this.valueBusy && !eligible) {
-            area.innerHTML =
-                '<p class="quarry-explore-note">Checking the entire column… You can still enter search terms in the filter row.</p>';
-            return;
-        }
         if (!data) {
-            area.replaceChildren();
+            area.textContent = this.valueBusy ? "Loading suggestions…" : "";
             return;
         }
         if (!data.success) {
-            area.innerHTML = `<p class="quarry-explore-error">${escapeHtml(data.error ?? "Could not check this column.")}</p><button type="button" class="basic-button" data-action="retry-values">Retry</button>`;
+            area.innerHTML = `<span class="quarry-explore-error">${escapeHtml(data.error ?? "Could not load suggestions.")}</span><button type="button" class="basic-button" data-action="retry-values">Retry</button>`;
             return;
         }
-        if (!eligible) {
-            const reason =
-                data.reason === "distinct_limit"
-                    ? `This column has at least ${data.uniqueLimit?.toLocaleString()} distinct values.`
-                    : data.reason === "length_limit"
-                      ? `This column contains a value at least ${data.lengthLimit} characters long.`
-                      : data.reason === "percentage_limit"
-                        ? `${data.distinctCount?.toLocaleString()} distinct values across ${data.totalRows?.toLocaleString()} rows exceed the ${data.maxDistinctPercent}% limit.`
-                        : data.reason === "empty"
-                          ? "This column has no nonempty values."
-                          : "Use text matching for this field.";
-            area.innerHTML = `<details class="quarry-explore-profile-reason"><summary>About value suggestions</summary><p>${reason}</p></details>`;
+        if (
+            !data.eligible ||
+            this.smallValues(this.filters[this.selected]).length
+        ) {
+            pane.hidden = true;
+            area.replaceChildren();
             return;
         }
         const chosen = this.readValues();
         area.innerHTML =
-            '<p class="quarry-explore-note">Click a value to add or remove it from this filter.</p>' +
             this.valueItems
                 .map(
                     (value) =>
-                        `<button type="button" class="basic-button" data-value="${escapeHtml(value.trim())}" aria-pressed="${chosen.includes(value.trim())}" ${canSuggestValue(value) ? "" : 'disabled title="Contains query separators; enter a shorter search term above."'}>${escapeHtml(value)}</button>`,
+                        `<button type="button" class="quarry-explore-value-option" data-value="${escapeHtml(value.trim())}" aria-pressed="${chosen.includes(value.trim())}" ${canSuggestValue(value) ? "" : 'disabled title="Contains query separators; type a shorter term instead."'}><span aria-hidden="true">${chosen.includes(value.trim()) ? "✓" : ""}</span>${escapeHtml(value)}</button>`,
                 )
                 .join("") +
-            `<p class="quarry-explore-note">${this.valueBusy ? "Loading values…" : this.valueItems.length ? `Showing ${this.valueItems.length.toLocaleString()} of ${(data.matchingValues ?? 0).toLocaleString()} matching values · ${(data.totalValues ?? 0).toLocaleString()} distinct values in the entire column.` : "No matching values. You can still enter search terms in the filter row."}</p>` +
-            (data.hasMore
-                ? `<button type="button" class="basic-button" data-action="more-values" ${this.valueBusy ? "disabled" : ""}>Show more values</button>`
+            (this.valueSearch.trim() &&
+            canSuggestValue(this.valueSearch) &&
+            !this.valueItems.some(
+                (value) =>
+                    value.toLowerCase() ===
+                    this.valueSearch.trim().toLowerCase(),
+            )
+                ? `<button type="button" class="quarry-explore-custom-term" data-action="add-term">Use “${escapeHtml(this.valueSearch.trim())}” as a search term</button>`
                 : "") +
-            `<p class="quarry-explore-note">Checked the entire column. Change recurring-value limits in Settings.</p>`;
+            `<div class="quarry-explore-value-status" role="status">${this.valueBusy ? "Loading suggestions…" : this.valueItems.length ? `${this.valueItems.length.toLocaleString()} of ${(data.matchingValues ?? this.valueItems.length).toLocaleString()} values` : "No matching values. Type a term and press Enter."}</div>`;
+        if (focused !== undefined)
+            Array.from(area.querySelectorAll<HTMLButtonElement>("[data-value]"))
+                .find((button) => button.dataset.value === focused)
+                ?.focus({ preventScroll: true });
+        pane.scrollTop = scroll;
+        this.positionValues();
     }
 
     private readValues(): string[] {
@@ -1309,12 +1512,8 @@ export class DatasetExplorer {
     }
     private click = (event: Event): void => {
         const target = event.target as HTMLElement;
-        if (
-            !target.closest(
-                ".quarry-explore-popover, [data-values-row], [data-action='format']",
-            )
-        )
-            this.closeAuxiliaryPanels();
+        this.outsideValues(event);
+        if (target.matches(".quarry-explore-value")) this.openValues();
         const button = target.closest<HTMLButtonElement>("button");
         if (!button || button.disabled) return;
         if (button.dataset.namespace !== undefined) {
@@ -1374,24 +1573,15 @@ export class DatasetExplorer {
         } else if (button.dataset.valuesRow !== undefined) {
             if (button.hidden) return;
             const index = Number(button.dataset.valuesRow);
-            const wasOpen =
-                this.openValueRow === index &&
-                !this.element(".quarry-explore-field").hidden;
-            this.closeAuxiliaryPanels();
-            if (!wasOpen) {
-                if (index !== this.selected) this.selectRow(index);
+            const wasOpen = this.openValueRow === index;
+            if (index !== this.selected) this.selectRow(index);
+            if (this.profile(this.filters[index])?.success === false) {
                 this.openValueRow = index;
                 this.element(".quarry-explore-field").hidden = false;
-                this.renderSuggestions();
-                this.element<HTMLButtonElement>(
-                    '[data-action="close-values"]',
-                ).focus();
-            }
-        } else if (button.dataset.action === "close-values") {
-            this.closeAuxiliaryPanels();
-            this.element<HTMLButtonElement>(
-                `[data-values-row="${this.selected}"]`,
-            ).focus();
+                this.loadValues();
+                this.positionValues();
+            } else if (wasOpen) this.closeAuxiliaryPanels();
+            else this.openValues();
         } else if (button.dataset.action === "format") {
             const open = this.element(".quarry-explore-format-panel").hidden;
             this.closeAuxiliaryPanels();
@@ -1408,19 +1598,36 @@ export class DatasetExplorer {
         } else if (button.dataset.view) {
             this.setView(button.dataset.view);
             if (button.dataset.view === "rows") this.newSample();
-        } else if (button.dataset.value !== undefined) {
+        } else if (
+            button.dataset.value !== undefined ||
+            button.dataset.removeTerm !== undefined
+        ) {
+            const row = button.closest<HTMLElement>("[data-row]");
+            if (row && Number(row.dataset.row) !== this.selected)
+                this.selectRow(Number(row.dataset.row));
             const values = this.readValues();
-            const value = button.dataset.value;
+            const value =
+                button.dataset.value ?? button.dataset.removeTerm ?? "";
             this.filters[this.selected].value = (
                 values.includes(value)
                     ? values.filter((item) => item !== value)
                     : [...values, value]
             ).join(", ");
-            this.element<HTMLInputElement>(
-                `[data-row="${this.selected}"] .quarry-explore-value`,
-            ).value = this.filters[this.selected].value;
-            this.renderSuggestions();
+            this.filters[this.selected].term = "";
+            if (this.valueSearch) {
+                this.valueSearch = "";
+                if (this.searchTimer) clearTimeout(this.searchTimer);
+                this.loadValues();
+            } else this.renderSuggestions();
             this.renderDraft();
+            if (button.dataset.removeTerm !== undefined)
+                this.element<HTMLInputElement>(
+                    `[data-row="${this.selected}"] .quarry-explore-value`,
+                ).focus();
+        } else if (button.dataset.action === "add-term") {
+            this.commitTerm();
+            this.valueSearch = "";
+            this.loadValues();
         } else if (button.dataset.remove !== undefined) {
             if (this.filters.length === 1) return;
             const index = Number(button.dataset.remove);
@@ -1434,12 +1641,10 @@ export class DatasetExplorer {
             this.outputs.splice(Number(button.dataset.removeOutput), 1);
             this.renderOutput();
             this.renderDraft();
-        } else if (button.dataset.action === "more-values")
-            this.loadValues(true);
-        else if (button.dataset.action === "retry-values") this.loadValues();
+        } else if (button.dataset.action === "retry-values") this.loadValues();
         else if (button.dataset.action === "add") {
             const row = this.filters[this.selected] ?? this.blankFilter();
-            this.filters.push({ ...row, value: "" });
+            this.filters.push({ ...row, value: "", term: "" });
             this.selected = this.filters.length - 1;
             this.renderFilters();
             this.selectRow(this.selected);

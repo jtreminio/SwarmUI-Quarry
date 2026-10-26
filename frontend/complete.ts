@@ -212,16 +212,14 @@ const completeFilterColumn = (
     lastOpen: number,
     list: CompletionDataset[],
 ): QuarryCompletion[] => {
-    const names = suffix
+    const named = suffix
         .slice(0, lastOpen)
         .split(",")
         .map((s) => s.trim())
-        .filter((s) => s.length > 0);
-    if (names.length !== 1) {
-        return [];
-    }
-    const dataset = findDataset(list, names[0]);
-    if (!dataset) {
+        .filter((s) => s.length > 0)
+        .map((n) => findDataset(list, n))
+        .filter((d): d is CompletionDataset => d !== null);
+    if (named.length === 0) {
         return [];
     }
     const inner = suffix.slice(lastOpen + 1);
@@ -233,9 +231,15 @@ const completeFilterColumn = (
     const head = `<q:${suffix.slice(0, lastOpen + 1 + (semiIdx === -1 ? 0 : semiIdx + 1))}`;
     const fragment = clause.trim();
     const frag = fieldPathKey(fragment);
+    const used = new Set<string>();
     const columns = nestedColumns(
-        orderColumnsForFilter(dataset),
-        [dataset],
+        named.flatMap(orderColumnsForFilter).filter((col) => {
+            const key = fieldPathKey(col.name);
+            if (used.has(key)) return false;
+            used.add(key);
+            return true;
+        }),
+        named,
         fragment,
     );
     const exact = columns.find((c) => fieldPathKey(c.name) === frag);

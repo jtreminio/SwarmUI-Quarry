@@ -632,45 +632,73 @@
     min-width: 0;
     min-height: 1.8rem;
 }
-.quarry-explore-field {
-    min-width: 0;
-    margin: 0.6rem 0;
-}
-.quarry-explore-popover {
-    position: absolute;
-    z-index: 6;
-    top: 4rem;
-    left: 1rem;
+.quarry-explore-value-control {
     display: flex;
-    flex-direction: column;
-    box-sizing: border-box;
-    width: min(38rem, calc(100% - 2rem));
-    max-height: calc(100% - 5rem);
-    min-height: 0;
-    margin: 0;
-    overflow: hidden;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.3rem;
+    min-width: 0;
+}
+.quarry-explore-value-control.adaptive {
     border: 1px solid var(--light-border);
-    border-radius: 0.4rem;
+    border-radius: 0.3rem;
+    padding: 0.25rem;
+    background: var(--background);
+}
+.quarry-explore-value-control.adaptive:focus-within {
+    border-color: var(--emphasis);
+}
+.quarry-explore-terms, .quarry-explore-inline-values {
+    display: contents;
+}
+.quarry-explore-value-control .quarry-explore-value {
+    flex: 1;
+    width: 5rem;
+    min-width: 5rem;
+}
+.quarry-explore-value-control.adaptive .quarry-explore-value {
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+}
+.quarry-explore .quarry-explore-term {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.15rem 0.4rem;
+    border: 1px solid var(--light-border);
+    border-radius: 0.25rem;
+    background: var(--background-soft);
+    color: var(--text);
+    font: inherit;
+    overflow-wrap: anywhere;
+    max-width: 100%;
+}
+.quarry-explore-term span { color: var(--red); }
+.quarry-explore-term:hover span { color: color-mix(in srgb, var(--red) 70%, black); }
+.quarry-explore .quarry-explore-values-toggle {
+    padding: 0.15rem 0.4rem;
+    border: 0;
+    background: transparent;
+    flex: none;
+}
+.quarry-explore-inline-values button[aria-pressed="true"] {
+    background: var(--emphasis);
+    border-color: var(--emphasis);
+    color: var(--emphasis-text);
+}
+.quarry-explore-field {
+    position: fixed;
+    z-index: 2150;
+    box-sizing: border-box;
+    overflow: auto;
+    overscroll-behavior: contain;
+    padding: 0.25rem;
+    border: 1px solid var(--light-border);
+    border-radius: 0.3rem;
     background: var(--background);
     color: var(--text);
-    box-shadow: 0 0.5rem 1.5rem #0006;
-}
-.quarry-explore-value-heading {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex: none;
-    gap: 0.75rem;
-    padding: 0.65rem 0.75rem;
-    border-bottom: 1px solid var(--light-border);
-    background: var(--background-soft);
-}
-.quarry-explore-value-heading strong {
-    min-width: 0;
-    overflow-wrap: anywhere;
-}
-.quarry-explore-value-heading button {
-    flex: none;
+    box-shadow: 0 0.3rem 0.8rem #0004;
 }
 .quarry-explore-popover-content {
     flex: 1;
@@ -752,38 +780,49 @@
     width: 100%;
     min-width: 0;
 }
-.quarry-explore-search-label {
-    display: grid;
-    gap: 0.35rem;
-    margin: 0.5rem 0 0;
-}
-.quarry-explore-search {
-    width: 100%;
-}
 .quarry-explore-suggestions {
     display: flex;
-    flex-wrap: wrap;
-    gap: 0.4rem;
-    padding: 0.5rem 0 0;
+    flex-direction: column;
 }
-.quarry-explore-suggestions button {
-    max-width: 100%;
-    overflow-wrap: anywhere;
-    text-align: left;
-}
-.quarry-explore-suggestions button[aria-pressed="true"] {
-    border-color: var(--emphasis);
-    background: color-mix(in srgb, var(--emphasis) 18%, var(--background));
+.quarry-explore .quarry-explore-value-option,
+.quarry-explore .quarry-explore-custom-term {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    width: 100%;
+    padding: 0.45rem 0.5rem;
+    border: 0;
+    border-radius: 0.2rem;
+    background: transparent;
     color: var(--text);
+    text-align: left;
+    font: inherit;
+    overflow-wrap: anywhere;
 }
-.quarry-explore-suggestions small {
+.quarry-explore-value-option > span {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 1rem;
+    height: 1rem;
+    border: 1px solid var(--light-border);
+    border-radius: 0.15rem;
+    font-size: 0.8em;
+}
+.quarry-explore .quarry-explore-value-option[aria-pressed="true"],
+.quarry-explore .quarry-explore-value-option:hover,
+.quarry-explore .quarry-explore-custom-term:hover {
+    background: var(--background-soft);
+}
+.quarry-explore-value-option[aria-pressed="true"] > span {
+    background: var(--emphasis);
+    color: var(--emphasis-text);
+    border-color: var(--emphasis);
+}
+.quarry-explore-value-status {
+    padding: 0.4rem 0.5rem;
     color: var(--text-soft);
-    margin-left: 0.3rem;
-    font-variant-numeric: tabular-nums;
-}
-.quarry-explore-suggestions p {
-    flex-basis: 100%;
-    margin: 0.35rem 0;
+    font-size: 0.85em;
 }
 .quarry-explore-error {
     color: var(--quarry-status-error);
@@ -1046,9 +1085,6 @@ body:has(#quarry-preview-modal.show) > .modal-backdrop {
     .quarry-explore-filter-row:has(> button:not([hidden])) {
         grid-template-columns: minmax(7rem, 1fr) minmax(7rem, 0.7fr) minmax(8rem, 3fr) auto;
     }
-    .quarry-explore-filter-row:has(> .quarry-explore-values-toggle:not([hidden])):has(> [data-remove]:not([hidden])) {
-        grid-template-columns: minmax(7rem, 1fr) minmax(7rem, 0.7fr) minmax(8rem, 3fr) auto auto;
-    }
 }
 @media (min-width: 851px) {
     .quarry-explore-top > * {
@@ -1062,10 +1098,6 @@ body:has(#quarry-preview-modal.show) > .modal-backdrop {
 @media (max-width: 650px) {
     .quarry-explore-format-panel > .quarry-explore-popover-content {
         grid-template-columns: minmax(0, 1fr);
-    }
-    .quarry-explore-popover {
-        left: 0;
-        width: 100%;
     }
     #quarry-preview-modal .modal-dialog.quarry-preview-dialog {
         height: calc(100dvh - 1rem);
@@ -1092,18 +1124,13 @@ body:has(#quarry-preview-modal.show) > .modal-backdrop {
     .quarry-explore-filter-row:has(> [data-remove][hidden]) {
         grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     }
-    .quarry-explore-filter-row .quarry-explore-value {
+    .quarry-explore-filter-row .quarry-explore-value-control {
         grid-column: 1 / 3;
         grid-row: 2;
     }
-    .quarry-explore-filter-row button:not(.quarry-explore-values-toggle) {
+    .quarry-explore-filter-row > [data-remove] {
         grid-column: 3;
         grid-row: 1 / 3;
-    }
-    .quarry-explore-filter-row .quarry-explore-values-toggle {
-        grid-column: 1 / 3;
-        grid-row: 3;
-        justify-self: start;
     }
     .quarry-explore-output > label:not(.quarry-explore-keys-label) {
         width: 100%;

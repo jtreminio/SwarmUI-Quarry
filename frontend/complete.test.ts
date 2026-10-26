@@ -368,8 +368,77 @@ describe("computeQuarryCompletions — filter columns", () => {
         expect(computeQuarryCompletions("rated[score-=7", [rated])).toEqual([]);
     });
 
-    it("does not offer columns for a multi-dataset tag", () => {
-        expect(labels("characters,creatures[")).toEqual([]);
+    it("unions filter columns across named datasets", () => {
+        expect(labels("characters,creatures[")).toEqual([
+            "tags",
+            "prompt",
+            "source",
+            "caption",
+            "kind",
+            "tags[]",
+        ]);
+    });
+
+    it("preserves namespaced dataset names when completing a later dataset's column", () => {
+        const list = [
+            { ...characters, name: "nl/BaiqiL.GenAI-Bench" },
+            { ...creatures, name: "nl/caqlayan.prompts2" },
+        ];
+        const names = "nl/BaiqiL.GenAI-Bench,nl/caqlayan.prompts2";
+        expect(labels(`${names}[`, list)).toContain("caption");
+        expect(computeQuarryCompletions(`${names}[cap`, list)).toEqual([
+            {
+                apply: `<q:${names}[caption`,
+                label: "caption",
+                hint: "prompt column",
+            },
+        ]);
+        expect(
+            computeQuarryCompletions(`${names}[tags=girl;caption`, list)[0]
+                .apply,
+        ).toBe(`<q:${names}[tags=girl;caption=`);
+        expect(labels(`${names}[caption=girl`, list)).toEqual([]);
+    });
+
+    it("deduplicates filter columns without case and resolves names with spaces", () => {
+        expect(
+            labels(" CHARACTERS , styled [", [
+                characters,
+                {
+                    ...styled,
+                    columns: [
+                        { name: "PROMPT", kind: "scalar" },
+                        { name: "styles", kind: "list" },
+                    ],
+                },
+            ]),
+        ).toEqual(["tags", "prompt", "source", "styles", "tags[]", "styles[]"]);
+    });
+
+    it("completes nested fields from a later dataset", () => {
+        const nested: CompletionDataset = {
+            ...creatures,
+            columns: [
+                { name: "subject", kind: "list", fields: [{ name: "hair" }] },
+            ],
+        };
+        expect(
+            computeQuarryCompletions("characters,creatures[subject[i].h", [
+                characters,
+                nested,
+            ]),
+        ).toEqual([
+            {
+                apply: "<q:characters,creatures[subject[i].hair",
+                label: "subject[i].hair",
+                hint: "record field",
+            },
+        ]);
+    });
+
+    it("uses known datasets when other names cannot be resolved", () => {
+        expect(labels("nope,characters[")).toEqual(labels("characters["));
+        expect(labels("nope,missing[")).toEqual([]);
     });
 
     it("stops once an operator is typed (now entering the value)", () => {
