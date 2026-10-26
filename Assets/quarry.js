@@ -431,47 +431,7 @@
   };
 
   // frontend/prompt.ts
-  var HIGHLIGHT_DEBOUNCE_MS = 250;
   var PROMPT_BOX_IDS = ["alt_prompt_textbox", "alt_negativeprompt_textbox"];
-  var Q_TAG_GUARD = /<q(?:\[|:)/i;
-  var listeners = [];
-  var lastNames = [];
-  var onReferences = (listener) => {
-    listeners.push(listener);
-    listener(lastNames);
-  };
-  var notify = (names) => {
-    lastNames = names;
-    for (const listener of listeners) {
-      listener(names);
-    }
-  };
-  var readPromptText = () => PROMPT_BOX_IDS.map(
-    (id) => document.getElementById(id)?.value ?? ""
-  ).join("\n");
-  var recomputeReferences = () => {
-    const prompt = readPromptText();
-    if (!Q_TAG_GUARD.test(prompt)) {
-      notify([]);
-      return;
-    }
-    genericRequest(
-      "QuarryResolveReferences",
-      { prompt },
-      (data) => {
-        if (data.success) {
-          notify(data.names ?? []);
-        }
-      }
-    );
-  };
-  var highlightTimer = null;
-  var schedule = () => {
-    if (highlightTimer) {
-      clearTimeout(highlightTimer);
-    }
-    highlightTimer = setTimeout(recomputeReferences, HIGHLIGHT_DEBOUNCE_MS);
-  };
   var watching = false;
   var lastPromptBox = null;
   var startPromptWatcher = () => {
@@ -488,12 +448,6 @@
       ].includes(target.id))
         lastPromptBox = target;
     });
-    for (const id of PROMPT_BOX_IDS) {
-      const prompt = document.getElementById(
-        id
-      );
-      prompt?.addEventListener("input", schedule);
-    }
   };
   var Q_TAG_PATTERN = "<(q(?:\\[\\d+(?:-\\d+)?\\])?):([^>]*)>";
   var splitTagInner = (inner) => {
@@ -607,7 +561,6 @@
     promptBox.selectionEnd = edit.cursor;
     promptBox.focus();
     triggerChangeFor(promptBox);
-    recomputeReferences();
   };
   var insertQuarryTag = (name) => {
     editPrompt((value, cursor) => computePromptEdit(value, cursor, name, true));
@@ -1504,12 +1457,12 @@
     ).join("");
     return renderRemoteFolderHeaderRow(node, depth, expanded) + subFolders + items;
   };
-  var renderRemoteDatasets = (list, expandedFolders3 = /* @__PURE__ */ new Set()) => {
+  var renderRemoteDatasets = (list, expandedFolders2 = /* @__PURE__ */ new Set()) => {
     if (!list || list.length === 0) {
       return `<div class="quarry-remote-empty">No datasets available right now.</div>`;
     }
     const { loose, folders } = buildFolderTree(list);
-    const folderRows = folders.map((folder) => renderRemoteFolderNode(folder, 0, expandedFolders3)).join("");
+    const folderRows = folders.map((folder) => renderRemoteFolderNode(folder, 0, expandedFolders2)).join("");
     const looseRows = loose.map((dataset) => renderRemoteDatasetRow(dataset)).join("");
     return `<table class="quarry-remote-table">
         <colgroup><col class="quarry-remote-col-select"><col><col class="quarry-remote-col-status"><col class="quarry-remote-col-size"></colgroup>
@@ -1956,17 +1909,16 @@
     onChanged = onChangedCb;
     if (host.querySelector(`#${BODY_ID}`)) return;
     host.innerHTML = `
+        <div class="quarry-download-toolbar">
+            <button type="button" id="${REFRESH_ID}" class="basic-button">Refresh collection</button>
+            <button type="button" id="${REPAIR_ID}" class="basic-button" title="Fix casing errors caused by stale downloaded versions using existing local files. No dataset download is needed; previous metadata is backed up.">Repair datasets</button>
+            <button type="button" id="${START_ID}" class="basic-button quarry-download-primary" disabled>Download selected</button>
+        </div>
         <div id="${BODY_ID}" class="quarry-download-body"></div>
         <div id="${PROGRESS_ID}" class="quarry-download-progress" style="display: none;"></div>
         <div id="${MESSAGE_ID}" class="quarry-download-message" role="status"></div>
         <div id="quarry-repair-status" class="quarry-repair-status" role="status" aria-live="polite"></div>
-        <div class="quarry-download-footer">
-            <div class="quarry-download-footer-actions">
-                <button type="button" id="${START_ID}" class="basic-button quarry-download-primary" disabled>Download selected</button>
-                <button type="button" id="${REFRESH_ID}" class="basic-button">Refresh</button>
-                <button type="button" id="${REPAIR_ID}" class="basic-button" title="Fix casing errors caused by stale downloaded versions using existing local files. No dataset download is needed; previous metadata is backed up.">Repair datasets</button>
-            </div>
-        </div>`;
+`;
     document.getElementById(START_ID)?.addEventListener("click", startBatch);
     document.getElementById(REFRESH_ID)?.addEventListener("click", () => loadAvailable(true));
     bindRepairButton(
@@ -4204,11 +4156,9 @@
   var MESSAGE_TIMEOUT_MS = 5e3;
   var PREVIEW_ROW_LIMIT = 100;
   var PREVIEW_MODAL_ID = "quarry-preview-modal";
-  var PREVIEW_TITLE_ID = "quarry-preview-title";
   var PREVIEW_BODY_ID = "quarry-preview-body";
   var PREVIEW_STATUS_ID = "quarry-preview-status";
   var PREVIEW_REFRESH_ID = "quarry-preview-refresh";
-  var expandedFolders2 = /* @__PURE__ */ new Set();
   var renderTagCheckboxes = (dataset) => dataset.columns.map((col) => {
     const checked = (dataset.configuredTagColumns ?? []).includes(
       col.name
@@ -4216,35 +4166,6 @@
     const badge = col.kind === "scalar" ? "" : ` [${col.kind}]`;
     return `<label class="quarry-tag-option"><input type="checkbox" class="quarry-dataset-tag" data-dataset="${escapeHtml(dataset.name)}" value="${escapeHtml(col.name)}"${checked}> ${escapeHtml(col.name)}${badge}</label>`;
   }).join("");
-  var formatRowCount = (count) => count == null ? "—" : count.toLocaleString();
-  var SUMMARY_ID = "quarry-datasets-summary";
-  var formatDatasetsSummary = (datasets2) => {
-    const total2 = datasets2.length;
-    let rows = 0;
-    let counted = 0;
-    let size = 0;
-    for (const dataset of datasets2) {
-      if (dataset.rowCount != null) {
-        rows += dataset.rowCount;
-        counted += 1;
-      }
-      if (dataset.sizeBytes != null) {
-        size += dataset.sizeBytes;
-      }
-    }
-    const uncounted = total2 - counted;
-    const datasetsLabel = `${total2.toLocaleString()} dataset${total2 === 1 ? "" : "s"}`;
-    const rowsLabel = uncounted > 0 ? `${rows.toLocaleString()}+ rows (${uncounted.toLocaleString()} not counted yet)` : `${rows.toLocaleString()} rows`;
-    return `${datasetsLabel} · ${rowsLabel} · ${formatBytes(size)}`;
-  };
-  var applyInPromptHighlights = (container, names) => {
-    const wanted = new Set(names.map((n) => n.toLowerCase()));
-    container.querySelectorAll("tr.quarry-dataset-row").forEach((row) => {
-      const name = (row.getAttribute("data-dataset") ?? "").toLowerCase();
-      row.classList.toggle("quarry-dataset-in-prompt", wanted.has(name));
-    });
-  };
-  var renderDatasetNameButton = (name, label = name, canInsert = true) => `<button type="button" class="quarry-dataset-name quarry-dataset-name-link" data-dataset="${name}" title="Add or remove this dataset in the prompt"${canInsert ? "" : " disabled"}>${label}</button>`;
   var ENABLE_TITLE = "Enabled — included when a <q:> wildcard (like **) matches it. Click to disable.";
   var DISABLE_TITLE = "Disabled — skipped by <q:> wildcards, but still used when a prompt names it explicitly. Click to enable.";
   var isDatasetEnabled = (dataset) => dataset.enabled !== false;
@@ -4252,81 +4173,6 @@
     const stateCls = enabled ? "quarry-enabled" : "quarry-disabled";
     const title = enabled ? ENABLE_TITLE : DISABLE_TITLE;
     return `<button type="button" class="quarry-dataset-enable ${stateCls}" role="switch" aria-label="Include ${escapeHtml(name)} in wildcards" aria-checked="${enabled}" data-dataset="${escapeHtml(name)}" title="${escapeHtml(title)}"><span class="quarry-enable-knob" aria-hidden="true"></span></button>`;
-  };
-  var renderDatasetRow = (dataset, displayName = dataset.name, depth = 0, container = null, hidden = false) => {
-    const name = escapeHtml(dataset.name);
-    const label = escapeHtml(displayName);
-    const enabled = isDatasetEnabled(dataset);
-    const cls = `quarry-dataset-row${hidden ? " quarry-row-hidden" : ""}${enabled ? "" : " quarry-dataset-disabled"}`;
-    const toggleCell = `<td class="quarry-dataset-enable-cell">${renderEnableToggle(dataset.name, enabled)}</td>`;
-    const parentAttr = container ? ` data-parent="${escapeHtml(container)}"` : "";
-    const attrs = `${parentAttr} style="--quarry-depth: ${depth}"`;
-    if (dataset.error) {
-      return `<tr class="${cls} quarry-dataset-error" data-dataset="${name}"${attrs}>
-            ${toggleCell}
-            <td class="quarry-dataset-name-cell">${renderDatasetNameButton(name, label, !!buildDatasetQuery([dataset]))}</td>
-            <td colspan="3"><span class="quarry-dataset-error-msg">⚠️ ${escapeHtml(dataset.error)}</span></td>
-        </tr>`;
-    }
-    return `<tr class="${cls}" data-dataset="${name}"${attrs}>
-        ${toggleCell}
-        <td class="quarry-dataset-name-cell">${renderDatasetNameButton(name, label, !!buildDatasetQuery([dataset]))}</td>
-        <td class="quarry-dataset-columns">${dataset.columns.map((column) => `<span>${escapeHtml(column.name)}</span>`).join(", ") || "—"}</td>
-        <td class="quarry-dataset-rows" data-dataset="${name}" title="Rows in the dataset (loads when you preview it if not already counted)">${formatRowCount(dataset.rowCount)}</td>
-        <td class="quarry-dataset-action"><button type="button" class="basic-button quarry-dataset-use" data-dataset="${name}"${buildDatasetQuery([dataset]) ? "" : " disabled"}>Add to prompt</button><button type="button" class="basic-button quarry-preview-button quarry-highlight-action" data-dataset="${name}" title="Explore columns, discover values, and test filters">Explore</button></td>
-    </tr>`;
-  };
-  var renderFolderHeaderRow = (node, depth, expanded) => {
-    const path = escapeHtml(node.path);
-    const collapsed = !expanded.has(node.path);
-    const container = datasetFolder(node.path);
-    const count = folderDatasetCount(node);
-    const hiddenClass = allAncestorsExpanded(container, expanded) ? "" : " quarry-row-hidden";
-    const collapsedClass = collapsed ? " quarry-collapsed" : "";
-    const parentAttr = container ? ` data-parent="${escapeHtml(container)}"` : "";
-    return `<tr class="quarry-folder-row${collapsedClass}${hiddenClass}" data-folder="${path}"${parentAttr} style="--quarry-depth: ${depth}">
-        <td colspan="5">
-            <button type="button" class="quarry-folder-toggle" data-folder="${path}" aria-expanded="${!collapsed}" title="Show or hide the datasets in this folder">
-                <span class="quarry-folder-caret" aria-hidden="true"></span>
-                <span class="quarry-folder-name">${escapeHtml(node.name)}</span>
-                <span class="quarry-folder-count" title="${count} dataset(s)">${count}</span>
-            </button>
-        </td>
-    </tr>`;
-  };
-  var renderFolderNode = (node, depth, expanded) => {
-    const childrenHidden = !allAncestorsExpanded(node.path, expanded);
-    const subFolders = node.folders.map((child) => renderFolderNode(child, depth + 1, expanded)).join("");
-    const items = node.items.map(
-      (dataset) => renderDatasetRow(
-        dataset,
-        datasetLeafName(dataset.name),
-        depth + 1,
-        node.path,
-        childrenHidden
-      )
-    ).join("");
-    return renderFolderHeaderRow(node, depth, expanded) + subFolders + items;
-  };
-  var renderDatasets = (datasets2, expandedFolders3 = /* @__PURE__ */ new Set()) => {
-    if (!datasets2 || datasets2.length === 0) {
-      return `<div class="quarry-datasets-empty">No datasets found. Set a folder containing CSV / JSON / JSONL / Parquet / Lance files, then Refresh.</div>`;
-    }
-    const { loose, folders } = buildFolderTree(datasets2);
-    const folderRows = folders.map((folder) => renderFolderNode(folder, 0, expandedFolders3)).join("");
-    const looseRows = loose.map((dataset) => renderDatasetRow(dataset)).join("");
-    return `<table class="quarry-datasets-table">
-        <colgroup><col class="quarry-col-enabled"><col><col class="quarry-col-columns"><col class="quarry-col-rows"><col class="quarry-col-explore"></colgroup>
-        <thead>
-            <tr><th class="quarry-enable-th" title="Include this dataset when a wildcard matches. Direct dataset references work either way.">Wildcards</th><th>Dataset</th><th>Available columns</th><th class="quarry-rows-th">Rows</th><th>Actions</th></tr>
-        </thead>
-        <tbody>${folderRows}${looseRows}</tbody>
-        <tfoot>
-            <tr class="quarry-datasets-summary-row">
-                <td colspan="5"><span id="${SUMMARY_ID}" class="quarry-datasets-summary" title="Totals across all datasets. Uncounted rows fill in as datasets are warmed or previewed.">${escapeHtml(formatDatasetsSummary(datasets2))}</span></td>
-            </tr>
-        </tfoot>
-    </table>`;
   };
   var renderPreviewTable = (columns, rows) => {
     if (!columns || columns.length === 0) {
@@ -4354,9 +4200,9 @@
             <div class="quarry-workspace">
                 <div class="quarry-workspace-content">
                     <div class="quarry-actions quarry-catalog-toolbar">
-                        <div class="quarry-library-views" role="group" aria-label="Library view"><button type="button" class="basic-button" data-library-view="library" aria-pressed="true">Library</button><button type="button" class="basic-button" data-library-view="table" aria-pressed="false">Table</button></div>
+                        <button type="button" class="basic-button" data-library-view="library" aria-pressed="true">Library</button>
                         <button type="button" id="quarry-refresh" class="basic-button">Refresh Datasets</button>
-                        <button type="button" id="quarry-download-datasets" class="basic-button" title="Browse and download ready-made datasets from the official collection">Download Datasets</button>
+                        <button type="button" id="quarry-download-datasets" class="basic-button" data-library-view="downloads" aria-pressed="false" aria-controls="quarry-download-panel" title="Browse and download ready-made datasets from the official collection">Download Datasets</button>
                         <button type="button" id="quarry-settings-toggle" class="basic-button" aria-expanded="false" aria-controls="quarry-global-settings">Quarry settings</button>
                     </div>
                     <section id="quarry-global-settings" class="quarry-global-settings" aria-label="Quarry settings" hidden><form id="quarry-form">
@@ -4379,7 +4225,7 @@
                     </form></section>
                     <div id="quarry-message" class="quarry-message" role="status"></div>
                     <div id="quarry-library-home"><div id="quarry-library" class="quarry-library"></div></div>
-                    <div id="quarry-datasets" class="quarry-datasets" hidden></div>
+                    <section id="quarry-download-panel" class="quarry-download-panel" aria-label="Download datasets" hidden></section>
                 </div>
             </div>
     </div>`;
@@ -4418,12 +4264,6 @@
     return result;
   };
   var messageTimer = null;
-  var applyTableHighlights = (names) => {
-    const container = document.getElementById("quarry-datasets");
-    if (container) {
-      applyInPromptHighlights(container, names);
-    }
-  };
   var currentDatasets = [];
   var savedSettings = { success: true };
   var datasetColumnSettings = (datasets2) => ({
@@ -4615,13 +4455,6 @@
             return;
           }
           rememberSavedDatasetState(data);
-          const table = document.getElementById("quarry-datasets");
-          if (table)
-            table.innerHTML = renderDatasets(
-              currentDatasets,
-              expandedFolders2
-            );
-          recomputeReferences();
           if (disposed) return;
           setSaving(false);
           status.textContent = "Dataset settings saved.";
@@ -4639,12 +4472,6 @@
       button.removeEventListener("click", save);
     };
   };
-  var updateDatasetsSummary = () => {
-    const el2 = document.getElementById(SUMMARY_ID);
-    if (el2) {
-      el2.textContent = formatDatasetsSummary(currentDatasets);
-    }
-  };
   var applyResponse = (data) => {
     rememberSavedDatasetState(data);
     for (const [id, value] of [
@@ -4659,19 +4486,7 @@
       "quarry-folder"
     );
     if (folderEl) folderEl.value = data.datasetsFolder ?? "";
-    const datasetsEl = document.getElementById("quarry-datasets");
-    if (datasetsEl) {
-      datasetsEl.innerHTML = renderDatasets(
-        data.datasets ?? [],
-        expandedFolders2
-      );
-      recomputeReferences();
-    }
     mountLibrary();
-    const datasetView = document.querySelector(
-      '[data-modal-view="explore"]'
-    );
-    if (datasetView) datasetView.disabled = !explorer;
   };
   var showMessage2 = (message, type) => {
     const el2 = document.getElementById("quarry-message");
@@ -4824,17 +4639,12 @@
     modal.id = PREVIEW_MODAL_ID;
     modal.tabIndex = -1;
     modal.setAttribute("role", "dialog");
-    modal.setAttribute("aria-labelledby", PREVIEW_TITLE_ID);
+    modal.setAttribute("aria-label", "Explore datasets");
     modal.innerHTML = `
         <div class="modal-dialog modal-xl quarry-preview-dialog" role="document">
             <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title" id="${PREVIEW_TITLE_ID}">Explore</h5>
-                    <div class="quarry-modal-views" role="group" aria-label="Workspace view"><button type="button" class="basic-button" data-modal-view="explore" aria-pressed="true">Datasets</button><button type="button" class="basic-button" data-modal-view="downloads" aria-pressed="false">Downloads</button></div>
-                </div>
                 <div class="modal-body">
                     <div id="${PREVIEW_BODY_ID}" class="quarry-preview-body"></div>
-                    <section id="quarry-download-panel" class="quarry-download-panel" aria-label="Download datasets" hidden></section>
                 </div>
                 <div class="modal-footer quarry-preview-footer">
                     <span id="${PREVIEW_STATUS_ID}" class="quarry-preview-status"></span>
@@ -4847,12 +4657,6 @@
         </div>`;
     document.body.appendChild(modal);
     modal.addEventListener("hidden.bs.modal", restoreLibrary);
-    modal.querySelectorAll("[data-modal-view]").forEach((button) => {
-      button.addEventListener(
-        "click",
-        () => setModalView(button.dataset.modalView === "downloads")
-      );
-    });
     modal.querySelector('[data-bs-dismiss="modal"]')?.addEventListener("click", hidePreviewModal);
     document.getElementById(PREVIEW_REFRESH_ID)?.addEventListener("click", newPreviewSample);
   };
@@ -4875,16 +4679,9 @@
     } else restoreLibrary();
   };
   var applyRowCount = (dataset, count) => {
-    const selector = `td.quarry-dataset-rows[data-dataset="${dataset.replace(/(["\\])/g, "\\$1")}"]`;
-    for (const cell of Array.from(
-      document.querySelectorAll(selector)
-    )) {
-      cell.textContent = formatRowCount(count);
-    }
     const entry = currentDatasets.find((d) => d.name === dataset);
     if (entry) {
       entry.rowCount = count;
-      updateDatasetsSummary();
       explorer?.refreshMetadata();
     }
   };
@@ -4966,9 +4763,14 @@
     if (settings) settings.hidden = view !== "settings";
     document.getElementById("quarry-settings-toggle")?.setAttribute("aria-expanded", String(view === "settings"));
     const home = document.getElementById("quarry-library-home");
-    const table = document.getElementById("quarry-datasets");
+    const downloads = document.getElementById("quarry-download-panel");
     if (home) home.hidden = view !== "library";
-    if (table) table.hidden = view !== "table";
+    if (downloads) {
+      downloads.hidden = view !== "downloads";
+      if (view === "downloads") mountDownloads(downloads, loadSettings);
+    }
+    const refreshButton = document.getElementById("quarry-refresh");
+    if (refreshButton) refreshButton.hidden = view === "downloads";
     syncLibraryToolbar();
     if (focused instanceof HTMLElement && focused.matches("[data-library-view], #quarry-settings-toggle"))
       focused.focus();
@@ -4979,43 +4781,14 @@
       );
     });
   };
-  var setModalView = (downloads) => {
-    const body2 = document.getElementById(PREVIEW_BODY_ID);
-    const panel = document.getElementById("quarry-download-panel");
-    if (!body2 || !panel || !downloads && !explorer) return;
-    body2.hidden = downloads;
-    panel.hidden = !downloads;
-    document.querySelectorAll("[data-modal-view]").forEach((button) => {
-      button.setAttribute(
-        "aria-pressed",
-        String(
-          button.dataset.modalView === "downloads" === downloads
-        )
-      );
-      if (button.dataset.modalView === "explore")
-        button.disabled = !explorer;
-    });
-    if (downloads) mountDownloads(panel, loadSettings);
-    else if (explorer && explorer.elementHost.parentElement !== body2) {
-      body2.append(explorer.elementHost);
-      explorer.expand();
-      syncLibraryToolbar();
-    }
-    const showRows = !downloads && !body2.querySelector(".quarry-explore-rows-view")?.hidden;
-    for (const id of [PREVIEW_STATUS_ID, PREVIEW_REFRESH_ID]) {
-      const element = document.getElementById(id);
-      if (element) element.hidden = !showRows;
-    }
-  };
   var expandLibrary = () => {
     if (!explorer) return;
     ensurePreviewModal();
-    setModalView(false);
-    showPreviewModal();
-  };
-  var openDownloads = () => {
-    ensurePreviewModal();
-    setModalView(true);
+    const body2 = document.getElementById(PREVIEW_BODY_ID);
+    if (!body2) return;
+    body2.append(explorer.elementHost);
+    explorer.expand();
+    syncLibraryToolbar();
     showPreviewModal();
   };
   var mountLibrary = () => {
@@ -5040,7 +4813,7 @@
       (item) => item.name.startsWith("nl/") && !item.error && item.columns.length
     ) ?? currentDatasets.find((item) => !item.error && item.columns.length);
     if (!entry) {
-      host.innerHTML = `<p class="quarry-preview-empty">${currentDatasets.length ? "No datasets can be previewed. Check Table for details." : "No datasets installed. Download datasets to get started."}</p>`;
+      host.innerHTML = `<div class="quarry-library-empty"><p class="quarry-preview-empty">${currentDatasets.length ? "No datasets can be previewed." : "No datasets installed. Download datasets to get started."}</p>${currentDatasets.length ? `<ul>${currentDatasets.map((dataset) => `<li><strong>${escapeHtml(dataset.name)}</strong>: ${escapeHtml(dataset.error || "Dataset has no available columns.")}</li>`).join("")}</ul>` : ""}</div>`;
       previewDataset = null;
       for (const id of [PREVIEW_REFRESH_ID, PREVIEW_STATUS_ID]) {
         const control = document.getElementById(id);
@@ -5091,32 +4864,9 @@
       if (toggle) toggleDatasetEnabled(toggle);
     };
   };
-  var openPreview = (dataset) => {
-    if (!explorer?.elementHost.isConnected) mountLibrary();
-    if (!explorer?.selectDataset(dataset)) return;
-    expandLibrary();
-  };
   var newPreviewSample = () => {
     if (previewDataset) {
       fetchPreview(previewDataset);
-    }
-  };
-  var toggleFolder2 = (toggle) => {
-    const folder = toggle.getAttribute("data-folder");
-    const row = toggle.closest(".quarry-folder-row");
-    if (!folder || !row) {
-      return;
-    }
-    const collapsed = row.classList.toggle("quarry-collapsed");
-    toggle.setAttribute("aria-expanded", String(!collapsed));
-    if (collapsed) {
-      expandedFolders2.delete(folder);
-    } else {
-      expandedFolders2.add(folder);
-    }
-    const container = document.getElementById("quarry-datasets");
-    if (container) {
-      refreshFolderVisibility(container, expandedFolders2);
     }
   };
   var applyEnabledState = (button, enabled) => {
@@ -5124,7 +4874,6 @@
     button.classList.toggle("quarry-enabled", enabled);
     button.classList.toggle("quarry-disabled", !enabled);
     button.setAttribute("title", enabled ? ENABLE_TITLE : DISABLE_TITLE);
-    button.closest(".quarry-dataset-row")?.classList.toggle("quarry-dataset-disabled", !enabled);
   };
   var toggleDatasetEnabled = (button) => {
     const name = button.getAttribute("data-dataset");
@@ -5161,7 +4910,6 @@
           if (dataset) dataset.enabled = next;
           explorer?.refreshMetadata();
           updateButton(next, false);
-          recomputeReferences();
         } else {
           fail(
             `Failed to ${next ? "enable" : "disable"} '${name}': ${data.error ?? "unknown error"}`
@@ -5172,44 +4920,6 @@
         `Failed to ${next ? "enable" : "disable"} '${name}'. Try again.`
       )
     );
-  };
-  var datasetsClickHandler = (event) => {
-    const target = event.target;
-    const folderToggle = target?.closest(".quarry-folder-toggle");
-    if (folderToggle) {
-      toggleFolder2(folderToggle);
-      return;
-    }
-    const enableToggle = target?.closest(".quarry-dataset-enable");
-    if (enableToggle) {
-      toggleDatasetEnabled(enableToggle);
-      return;
-    }
-    const useButton = target?.closest(".quarry-dataset-use");
-    if (useButton) {
-      const dataset = currentDatasets.find(
-        (item) => item.name === useButton.dataset.dataset
-      );
-      const query = dataset && buildDatasetQuery([dataset]);
-      if (query && !useButton.disabled) insertQuarryQuery(query);
-      return;
-    }
-    const previewButton = target?.closest(
-      ".quarry-preview-button"
-    );
-    if (previewButton) {
-      const dataset = previewButton.getAttribute("data-dataset");
-      if (dataset) {
-        openPreview(dataset);
-      }
-      return;
-    }
-    const nameCell = target?.closest(".quarry-dataset-name-cell");
-    if (nameCell) {
-      const dataset = nameCell.querySelector(".quarry-dataset-name-link")?.getAttribute("data-dataset");
-      const source = currentDatasets.find((item) => item.name === dataset);
-      if (source && buildDatasetQuery([source])) insertQuarryTag(source.name);
-    }
   };
   var ensureFormRendered = () => {
     initFolderPickers(document);
@@ -5238,8 +4948,6 @@
       if (panel) setLibraryView(panel.hidden ? "settings" : libraryView);
     });
     document.getElementById("quarry-clean-temp")?.addEventListener("click", cleanTempFiles);
-    document.getElementById("quarry-download-datasets")?.addEventListener("click", openDownloads);
-    document.getElementById("quarry-datasets")?.addEventListener("click", datasetsClickHandler);
   };
   var installRequirements = () => {
     const button = document.getElementById(
@@ -5286,7 +4994,6 @@
     }
     host.innerHTML = `<div class="quarry-loading">Loading…</div>`;
     loadSettings();
-    onReferences(applyTableHighlights);
   };
   var quarry = {
     init

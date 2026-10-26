@@ -83,11 +83,6 @@ export interface ExploreColumnResponse {
     error?: string;
 }
 
-export interface ReferencesResponse {
-    success: boolean;
-    names?: string[];
-}
-
 export interface RemoteDatasetDto {
     name: string;
     repoPath: string;

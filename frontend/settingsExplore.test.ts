@@ -967,6 +967,49 @@ describe("Workspace corrections", () => {
         ).toBe(false);
         expect(queryRequests.at(-1)?.query).toBe("<q:nl/replacement>");
     });
+    it("keeps dataset errors readable when no installed dataset can be explored", () => {
+        const { completeRefresh } = setup();
+        document.getElementById("quarry-refresh")?.click();
+        completeRefresh([
+            {
+                name: "nl/<broken>",
+                columns: [],
+                resolvedPromptColumn: null,
+                configuredPromptColumn: null,
+                configuredTagColumns: [],
+                rowCount: null,
+                error: "Cannot read <schema>",
+            },
+        ]);
+        const home = document.getElementById("quarry-library-home");
+        expect(home?.textContent).toContain("nl/<broken>");
+        expect(home?.textContent).toContain("Cannot read <schema>");
+        expect(home?.querySelector("broken, schema")).toBeNull();
+        document.getElementById("quarry-download-datasets")?.click();
+        expect(document.getElementById("quarry-download-panel")?.hidden).toBe(
+            false,
+        );
+        expect(document.getElementById("quarry-preview-modal")).toBeNull();
+    });
+    it("opens a named Explore dialog directly at its controls without a header", () => {
+        setup();
+        openPreview("test");
+        const modal = document.getElementById("quarry-preview-modal");
+        expect(modal?.getAttribute("aria-label")).toBe("Explore datasets");
+        expect(
+            modal?.querySelector(
+                ".modal-header, [data-modal-view], #quarry-download-panel",
+            ),
+        ).toBeNull();
+        expect(
+            modal?.querySelector<HTMLButtonElement>('[data-bs-dismiss="modal"]')
+                ?.textContent,
+        ).toBe("Close");
+        expect(
+            modal?.querySelector<HTMLElement>(".quarry-explore-fields-view")
+                ?.hidden,
+        ).toBe(false);
+    });
     it("starts in nl when other namespaces appear first", () => {
         setup({ namespaceDatasets: true });
         expect(
@@ -983,7 +1026,7 @@ describe("Workspace corrections", () => {
                 ?.getAttribute("aria-expanded"),
         ).toBe("false");
     });
-    it("shares Explore with Downloads and preserves both drafts and selection", () => {
+    it("switches between inline Downloads and Library without losing drafts or selections", () => {
         setup();
         openPreview("test");
         const library = document.getElementById("quarry-library");
@@ -1000,22 +1043,21 @@ describe("Workspace corrections", () => {
             .querySelector<HTMLButtonElement>('[data-action="done-tag"]')
             ?.click();
         document
-            .querySelector<HTMLButtonElement>('[data-modal-view="downloads"]')
-            ?.click();
+            .getElementById("quarry-preview-modal")
+            ?.dispatchEvent(new Event("hidden.bs.modal"));
+        document.getElementById("quarry-download-datasets")?.click();
         const check = document.querySelector<HTMLInputElement>(
             ".quarry-remote-select",
         );
         check?.click();
         document
-            .querySelector<HTMLButtonElement>('[data-modal-view="explore"]')
+            .querySelector<HTMLButtonElement>('[data-library-view="library"]')
             ?.click();
         expect(
             document.querySelector(".quarry-explore-query")?.textContent,
         ).toBe("<q[3]:test>");
         expect(document.getElementById("quarry-library")).toBe(library);
-        document
-            .querySelector<HTMLButtonElement>('[data-modal-view="downloads"]')
-            ?.click();
+        document.getElementById("quarry-download-datasets")?.click();
         expect(check?.checked).toBe(true);
         expect(document.getElementById("quarry-download-modal")).toBeNull();
         expect(document.querySelectorAll("#quarry-preview-modal")).toHaveLength(
@@ -1028,30 +1070,34 @@ describe("Workspace corrections", () => {
             document.getElementById("quarry-library-home")?.contains(library),
         ).toBe(true);
     });
-    it("opens Downloads in the same modal with no installed datasets", () => {
+    it("opens inline Downloads with no installed datasets", () => {
         setup({ emptyDatasets: true });
         document.getElementById("quarry-download-datasets")?.click();
         expect(
             document.querySelector<HTMLElement>("#quarry-download-panel")
                 ?.hidden,
         ).toBe(false);
+        expect(document.getElementById("quarry-preview-modal")).toBeNull();
+        expect(document.getElementById("quarry-library-home")?.hidden).toBe(
+            true,
+        );
         expect(
-            document.querySelector<HTMLButtonElement>(
-                '[data-modal-view="explore"]',
-            )?.disabled,
-        ).toBe(true);
+            document.querySelector('[data-library-view="table"]'),
+        ).toBeNull();
         expect(document.querySelector(".quarry-remote-select")).not.toBeNull();
         expect(document.getElementById("quarry-download-modal")).toBeNull();
     });
 });
 
 describe("Compact library actions", () => {
-    it("makes settings exclusive and restores the previous table or library view", () => {
+    it("makes settings exclusive and restores the previous downloads or library view", () => {
         setup();
         const home = document.getElementById(
             "quarry-library-home",
         ) as HTMLElement;
-        const table = document.getElementById("quarry-datasets") as HTMLElement;
+        const downloads = document.getElementById(
+            "quarry-download-panel",
+        ) as HTMLElement;
         const settings = document.getElementById(
             "quarry-global-settings",
         ) as HTMLElement;
@@ -1060,23 +1106,23 @@ describe("Compact library actions", () => {
         ) as HTMLElement;
         const host = document.getElementById("quarry-library");
         toggle.click();
-        expect([home.hidden, table.hidden, settings.hidden]).toEqual([
+        expect([home.hidden, downloads.hidden, settings.hidden]).toEqual([
             true,
             true,
             false,
         ]);
         toggle.click();
-        expect([home.hidden, table.hidden, settings.hidden]).toEqual([
+        expect([home.hidden, downloads.hidden, settings.hidden]).toEqual([
             false,
             true,
             true,
         ]);
         document
-            .querySelector<HTMLButtonElement>('[data-library-view="table"]')
+            .querySelector<HTMLButtonElement>('[data-library-view="downloads"]')
             ?.click();
         toggle.click();
         toggle.click();
-        expect([home.hidden, table.hidden, settings.hidden]).toEqual([
+        expect([home.hidden, downloads.hidden, settings.hidden]).toEqual([
             true,
             false,
             true,
@@ -1085,14 +1131,14 @@ describe("Compact library actions", () => {
         document
             .querySelector<HTMLButtonElement>('[data-library-view="library"]')
             ?.click();
-        expect([home.hidden, table.hidden, settings.hidden]).toEqual([
+        expect([home.hidden, downloads.hidden, settings.hidden]).toEqual([
             false,
             true,
             true,
         ]);
         expect(document.getElementById("quarry-library")).toBe(host);
     });
-    it("inserts a basic dataset tag from Library and Table without using the hidden Explore draft", () => {
+    it("inserts a basic dataset tag from Library without using the hidden Explore draft", () => {
         setup();
         const prompt = document.createElement("textarea");
         prompt.id = "alt_prompt_textbox";
@@ -1115,16 +1161,6 @@ describe("Compact library actions", () => {
             ?.click();
         expect(prompt.value).toBe("<q:test>");
         expect(filter.value).toBe("hidden filter");
-        prompt.value = "";
-        document
-            .querySelector<HTMLButtonElement>('[data-library-view="table"]')
-            ?.click();
-        document
-            .querySelector<HTMLButtonElement>(
-                '.quarry-dataset-use[data-dataset="test"]',
-            )
-            ?.click();
-        expect(prompt.value).toBe("<q:test>");
     });
     it("describes all combined datasets and inserts the same sources shown by the sample", () => {
         const { overviewQueries } = setup({ multipleDatasets: true });
@@ -1173,7 +1209,7 @@ describe("Compact library actions", () => {
     });
 });
 
-it("restores name-click prompt merging and toggling in Library and Table", () => {
+it("preserves name-click prompt merging and toggling in Library", () => {
     setup();
     const prompt = document.createElement("textarea");
     prompt.id = "alt_prompt_textbox";
@@ -1186,19 +1222,11 @@ it("restores name-click prompt merging and toggling in Library and Table", () =>
         ?.click();
     expect(prompt.value).toBe("before <q:other,test[rating=g]:prompt> after");
     document
-        .querySelector<HTMLButtonElement>('[data-library-view="table"]')
-        ?.click();
-    document
-        .querySelector<HTMLButtonElement>(
-            '.quarry-dataset-name-link[data-dataset="test"]',
-        )
+        .querySelector<HTMLButtonElement>('[data-prompt-dataset="test"]')
         ?.click();
     expect(prompt.value).toBe("before <q:other[rating=g]:prompt> after");
-    expect(document.getElementById("quarry-datasets")?.hidden).toBe(false);
     document
-        .querySelector<HTMLButtonElement>(
-            '.quarry-dataset-name-link[data-dataset="test"]',
-        )
+        .querySelector<HTMLButtonElement>('[data-prompt-dataset="test"]')
         ?.click();
     expect(prompt.value).toBe("before <q:other,test[rating=g]:prompt> after");
 });
@@ -1254,7 +1282,7 @@ it("keeps the current dataset highlighted when opening Explore with a retained m
     }
 });
 
-it("keeps one working toolbar across Library, Table, Settings and Explore", () => {
+it("keeps one working toolbar across Library, Downloads, Settings and Explore", () => {
     setup();
     const toolbar = document.querySelector(".quarry-catalog-toolbar");
     const overview = document.querySelector(".quarry-library-overview");
@@ -1266,12 +1294,12 @@ it("keeps one working toolbar across Library, Table, Settings and Explore", () =
             ?.click();
     expect(toolbar?.parentElement).toBe(overview);
     expect(actions?.parentElement).toBe(toolbar);
-    const tableButton = document.querySelector<HTMLButtonElement>(
-        '[data-library-view="table"]',
+    const downloadsButton = document.querySelector<HTMLButtonElement>(
+        '[data-library-view="downloads"]',
     );
-    tableButton?.focus();
-    selectView("table");
-    expect(document.activeElement).toBe(tableButton);
+    downloadsButton?.focus();
+    selectView("downloads");
+    expect(document.activeElement).toBe(downloadsButton);
     expect(toolbar?.parentElement).toBe(workspace);
     expect(actions?.parentElement).toBe(overview);
     document.getElementById("quarry-settings-toggle")?.click();

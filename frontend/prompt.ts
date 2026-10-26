@@ -1,58 +1,6 @@
 import { querySections } from "./querysyntax";
-import type { ReferencesResponse } from "./types";
 
-const HIGHLIGHT_DEBOUNCE_MS = 250;
 const PROMPT_BOX_IDS = ["alt_prompt_textbox", "alt_negativeprompt_textbox"];
-const Q_TAG_GUARD = /<q(?:\[|:)/i;
-
-type ReferencesListener = (names: string[]) => void;
-
-const listeners: ReferencesListener[] = [];
-let lastNames: string[] = [];
-
-export const onReferences = (listener: ReferencesListener): void => {
-    listeners.push(listener);
-    listener(lastNames);
-};
-
-const notify = (names: string[]): void => {
-    lastNames = names;
-    for (const listener of listeners) {
-        listener(names);
-    }
-};
-
-const readPromptText = (): string =>
-    PROMPT_BOX_IDS.map(
-        (id) =>
-            (document.getElementById(id) as HTMLTextAreaElement | null)
-                ?.value ?? "",
-    ).join("\n");
-
-export const recomputeReferences = (): void => {
-    const prompt = readPromptText();
-    if (!Q_TAG_GUARD.test(prompt)) {
-        notify([]);
-        return;
-    }
-    genericRequest<ReferencesResponse>(
-        "QuarryResolveReferences",
-        { prompt },
-        (data) => {
-            if (data.success) {
-                notify(data.names ?? []);
-            }
-        },
-    );
-};
-
-let highlightTimer: ReturnType<typeof setTimeout> | null = null;
-const schedule = (): void => {
-    if (highlightTimer) {
-        clearTimeout(highlightTimer);
-    }
-    highlightTimer = setTimeout(recomputeReferences, HIGHLIGHT_DEBOUNCE_MS);
-};
 
 let watching = false;
 let lastPromptBox: HTMLTextAreaElement | null = null;
@@ -73,12 +21,6 @@ export const startPromptWatcher = (): void => {
         )
             lastPromptBox = target;
     });
-    for (const id of PROMPT_BOX_IDS) {
-        const prompt = document.getElementById(
-            id,
-        ) as HTMLTextAreaElement | null;
-        prompt?.addEventListener("input", schedule);
-    }
 };
 
 const Q_TAG_PATTERN = "<(q(?:\\[\\d+(?:-\\d+)?\\])?):([^>]*)>";
@@ -242,7 +184,6 @@ const editPrompt = (
     promptBox.selectionEnd = edit.cursor;
     promptBox.focus();
     triggerChangeFor(promptBox);
-    recomputeReferences();
 };
 
 export const insertQuarryTag = (name: string): void => {

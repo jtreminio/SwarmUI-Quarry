@@ -709,17 +709,16 @@ export const mountDownloads = (
     onChanged = onChangedCb;
     if (host.querySelector(`#${BODY_ID}`)) return;
     host.innerHTML = `
+        <div class="quarry-download-toolbar">
+            <button type="button" id="${REFRESH_ID}" class="basic-button">Refresh collection</button>
+            <button type="button" id="${REPAIR_ID}" class="basic-button" title="Fix casing errors caused by stale downloaded versions using existing local files. No dataset download is needed; previous metadata is backed up.">Repair datasets</button>
+            <button type="button" id="${START_ID}" class="basic-button quarry-download-primary" disabled>Download selected</button>
+        </div>
         <div id="${BODY_ID}" class="quarry-download-body"></div>
         <div id="${PROGRESS_ID}" class="quarry-download-progress" style="display: none;"></div>
         <div id="${MESSAGE_ID}" class="quarry-download-message" role="status"></div>
         <div id="quarry-repair-status" class="quarry-repair-status" role="status" aria-live="polite"></div>
-        <div class="quarry-download-footer">
-            <div class="quarry-download-footer-actions">
-                <button type="button" id="${START_ID}" class="basic-button quarry-download-primary" disabled>Download selected</button>
-                <button type="button" id="${REFRESH_ID}" class="basic-button">Refresh</button>
-                <button type="button" id="${REPAIR_ID}" class="basic-button" title="Fix casing errors caused by stale downloaded versions using existing local files. No dataset download is needed; previous metadata is backed up.">Repair datasets</button>
-            </div>
-        </div>`;
+`;
     document.getElementById(START_ID)?.addEventListener("click", startBatch);
     document
         .getElementById(REFRESH_ID)
