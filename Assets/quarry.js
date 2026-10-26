@@ -2533,6 +2533,7 @@
     settingsDirty = false;
     datasetSearch = "";
     combine = false;
+    disabledBrowseSelections = /* @__PURE__ */ new Set();
     expandedNamespaces = /* @__PURE__ */ new Set();
     openingNamespace;
     request = 0;
@@ -2667,7 +2668,7 @@
     railDatasets() {
       const namespace = this.namespace(this.dataset.name);
       return this.availableDatasets.filter(
-        (dataset) => this.namespace(dataset.name) === namespace && !dataset.error && dataset.columns.length > 0
+        (dataset) => this.namespace(dataset.name) === namespace && !dataset.error && dataset.columns.length > 0 && (dataset.enabled !== false || this.disabledBrowseSelections.has(dataset.name) || dataset.name === this.dataset.name)
       ).sort((a, b) => a.name.localeCompare(b.name));
     }
     usedColumns() {
@@ -2710,6 +2711,7 @@
             dataset.name.slice(namespace2.length)
           );
           const included = selectedNames.has(dataset.name);
+          const disabled = dataset.enabled === false;
           const unavailable = dataset.error || (!dataset.columns.length ? "Dataset has no available fields." : "");
           const reason = this.combine ? included ? "" : datasetCompatibility(
             dataset,
@@ -2719,7 +2721,7 @@
           const locked = included && this.datasets.length === 1;
           const reasonId = `${groupId}-reason-${rowIndex}`;
           const control = this.combine ? `<label class="quarry-explore-dataset-choice ${included ? "is-selected" : ""}"><input type="checkbox" data-include-dataset="${name}" aria-label="Include ${name} in query" ${included ? "checked" : ""} ${reason || locked ? "disabled" : ""} ${reason ? `aria-describedby="${reasonId}"` : ""}><span>${label}</span></label>` : `<button type="button" class="basic-button" data-browse-dataset="${name}" aria-current="${dataset.name === this.dataset.name}" ${unavailable ? `disabled aria-describedby="${reasonId}"` : ""}>${label}</button>`;
-          return `<div class="quarry-explore-rail-row">${control}${reason ? `<small id="${reasonId}">${escapeHtml(reason)}</small>` : ""}</div>`;
+          return `<div class="quarry-explore-rail-row${disabled ? " is-disabled-dataset" : ""}"${disabled ? ' title="Disabled in the main table. You can still select this dataset explicitly."' : ""}>${control}${reason ? `<small id="${reasonId}">${escapeHtml(reason)}</small>` : ""}</div>`;
         }).join("");
         return `<section class="quarry-explore-namespace"><button type="button" class="quarry-explore-namespace-toggle" data-namespace="${escapeHtml(namespace2)}" aria-expanded="${open}" aria-controls="${groupId}"><span>${escapeHtml(namespace2 ? namespace2.slice(0, -1) : "Root")}</span><small>${search ? `${matches.length} of ` : ""}${datasets3.length}${selected ? ` · ${selected} selected` : ""}</small></button><div id="${groupId}" class="quarry-explore-namespace-items" ${open ? "" : "hidden"}>${rows}</div></section>`;
       }).join("") || '<p class="quarry-explore-note">No datasets match.</p>';
@@ -2767,6 +2769,16 @@
     updateDatasets(datasets2, reset, browse = false) {
       if (!this.confirmSettingsChange()) return;
       const previous = this.dataset.name;
+      if (!reset) {
+        for (const dataset of datasets2) {
+          if (dataset.enabled === false && !this.datasets.some((item) => item.name === dataset.name))
+            this.disabledBrowseSelections.add(dataset.name);
+        }
+        for (const dataset of this.datasets) {
+          if (!datasets2.some((item) => item.name === dataset.name))
+            this.disabledBrowseSelections.delete(dataset.name);
+        }
+      }
       if (this.datasets.length === 1) {
         this.drafts.set(previous, {
           filters: this.filters.map((filter) => ({ ...filter })),

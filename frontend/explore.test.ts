@@ -183,6 +183,72 @@ describe("Dataset rail", () => {
     const last = { ...dataset, name: "tags/zeta" };
     const other = { ...dataset, name: "nl/other" };
 
+    it("skips disabled datasets in both directions but permits a manual visit", () => {
+        const disabled = { ...dataset, name: "tags/middle", enabled: false };
+        const { click, query, get } = setup([dataset, disabled, last]);
+        const button = get<HTMLButtonElement>(
+            '[data-browse-dataset="tags/middle"]',
+        );
+        expect(button.disabled).toBe(false);
+        expect(button.closest(".is-disabled-dataset")).not.toBeNull();
+        expect(get(".quarry-explore-rail-position").textContent).toBe(
+            "Dataset 1 of 2 in tags/*",
+        );
+        click('[data-action="next-dataset"]');
+        expect(query()).toBe("<q:tags/zeta>");
+        click('[data-action="previous-dataset"]');
+        expect(query()).toBe("<q:tags/example>");
+        click('[data-browse-dataset="tags/middle"]');
+        expect(query()).toBe("<q:tags/middle>");
+        click('[data-action="next-dataset"]');
+        expect(query()).toBe("<q:tags/zeta>");
+        click('[data-action="previous-dataset"]');
+        expect(query()).toBe("<q:tags/example>");
+        expect(disabled.enabled).toBe(false);
+    });
+
+    it("includes disabled Combine selections when browsing again, until explicitly deselected", () => {
+        const disabled = { ...dataset, name: "tags/middle", enabled: false };
+        const { click, query, get } = setup([dataset, disabled, last]);
+        click('[data-dataset-mode="combine"]');
+        const checkbox = get<HTMLInputElement>(
+            '[data-include-dataset="tags/middle"]',
+        );
+        expect(checkbox.disabled).toBe(false);
+        expect(checkbox.closest(".is-disabled-dataset")).not.toBeNull();
+        checkbox.click();
+        expect(
+            get<HTMLButtonElement>('[data-action="next-dataset"]').disabled,
+        ).toBe(true);
+        click('[data-dataset-mode="browse"]');
+        click('[data-browse-dataset="tags/example"]');
+        click('[data-action="next-dataset"]');
+        expect(query()).toBe("<q:tags/middle>");
+        click('[data-action="next-dataset"]');
+        expect(query()).toBe("<q:tags/zeta>");
+        click('[data-action="previous-dataset"]');
+        expect(query()).toBe("<q:tags/middle>");
+        click('[data-dataset-mode="combine"]');
+        click('[data-include-dataset="tags/example"]');
+        click('[data-include-dataset="tags/middle"]');
+        click('[data-dataset-mode="browse"]');
+        click('[data-action="next-dataset"]');
+        expect(query()).toBe("<q:tags/zeta>");
+        expect(disabled.enabled).toBe(false);
+    });
+
+    it("does not carry disabled browsing opt-ins into a new Explore session", () => {
+        const disabled = { ...dataset, name: "tags/middle", enabled: false };
+        const firstSession = setup([dataset, disabled, last]);
+        firstSession.click('[data-dataset-mode="combine"]');
+        firstSession.click('[data-include-dataset="tags/middle"]');
+        firstSession.explorer.dispose();
+        firstSession.host.remove();
+        const secondSession = setup([dataset, disabled, last]);
+        secondSession.click('[data-action="next-dataset"]');
+        expect(secondSession.query()).toBe("<q:tags/zeta>");
+    });
+
     it("searches collapsed namespaces without changing selection or remembered expansion", () => {
         const { get, click, edit, query, host } = setup([dataset, other, last]);
         expect(

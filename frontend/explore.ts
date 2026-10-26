@@ -86,6 +86,7 @@ export class DatasetExplorer {
     private settingsDirty = false;
     private datasetSearch = "";
     private combine = false;
+    private disabledBrowseSelections = new Set<string>();
     private expandedNamespaces = new Set<string>();
     private openingNamespace: string;
     private request = 0;
@@ -355,7 +356,10 @@ export class DatasetExplorer {
                 (dataset) =>
                     this.namespace(dataset.name) === namespace &&
                     !dataset.error &&
-                    dataset.columns.length > 0,
+                    dataset.columns.length > 0 &&
+                    (dataset.enabled !== false ||
+                        this.disabledBrowseSelections.has(dataset.name) ||
+                        dataset.name === this.dataset.name),
             )
             .sort((a, b) => a.name.localeCompare(b.name));
     }
@@ -409,6 +413,7 @@ export class DatasetExplorer {
                                 dataset.name.slice(namespace.length),
                             );
                             const included = selectedNames.has(dataset.name);
+                            const disabled = dataset.enabled === false;
                             const unavailable =
                                 dataset.error ||
                                 (!dataset.columns.length
@@ -429,7 +434,7 @@ export class DatasetExplorer {
                             const control = this.combine
                                 ? `<label class="quarry-explore-dataset-choice ${included ? "is-selected" : ""}"><input type="checkbox" data-include-dataset="${name}" aria-label="Include ${name} in query" ${included ? "checked" : ""} ${reason || locked ? "disabled" : ""} ${reason ? `aria-describedby="${reasonId}"` : ""}><span>${label}</span></label>`
                                 : `<button type="button" class="basic-button" data-browse-dataset="${name}" aria-current="${dataset.name === this.dataset.name}" ${unavailable ? `disabled aria-describedby="${reasonId}"` : ""}>${label}</button>`;
-                            return `<div class="quarry-explore-rail-row">${control}${reason ? `<small id="${reasonId}">${escapeHtml(reason)}</small>` : ""}</div>`;
+                            return `<div class="quarry-explore-rail-row${disabled ? " is-disabled-dataset" : ""}"${disabled ? ' title="Disabled in the main table. You can still select this dataset explicitly."' : ""}>${control}${reason ? `<small id="${reasonId}">${escapeHtml(reason)}</small>` : ""}</div>`;
                         })
                         .join("");
                     return `<section class="quarry-explore-namespace"><button type="button" class="quarry-explore-namespace-toggle" data-namespace="${escapeHtml(namespace)}" aria-expanded="${open}" aria-controls="${groupId}"><span>${escapeHtml(namespace ? namespace.slice(0, -1) : "Root")}</span><small>${search ? `${matches.length} of ` : ""}${datasets.length}${selected ? ` · ${selected} selected` : ""}</small></button><div id="${groupId}" class="quarry-explore-namespace-items" ${open ? "" : "hidden"}>${rows}</div></section>`;
@@ -500,6 +505,19 @@ export class DatasetExplorer {
     ): void {
         if (!this.confirmSettingsChange()) return;
         const previous = this.dataset.name;
+        if (!reset) {
+            for (const dataset of datasets) {
+                if (
+                    dataset.enabled === false &&
+                    !this.datasets.some((item) => item.name === dataset.name)
+                )
+                    this.disabledBrowseSelections.add(dataset.name);
+            }
+            for (const dataset of this.datasets) {
+                if (!datasets.some((item) => item.name === dataset.name))
+                    this.disabledBrowseSelections.delete(dataset.name);
+            }
+        }
         if (this.datasets.length === 1) {
             this.drafts.set(previous, {
                 filters: this.filters.map((filter) => ({ ...filter })),
