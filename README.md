@@ -55,8 +55,8 @@ Only want a few? Add an `--include "<name>.lance/*"` line per dataset (the names
 
 ```bash
 hf download jtreminio/prompt-dataset --repo-type dataset \
-  --include "Gustavosta.Stable-Diffusion-Prompts.lance/*" \
-  --include "succinctly.midjourney-prompts.lance/*" \
+  --include "tags/Gustavosta.Stable-Diffusion-Prompts.lance/*" \
+  --include "nl/csuhan.midjourney-prompts-FLUX.lance/*" \
   --local-dir /path/to/your/quarry-datasets
 ```
 

@@ -759,16 +759,6 @@
       sourceUrl: "https://huggingface.co/datasets/dvilasuero/awesome_hunyuanImage_prompts"
     },
     {
-      name: "nl/Falah.new_photorealistic_prompts",
-      alias: null,
-      sourceUrl: "https://huggingface.co/datasets/Falah/new_photorealistic_prompts"
-    },
-    {
-      name: "nl/Falah.varied_portrait_prompts",
-      alias: null,
-      sourceUrl: "https://huggingface.co/datasets/Falah/varied_portrait_prompts"
-    },
-    {
       name: "nl/Felldude.84k_40GB_Captioned_2k_XXX_Images",
       alias: null,
       sourceUrl: "https://huggingface.co/datasets/Felldude/84k_40GB_Captioned_2k_XXX_Images"
@@ -897,11 +887,6 @@
       name: "nl/Owen777.9M_77Token_SDXL_Prompts",
       alias: null,
       sourceUrl: "https://huggingface.co/datasets/Owen777/9M_77Token_SDXL_Prompts"
-    },
-    {
-      name: "nl/Pratofeitoo.fashion_photography_prompts_SDXL",
-      alias: null,
-      sourceUrl: "https://huggingface.co/datasets/Pratofeitoo/fashion_photography_prompts_SDXL"
     },
     {
       name: "nl/quarterturn.danbooru-1024-eq-captioned",
@@ -1174,29 +1159,9 @@
       sourceUrl: "https://github.com/jgreely/c1ga"
     },
     {
-      name: "tags/jtatman.stable-diffusion-prompts-stats-full-uncensored",
-      alias: null,
-      sourceUrl: "https://huggingface.co/datasets/jtatman/stable-diffusion-prompts-stats-full-uncensored"
-    },
-    {
-      name: "tags/jtatman.stable-diffusion-prompts-uncensored",
-      alias: null,
-      sourceUrl: "https://huggingface.co/datasets/jtatman/stable-diffusion-prompts-uncensored"
-    },
-    {
       name: "tags/llaa33219.danbooru-anime-screenshot",
       alias: null,
       sourceUrl: "https://huggingface.co/datasets/llaa33219/danbooru-anime-screenshot"
-    },
-    {
-      name: "tags/MingSafeR.anime_porn_image_prompts",
-      alias: null,
-      sourceUrl: "https://huggingface.co/datasets/MingSafeR/anime_porn_image_prompts"
-    },
-    {
-      name: "tags/MingSafeR.photo_porn_image_prompts",
-      alias: null,
-      sourceUrl: "https://huggingface.co/datasets/MingSafeR/photo_porn_image_prompts"
     },
     {
       name: "tags/moescape",
@@ -1224,16 +1189,6 @@
       sourceUrl: "https://huggingface.co/datasets/poloclub/diffusiondb"
     },
     {
-      name: "tags/succinctly.midjourney-prompts",
-      alias: null,
-      sourceUrl: "https://huggingface.co/datasets/succinctly/midjourney-prompts"
-    },
-    {
-      name: "tags/suriyagunasekar.midjourney-prompts",
-      alias: null,
-      sourceUrl: "https://huggingface.co/datasets/suriyagunasekar/midjourney-prompts"
-    },
-    {
       name: "tags/ThetaCursed.danbooru-2026-clean-metadata",
       alias: null,
       sourceUrl: "https://huggingface.co/datasets/ThetaCursed/danbooru-2026-clean-metadata"
@@ -1242,11 +1197,6 @@
       name: "tags/WoWoWoWololo.stable_diffusion_female_prompts",
       alias: null,
       sourceUrl: "https://huggingface.co/datasets/WoWoWoWololo/stable_diffusion_female_prompts"
-    },
-    {
-      name: "tags/wtcherr.midjourney-prompts",
-      alias: null,
-      sourceUrl: "https://huggingface.co/datasets/wtcherr/midjourney-prompts"
     },
     {
       name: "tags/X779.Danbooruwildcards.characters_str_tags_danbooru_full",
