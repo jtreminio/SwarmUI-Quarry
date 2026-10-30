@@ -348,8 +348,10 @@
 }
 .quarry-explore
     .quarry-explore-rail-list
+    .quarry-explore-rail-row:not(.quarry-dataset-in-prompt)
     [data-browse-dataset]:not(:disabled):not([aria-current="true"]):hover,
 .quarry-explore
+    .quarry-explore-rail-row:not(.quarry-dataset-in-prompt)
     .quarry-explore-dataset-choice:not(.is-selected):has(
         input:not(:disabled)
     ):hover {
@@ -377,6 +379,32 @@
 .quarry-explore-rail-row small.quarry-explore-dataset-metadata {
     padding: 0.2rem 0 0;
     font-weight: normal;
+}
+.quarry-explore
+    .quarry-explore-rail-list
+    .quarry-dataset-in-prompt
+    [data-browse-dataset],
+.quarry-explore
+    .quarry-explore-rail-list
+    .quarry-dataset-in-prompt
+    .quarry-explore-dataset-choice {
+    border-color: var(--green);
+    border-left-width: 4px;
+    background: color-mix(in srgb, var(--green) 20%, var(--background));
+}
+.quarry-explore
+    .quarry-explore-rail-list
+    .quarry-dataset-in-prompt
+    [data-browse-dataset][aria-current="true"],
+.quarry-explore
+    .quarry-explore-rail-list
+    .quarry-dataset-in-prompt
+    .quarry-explore-dataset-choice.is-selected {
+    border-left-color: var(--emphasis);
+}
+.quarry-explore-rail-row small.quarry-prompt-reference {
+    display: block;
+    color: var(--green);
 }
 .quarry-explore-rail-search {
     font-size: 0.9em;

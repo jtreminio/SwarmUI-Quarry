@@ -1,6 +1,63 @@
 import { querySections } from "./querysyntax";
 
-const PROMPT_BOX_IDS = ["alt_prompt_textbox", "alt_negativeprompt_textbox"];
+const PROMPT_BOX_IDS = [
+    "alt_prompt_textbox",
+    "alt_negativeprompt_textbox",
+    "input_prompt",
+    "input_negativeprompt",
+];
+const referenceListeners = new Set<(names: string[]) => void>();
+let referenceRequest = 0;
+let referenceTimer: ReturnType<typeof setTimeout> | null = null;
+
+export const recomputeReferences = (): void => {
+    if (referenceTimer) clearTimeout(referenceTimer);
+    referenceTimer = null;
+    const request = ++referenceRequest;
+    const prompt = PROMPT_BOX_IDS.map(
+        (id) =>
+            (document.getElementById(id) as HTMLTextAreaElement | null)
+                ?.value ?? "",
+    ).join("\n");
+    const notify = (names: string[]): void => {
+        if (request !== referenceRequest) return;
+        for (const listener of referenceListeners) listener(names);
+    };
+    if (!/<q(?:\[|:)/i.test(prompt)) {
+        notify([]);
+        return;
+    }
+    genericRequest<{ success: boolean; names?: string[] }>(
+        "QuarryResolveReferences",
+        { prompt },
+        (data) => {
+            if (data.success) notify(data.names ?? []);
+        },
+    );
+};
+
+export const onReferences = (
+    listener: (names: string[]) => void,
+): (() => void) => {
+    referenceListeners.add(listener);
+    startPromptWatcher();
+    recomputeReferences();
+    return () => {
+        referenceListeners.delete(listener);
+    };
+};
+
+const scheduleReferences = (event: Event): void => {
+    if (
+        !(event.target instanceof HTMLTextAreaElement) ||
+        !PROMPT_BOX_IDS.includes(event.target.id) ||
+        !referenceListeners.size
+    )
+        return;
+    ++referenceRequest;
+    if (referenceTimer) clearTimeout(referenceTimer);
+    referenceTimer = setTimeout(recomputeReferences, 250);
+};
 
 let watching = false;
 let lastPromptBox: HTMLTextAreaElement | null = null;
@@ -9,15 +66,13 @@ export const startPromptWatcher = (): void => {
         return;
     }
     watching = true;
+    document.addEventListener("input", scheduleReferences, true);
+    document.addEventListener("change", scheduleReferences, true);
     document.addEventListener("focusin", (event) => {
         const target = event.target;
         if (
             target instanceof HTMLTextAreaElement &&
-            [
-                ...PROMPT_BOX_IDS,
-                "input_prompt",
-                "input_negativeprompt",
-            ].includes(target.id)
+            PROMPT_BOX_IDS.includes(target.id)
         )
             lastPromptBox = target;
     });
@@ -184,6 +239,7 @@ const editPrompt = (
     promptBox.selectionEnd = edit.cursor;
     promptBox.focus();
     triggerChangeFor(promptBox);
+    if (referenceListeners.size) recomputeReferences();
 };
 
 export const insertQuarryTag = (name: string): void => {

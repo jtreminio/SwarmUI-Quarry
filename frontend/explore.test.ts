@@ -7,6 +7,7 @@ import {
     jest,
 } from "@jest/globals";
 import { buildExploreQuery, DatasetExplorer } from "./explore";
+import { insertQuarryQuery } from "./prompt";
 import type {
     DatasetDto,
     ExploreColumnResponse,
@@ -177,6 +178,113 @@ const setup = (
         query,
     };
 };
+
+describe("prompt reference highlights", () => {
+    const referenced = { ...dataset, name: "nl/jgreely.c1ga" };
+    const prepare = (initial = "") => {
+        const prompt = document.createElement("textarea");
+        prompt.id = "alt_prompt_textbox";
+        prompt.value = initial;
+        document.body.append(prompt);
+        const pending: Array<{
+            prompt: string;
+            respond: (names: string[]) => void;
+        }> = [];
+        globalThis.genericRequest = <T>(
+            name: string,
+            data: Record<string, unknown>,
+            callback: (data: T) => void,
+        ) => {
+            if (name === "QuarryResolveReferences") {
+                pending.push({
+                    prompt: String(data.prompt),
+                    respond: (names) => callback({ success: true, names } as T),
+                });
+            } else columnRequest(name, data, callback);
+        };
+        return { prompt, pending, ...setup([dataset, referenced]) };
+    };
+    const matched = (host: HTMLElement) =>
+        host.querySelectorAll(".quarry-dataset-in-prompt");
+
+    it("highlights an existing prompt reference without changing the browsed dataset", () => {
+        const { host, pending, get, edit, click, explorer } = prepare(
+            "<q:nl/jgreely.c1ga>",
+        );
+        expect(pending[0].prompt).toContain("<q:nl/jgreely.c1ga>");
+        pending[0].respond([referenced.name.toUpperCase()]);
+        expect(matched(host)).toHaveLength(1);
+        expect(matched(host)[0].textContent).toContain("In prompt");
+        expect(explorer.sourceName).toBe(dataset.name);
+        expect(
+            get(`[data-browse-dataset="${referenced.name}"]`).getAttribute(
+                "aria-current",
+            ),
+        ).toBe("false");
+        edit(".quarry-explore-dataset-search", "jgreely");
+        expect(matched(host)).toHaveLength(1);
+        edit(".quarry-explore-dataset-search", "");
+        click('[data-dataset-mode="combine"]');
+        expect(matched(host)).toHaveLength(1);
+        expect(
+            get<HTMLInputElement>(`[data-include-dataset="${referenced.name}"]`)
+                .checked,
+        ).toBe(false);
+        expect(matched(host)[0].querySelector("label")?.textContent).toContain(
+            "In prompt",
+        );
+    });
+
+    it.each([
+        "alt_prompt_textbox",
+        "alt_negativeprompt_textbox",
+        "input_prompt",
+        "input_negativeprompt",
+    ])("updates and clears highlights for non-bubbling edits in %s", (id) => {
+        const { host, prompt, pending } = prepare();
+        prompt.id = id;
+        prompt.value = "<q[2-3]:nl/*[style=paint]:prompt>";
+        prompt.dispatchEvent(new Event("input"));
+        jest.advanceTimersByTime(250);
+        expect(pending[0].prompt).toContain(prompt.value);
+        pending[0].respond([referenced.name]);
+        expect(matched(host)).toHaveLength(1);
+        prompt.value = "plain text";
+        prompt.dispatchEvent(new Event("change"));
+        jest.advanceTimersByTime(250);
+        expect(matched(host)).toHaveLength(0);
+        expect(pending).toHaveLength(1);
+    });
+
+    it("ignores stale responses during debounce and after clearing tags", () => {
+        const { host, prompt, pending } = prepare("<q:nl/jgreely.c1ga>");
+        prompt.value = "<q:tags/example>";
+        prompt.dispatchEvent(new Event("input"));
+        pending[0].respond([referenced.name]);
+        expect(matched(host)).toHaveLength(0);
+        jest.advanceTimersByTime(250);
+        pending[1].respond([dataset.name]);
+        expect(matched(host)[0].textContent).toContain("example");
+        prompt.value = "";
+        prompt.dispatchEvent(new Event("input"));
+        jest.advanceTimersByTime(250);
+        pending[1].respond([dataset.name]);
+        expect(matched(host)).toHaveLength(0);
+    });
+
+    it("updates after inserting tags and unsubscribes when disposed", () => {
+        const { host, prompt, pending, explorer } = prepare();
+        globals.uiImprover = { getLastSelectedTextbox: () => [prompt, 0] };
+        globalThis.triggerChangeFor = jest.fn();
+        insertQuarryQuery("<q:nl/jgreely.c1ga>");
+        pending[0].respond([referenced.name]);
+        expect(matched(host)).toHaveLength(1);
+        explorer.dispose();
+        explorers.splice(explorers.indexOf(explorer), 1);
+        pending[0].respond([]);
+        expect(matched(host)).toHaveLength(1);
+    });
+});
 
 describe("Dataset rail", () => {
     const first = { ...dataset, name: "tags/alpha" };

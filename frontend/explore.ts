@@ -1,7 +1,12 @@
 import { copyToClipboard } from "./clipboard";
 import { datasetCompatibility, sharedExploreColumns } from "./exploreDatasets";
 import { bindLibrarySplitter } from "./librarySplitter";
-import { insertQuarryQuery, insertQuarryTag } from "./prompt";
+import {
+    insertQuarryQuery,
+    insertQuarryTag,
+    onReferences,
+    recomputeReferences,
+} from "./prompt";
 import { querySections } from "./querysyntax";
 import {
     clampMaxResults,
@@ -138,6 +143,8 @@ export class DatasetExplorer {
 
     private splitterCleanup: () => void;
     private settingsCleanup: (() => void) | null = null;
+    private referencesCleanup: () => void;
+    private referencedNames = new Set<string>();
 
     constructor(
         private readonly host: HTMLElement,
@@ -271,9 +278,16 @@ export class DatasetExplorer {
         this.selectRow(0);
         this.renderDraft();
         this.setView(library.overview ? "overview" : "fields");
+        this.referencesCleanup = onReferences((names) => {
+            this.referencedNames = new Set(
+                names.map((name) => name.toLowerCase()),
+            );
+            this.highlightReferences();
+        });
     }
     dispose(): void {
         this.disposed = true;
+        this.referencesCleanup();
         this.splitterCleanup();
         this.settingsCleanup?.();
         if (this.searchTimer) clearTimeout(this.searchTimer);
@@ -356,6 +370,7 @@ export class DatasetExplorer {
     refreshMetadata(): void {
         this.renderRail();
         this.renderOverviewMetadata();
+        recomputeReferences();
     }
     updateCatalog(datasets: DatasetDto[]): void {
         this.availableDatasets = datasets;
@@ -609,6 +624,28 @@ export class DatasetExplorer {
             ...this.outputs,
         ];
     }
+    private highlightReferences(): void {
+        this.host
+            .querySelectorAll<HTMLElement>(
+                "[data-browse-dataset], [data-include-dataset]",
+            )
+            .forEach((control) => {
+                const name =
+                    control.dataset.browseDataset ??
+                    control.dataset.includeDataset ??
+                    "";
+                const matched = this.referencedNames.has(name.toLowerCase());
+                const row = control.closest(".quarry-explore-rail-row");
+                row?.classList.toggle("quarry-dataset-in-prompt", matched);
+                row?.querySelector(".quarry-prompt-reference")?.remove();
+                if (matched) {
+                    const badge = document.createElement("small");
+                    badge.className = "quarry-prompt-reference";
+                    badge.textContent = "In prompt";
+                    (control.closest("label") ?? control).append(badge);
+                }
+            });
+    }
     private renderRail(revealCurrent = false): void {
         const list = this.element(".quarry-explore-rail-list");
         const scroll = list.scrollTop;
@@ -696,6 +733,7 @@ export class DatasetExplorer {
                 })
                 .join("") ||
             '<p class="quarry-explore-note">No datasets match.</p>';
+        this.highlightReferences();
         list.scrollTop = scroll;
         const datasets = this.railDatasets();
         const index = datasets.findIndex(

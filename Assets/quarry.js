@@ -431,7 +431,53 @@
   };
 
   // frontend/prompt.ts
-  var PROMPT_BOX_IDS = ["alt_prompt_textbox", "alt_negativeprompt_textbox"];
+  var PROMPT_BOX_IDS = [
+    "alt_prompt_textbox",
+    "alt_negativeprompt_textbox",
+    "input_prompt",
+    "input_negativeprompt"
+  ];
+  var referenceListeners = /* @__PURE__ */ new Set();
+  var referenceRequest = 0;
+  var referenceTimer = null;
+  var recomputeReferences = () => {
+    if (referenceTimer) clearTimeout(referenceTimer);
+    referenceTimer = null;
+    const request2 = ++referenceRequest;
+    const prompt = PROMPT_BOX_IDS.map(
+      (id) => document.getElementById(id)?.value ?? ""
+    ).join("\n");
+    const notify = (names) => {
+      if (request2 !== referenceRequest) return;
+      for (const listener of referenceListeners) listener(names);
+    };
+    if (!/<q(?:\[|:)/i.test(prompt)) {
+      notify([]);
+      return;
+    }
+    genericRequest(
+      "QuarryResolveReferences",
+      { prompt },
+      (data) => {
+        if (data.success) notify(data.names ?? []);
+      }
+    );
+  };
+  var onReferences = (listener) => {
+    referenceListeners.add(listener);
+    startPromptWatcher();
+    recomputeReferences();
+    return () => {
+      referenceListeners.delete(listener);
+    };
+  };
+  var scheduleReferences = (event) => {
+    if (!(event.target instanceof HTMLTextAreaElement) || !PROMPT_BOX_IDS.includes(event.target.id) || !referenceListeners.size)
+      return;
+    ++referenceRequest;
+    if (referenceTimer) clearTimeout(referenceTimer);
+    referenceTimer = setTimeout(recomputeReferences, 250);
+  };
   var watching = false;
   var lastPromptBox = null;
   var startPromptWatcher = () => {
@@ -439,13 +485,11 @@
       return;
     }
     watching = true;
+    document.addEventListener("input", scheduleReferences, true);
+    document.addEventListener("change", scheduleReferences, true);
     document.addEventListener("focusin", (event) => {
       const target = event.target;
-      if (target instanceof HTMLTextAreaElement && [
-        ...PROMPT_BOX_IDS,
-        "input_prompt",
-        "input_negativeprompt"
-      ].includes(target.id))
+      if (target instanceof HTMLTextAreaElement && PROMPT_BOX_IDS.includes(target.id))
         lastPromptBox = target;
     });
   };
@@ -561,6 +605,7 @@
     promptBox.selectionEnd = edit.cursor;
     promptBox.focus();
     triggerChangeFor(promptBox);
+    if (referenceListeners.size) recomputeReferences();
   };
   var insertQuarryTag = (name) => {
     editPrompt((value, cursor) => computePromptEdit(value, cursor, name, true));
@@ -2349,6 +2394,12 @@
       this.selectRow(0);
       this.renderDraft();
       this.setView(library.overview ? "overview" : "fields");
+      this.referencesCleanup = onReferences((names) => {
+        this.referencedNames = new Set(
+          names.map((name) => name.toLowerCase())
+        );
+        this.highlightReferences();
+      });
     }
     host;
     dataset;
@@ -2399,8 +2450,11 @@
     searchTimer = null;
     splitterCleanup;
     settingsCleanup = null;
+    referencesCleanup;
+    referencedNames = /* @__PURE__ */ new Set();
     dispose() {
       this.disposed = true;
+      this.referencesCleanup();
       this.splitterCleanup();
       this.settingsCleanup?.();
       if (this.searchTimer) clearTimeout(this.searchTimer);
@@ -2475,6 +2529,7 @@
     refreshMetadata() {
       this.renderRail();
       this.renderOverviewMetadata();
+      recomputeReferences();
     }
     updateCatalog(datasets2) {
       this.availableDatasets = datasets2;
@@ -2683,6 +2738,23 @@
         ...this.outputs
       ];
     }
+    highlightReferences() {
+      this.host.querySelectorAll(
+        "[data-browse-dataset], [data-include-dataset]"
+      ).forEach((control) => {
+        const name = control.dataset.browseDataset ?? control.dataset.includeDataset ?? "";
+        const matched = this.referencedNames.has(name.toLowerCase());
+        const row = control.closest(".quarry-explore-rail-row");
+        row?.classList.toggle("quarry-dataset-in-prompt", matched);
+        row?.querySelector(".quarry-prompt-reference")?.remove();
+        if (matched) {
+          const badge = document.createElement("small");
+          badge.className = "quarry-prompt-reference";
+          badge.textContent = "In prompt";
+          (control.closest("label") ?? control).append(badge);
+        }
+      });
+    }
     renderRail(revealCurrent = false) {
       const list = this.element(".quarry-explore-rail-list");
       const scroll = list.scrollTop;
@@ -2740,6 +2812,7 @@
         }).join("");
         return `<section class="quarry-explore-namespace"><button type="button" class="quarry-explore-namespace-toggle" data-namespace="${escapeHtml(namespace)}" aria-expanded="${open}" aria-controls="${groupId}"><span>${escapeHtml(namespace ? namespace.slice(0, -1) : "Root")}</span><small>${search ? `${matches.length} of ` : ""}${datasets3.length} datasets${selected ? ` · ${selected} selected` : ""}</small></button><div id="${groupId}" class="quarry-explore-namespace-items" ${open ? "" : "hidden"}>${rows}</div></section>`;
       }).join("") || '<p class="quarry-explore-note">No datasets match.</p>';
+      this.highlightReferences();
       list.scrollTop = scroll;
       const datasets2 = this.railDatasets();
       const index = datasets2.findIndex(
