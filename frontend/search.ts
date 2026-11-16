@@ -789,6 +789,9 @@ export const initImageSearch = (): void => {
         return;
     }
     container.dataset.built = "true";
+    // Let other extensions read the current results without selecting a tile.
+    window.quarryGetImageSearchMetadata = (name) =>
+        loadedFiles.find((file) => file.name === name)?.data.metadata;
     container.innerHTML = skeletonHtml();
     wireEvents();
     const folders = el("imagesearch-folders-settings");

@@ -5663,6 +5663,7 @@
       return;
     }
     container.dataset.built = "true";
+    window.quarryGetImageSearchMetadata = (name) => loadedFiles.find((file) => file.name === name)?.data.metadata;
     container.innerHTML = skeletonHtml();
     wireEvents();
     const folders = el("imagesearch-folders-settings");

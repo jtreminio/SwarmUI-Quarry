@@ -115,3 +115,7 @@ declare function selectOutputInHistory(
     file: BrowserFile,
     div: HTMLElement | null,
 ): void;
+
+interface Window {
+    quarryGetImageSearchMetadata?: (name: string) => string | undefined;
+}
